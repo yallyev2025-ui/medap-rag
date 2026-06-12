@@ -42,7 +42,7 @@ Router с фильтром `F.from_user.id.in_(settings.ADMIN_IDS)` на все 
 #### `/addbook`
 Многошаговый сценарий (FSM aiogram, `StatesGroup`):
 1. Админ отправляет `/addbook` → бот просит прислать PDF-файл (документ).
-2. Бот получает `message.document`, проверяет `mime_type == "application/pdf"` и размер ≤ 150MB, скачивает через `bot.download(file)` во временную папку.
+2. Бот получает `message.document`, проверяет `mime_type == "application/pdf"` и размер ≤ 20MB (лимит Telegram Bot API на скачивание файла ботом), скачивает через `bot.download(file)` во временную папку.
 3. Бот спрашивает subject (inline-кнопки со списком: pathanatomy, pathphys, physiology, anatomy, biochemistry, pharmacology, + "другой" с вводом текста).
 4. Бот спрашивает author и title (текстовые сообщения, по очереди).
 5. Вызывает функцию из `scripts/load_books.py` (рефакторить CLI в переиспользуемую функцию `load_book(pdf_path, subject, author, title) -> int` (возвращает chunks_count), CLI обёртка остаётся для ручного использования).

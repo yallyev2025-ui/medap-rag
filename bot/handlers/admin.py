@@ -6,7 +6,7 @@ import os
 import tempfile
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,7 +23,7 @@ router = Router()
 router.message.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 
-MAX_PDF_SIZE = 150 * 1024 * 1024
+MAX_PDF_SIZE = 20 * 1024 * 1024  # лимит Telegram Bot API на скачивание файла ботом
 
 ADDBOOK_TMP_DIR = os.path.join(tempfile.gettempdir(), "medap_addbook")
 
@@ -130,12 +130,23 @@ async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
         await message.answer("Нужен файл в формате PDF. Попробуй снова.")
         return
     if document.file_size > MAX_PDF_SIZE:
-        await message.answer("Файл слишком большой (максимум 150 МБ). Попробуй снова.")
+        await message.answer(
+            "Файл слишком большой (максимум 20 МБ — ограничение Telegram для ботов). "
+            "Сжми PDF или разбей на части и попробуй снова."
+        )
         return
 
     fd, pdf_path = tempfile.mkstemp(suffix=".pdf", dir=ADDBOOK_TMP_DIR)
     os.close(fd)
-    await message.bot.download(document, destination=pdf_path)
+    try:
+        await message.bot.download(document, destination=pdf_path)
+    except TelegramBadRequest:
+        os.remove(pdf_path)
+        await message.answer(
+            "Не удалось скачать файл (слишком большой для Telegram Bot API, лимит 20 МБ). "
+            "Сжми PDF или разбей на части и попробуй снова."
+        )
+        return
 
     await state.update_data(pdf_path=pdf_path)
     await state.set_state(AddBookStates.waiting_subject)
