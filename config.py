@@ -5,8 +5,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     TELEGRAM_BOT_TOKEN: str = ""
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4.1"
 
     DATABASE_URL: str = ""
 

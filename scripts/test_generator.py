@@ -82,17 +82,17 @@ async def test_generate_answer() -> None:
 async def main() -> None:
     test_pure_functions()
 
-    if not settings_has_gemini_key():
-        print("\nGEMINI_API_KEY не задан — пропускаю вызовы Gemini.")
+    if not settings_has_openai_key():
+        print("\nOPENAI_API_KEY не задан — пропускаю вызовы GPT-4.1.")
         return
 
     await test_generate_answer()
 
 
-def settings_has_gemini_key() -> bool:
+def settings_has_openai_key() -> bool:
     from config import settings
 
-    return bool(settings.GEMINI_API_KEY) and settings.GEMINI_API_KEY != "test"
+    return bool(settings.OPENAI_API_KEY) and settings.OPENAI_API_KEY != "test"
 
 
 if __name__ == "__main__":

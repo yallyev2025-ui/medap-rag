@@ -1,11 +1,10 @@
-"""Генерация ответов через Gemini 2.0 Flash + главный промпт."""
+"""Генерация ответов через OpenAI GPT-4.1 + главный промпт."""
 
 import re
 from functools import lru_cache
 from typing import Literal
 
-from google import genai
-from google.genai import errors
+import openai
 
 from config import settings
 from rag.retriever import ChunkResult
@@ -74,8 +73,8 @@ def build_context(chunks: list[ChunkResult]) -> str:
 
 
 @lru_cache(maxsize=1)
-def _get_client() -> genai.Client:
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
+def _get_client() -> openai.AsyncOpenAI:
+    return openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
@@ -92,11 +91,11 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
 
     client = _get_client()
     try:
-        response = await client.aio.models.generate_content(
-            model=settings.GEMINI_MODEL,
-            contents=prompt,
+        response = await client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
         )
-    except errors.APIError as e:
+    except openai.APIError as e:
         raise RuntimeError("Произошла ошибка, попробуй позже.") from e
 
-    return response.text
+    return response.choices[0].message.content
