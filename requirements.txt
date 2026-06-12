@@ -1,0 +1,10 @@
+aiogram>=3.4
+sentence-transformers
+torch
+sqlalchemy[asyncio]>=2.0
+asyncpg
+pgvector
+pdfplumber
+google-generativeai
+python-dotenv
+pydantic-settings
