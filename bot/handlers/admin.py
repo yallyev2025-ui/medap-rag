@@ -25,6 +25,8 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 
 MAX_PDF_SIZE = 150 * 1024 * 1024
 
+ADDBOOK_TMP_DIR = os.path.join(tempfile.gettempdir(), "medap_addbook")
+
 SUBJECTS = [
     ("pathanatomy", "Патанатомия"),
     ("pathphys", "Патофизиология"),
@@ -52,6 +54,18 @@ class AddBookStates(StatesGroup):
 
 class BroadcastStates(StatesGroup):
     waiting_text = State()
+
+
+def cleanup_addbook_tmp() -> None:
+    """Удаляет временные PDF, оставшиеся от прерванных /addbook (например, после рестарта бота)."""
+    if not os.path.isdir(ADDBOOK_TMP_DIR):
+        os.makedirs(ADDBOOK_TMP_DIR, exist_ok=True)
+        return
+
+    for name in os.listdir(ADDBOOK_TMP_DIR):
+        path = os.path.join(ADDBOOK_TMP_DIR, name)
+        if os.path.isfile(path):
+            os.remove(path)
 
 
 def _parse_user_id(command: CommandObject) -> int | None:
@@ -119,7 +133,7 @@ async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
         await message.answer("Файл слишком большой (максимум 150 МБ). Попробуй снова.")
         return
 
-    fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+    fd, pdf_path = tempfile.mkstemp(suffix=".pdf", dir=ADDBOOK_TMP_DIR)
     os.close(fd)
     await message.bot.download(document, destination=pdf_path)
 

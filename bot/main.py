@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
+    admin.cleanup_addbook_tmp()
+
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     dp = Dispatcher()
 
