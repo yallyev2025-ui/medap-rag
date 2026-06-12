@@ -1,12 +1,17 @@
 """Хендлеры /start, /help, /limit."""
 
+import logging
+
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import BotCommandScopeChat, Message
 
+from bot.commands import ADMIN_COMMANDS
 from config import settings
 from db.crud import get_or_create_user, get_today_usage
 from db.session import async_session
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -36,6 +41,14 @@ UNLIMITED_TEXT = "У тебя безлимитный доступ ✅"
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
+    if message.from_user.id in settings.ADMIN_IDS:
+        try:
+            await message.bot.set_my_commands(
+                ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=message.chat.id)
+            )
+        except Exception:
+            logger.warning("Не удалось задать меню команд для админа %s", message.from_user.id, exc_info=True)
+
     await message.answer(WELCOME_TEXT)
 
 
