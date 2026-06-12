@@ -5,6 +5,6 @@ sqlalchemy[asyncio]==2.0.50
 asyncpg==0.31.0
 pgvector==0.4.2
 pdfplumber==0.11.9
-google-generativeai==0.8.6
+google-genai==2.8.0
 python-dotenv==1.2.2
 pydantic-settings==2.14.1
