@@ -37,10 +37,13 @@ class LimitsMiddleware(BaseMiddleware):
                 return None
 
         data["db_user"] = user
+        usage_ctx = {"count": True}
+        data["usage_ctx"] = usage_ctx
         result = await handler(event, data)
 
-        async with async_session() as session:
-            await increment_usage(session, user.id)
-            await session.commit()
+        if usage_ctx["count"]:
+            async with async_session() as session:
+                await increment_usage(session, user.id)
+                await session.commit()
 
         return result

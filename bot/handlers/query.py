@@ -20,7 +20,7 @@ ERROR_TEXT = "Произошла ошибка, попробуй ещё раз ч
 
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_question(message: Message, db_user: User) -> None:
+async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
     await message.bot.send_chat_action(message.chat.id, "typing")
     question = message.text
 
@@ -32,6 +32,7 @@ async def handle_question(message: Message, db_user: User) -> None:
     except Exception:
         logger.exception("Ошибка при обработке вопроса")
         await message.answer(ERROR_TEXT)
+        usage_ctx["count"] = False
         return
 
     await message.answer(answer)
