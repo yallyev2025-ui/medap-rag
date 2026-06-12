@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 
 from bot.handlers import query, start
+from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,8 @@ async def main() -> None:
 
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     dp = Dispatcher()
+
+    dp.message.middleware(LimitsMiddleware())
 
     dp.include_router(start.router)
     dp.include_router(query.router)

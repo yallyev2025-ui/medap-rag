@@ -1,8 +1,12 @@
-"""Хендлеры /start, /help, /limit. Полноценный /limit — фаза 04."""
+"""Хендлеры /start, /help, /limit."""
 
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
+
+from config import settings
+from db.crud import get_or_create_user, get_today_usage
+from db.session import async_session
 
 router = Router()
 
@@ -27,7 +31,7 @@ HELP_TEXT = """Я отвечаю на вопросы строго по мате�
 /help — это сообщение
 /limit — сколько запросов осталось сегодня"""
 
-LIMIT_STUB_TEXT = "Лимиты будут добавлены в следующем обновлении."
+UNLIMITED_TEXT = "У тебя безлимитный доступ ✅"
 
 
 @router.message(Command("start"))
@@ -42,4 +46,14 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("limit"))
 async def cmd_limit(message: Message) -> None:
-    await message.answer(LIMIT_STUB_TEXT)
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user)
+        await session.commit()
+
+        if user.is_premium or user.id in settings.ADMIN_IDS:
+            await message.answer(UNLIMITED_TEXT)
+            return
+
+        used = await get_today_usage(session, user.id)
+
+    await message.answer(f"Сегодня использовано: {used}/{settings.FREE_DAILY_LIMIT}")

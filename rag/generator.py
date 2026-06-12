@@ -1,6 +1,7 @@
 """Генерация ответов через OpenAI GPT-4.1 + главный промпт."""
 
 import re
+from collections import Counter
 from functools import lru_cache
 from typing import Literal
 
@@ -81,6 +82,13 @@ def build_context(chunks: list[ChunkResult]) -> str:
     if not chunks or all(c.distance > MAX_DISTANCE_THRESHOLD for c in chunks):
         return NO_CONTEXT_PLACEHOLDER
     return "\n---\n".join(f"[{c.author}, {c.title}]\n{c.content}" for c in chunks)
+
+
+def detect_subject(chunks: list[ChunkResult]) -> str | None:
+    relevant = [c for c in chunks if c.distance <= MAX_DISTANCE_THRESHOLD]
+    if not relevant:
+        return None
+    return Counter(c.subject for c in relevant).most_common(1)[0][0]
 
 
 @lru_cache(maxsize=1)
