@@ -7,7 +7,7 @@ from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 
-from bot.formatting import to_telegram_html
+from bot.formatting import split_for_telegram, to_telegram_html
 from db.crud import log_query
 from db.models import User
 from db.session import async_session
@@ -37,7 +37,8 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         usage_ctx["count"] = False
         return
 
-    await message.answer(to_telegram_html(answer), parse_mode=ParseMode.HTML)
+    for chunk in split_for_telegram(to_telegram_html(answer)):
+        await message.answer(chunk, parse_mode=ParseMode.HTML)
 
     subject = detect_subject(chunks)
     async with async_session() as session:
