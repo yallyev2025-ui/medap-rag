@@ -16,13 +16,12 @@ from rag.processor import chunk_text, extract_text
 BATCH_SIZE = 32
 
 
-async def load_book(pdf_path: str, subject: str, author: str, title: str) -> None:
-    print(f"Извлекаю текст из {pdf_path}...")
+async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int:
     text = extract_text(pdf_path)
-
-    print("Разбиваю на чанки...")
     chunks = chunk_text(text)
-    print(f"Получено {len(chunks)} чанков.")
+
+    if not chunks:
+        raise ValueError("Не удалось извлечь текст из PDF")
 
     async with async_session() as session:
         book = Book(title=title, author=author, subject=subject, chunks_count=len(chunks))
@@ -30,27 +29,32 @@ async def load_book(pdf_path: str, subject: str, author: str, title: str) -> Non
         await session.flush()
         book_id = book.id
 
-        for batch_start in range(0, len(chunks), BATCH_SIZE):
-            batch = chunks[batch_start : batch_start + BATCH_SIZE]
-            embeddings = embed_passages(batch)
+        try:
+            for batch_start in range(0, len(chunks), BATCH_SIZE):
+                batch = chunks[batch_start : batch_start + BATCH_SIZE]
+                embeddings = embed_passages(batch)
 
-            for offset, (chunk_content, embedding) in enumerate(zip(batch, embeddings)):
-                session.add(
-                    BookChunk(
-                        book_id=book_id,
-                        subject=subject,
-                        author=author,
-                        title=title,
-                        chunk_index=batch_start + offset,
-                        content=chunk_content,
-                        embedding=embedding,
+                for offset, (chunk_content, embedding) in enumerate(zip(batch, embeddings)):
+                    session.add(
+                        BookChunk(
+                            book_id=book_id,
+                            subject=subject,
+                            author=author,
+                            title=title,
+                            chunk_index=batch_start + offset,
+                            content=chunk_content,
+                            embedding=embedding,
+                        )
                     )
-                )
 
-            await session.commit()
-            print(f"Обработано чанков: {min(batch_start + BATCH_SIZE, len(chunks))}/{len(chunks)}")
+                await session.flush()
+        except Exception:
+            await session.rollback()
+            raise
 
-    print(f"Готово. Можно удалить исходный PDF: {pdf_path}")
+        await session.commit()
+
+    return len(chunks)
 
 
 def main() -> None:
@@ -61,7 +65,9 @@ def main() -> None:
     parser.add_argument("--title", required=True, help="Название учебника")
     args = parser.parse_args()
 
-    asyncio.run(load_book(args.pdf, args.subject, args.author, args.title))
+    print(f"Извлекаю текст и разбиваю на чанки: {args.pdf}...")
+    chunks_count = asyncio.run(load_book(args.pdf, args.subject, args.author, args.title))
+    print(f"Готово. Добавлено чанков: {chunks_count}. Можно удалить исходный PDF: {args.pdf}")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 from datetime import date, datetime, timezone
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,13 +71,74 @@ async def log_query(
     )
 
 
-async def set_ban(session: AsyncSession, user_id: int, banned: bool) -> None:
+async def set_ban(session: AsyncSession, user_id: int, banned: bool) -> bool:
     user = await session.get(User, user_id)
-    if user is not None:
-        user.is_banned = banned
+    if user is None:
+        return False
+    user.is_banned = banned
+    return True
 
 
-async def set_premium(session: AsyncSession, user_id: int, premium: bool) -> None:
+async def set_premium(session: AsyncSession, user_id: int, premium: bool) -> bool:
     user = await session.get(User, user_id)
-    if user is not None:
-        user.is_premium = premium
+    if user is None:
+        return False
+    user.is_premium = premium
+    return True
+
+
+async def get_active_user_ids(session: AsyncSession) -> list[int]:
+    result = await session.execute(select(User.id).where(User.is_banned.is_(False)))
+    return [row[0] for row in result.all()]
+
+
+async def get_stats(session: AsyncSession) -> dict:
+    today = _today()
+
+    total_users = await session.scalar(select(func.count(User.id))) or 0
+    new_today = (
+        await session.scalar(select(func.count(User.id)).where(func.date(User.created_at) == today)) or 0
+    )
+    active_today = (
+        await session.scalar(
+            select(func.count(func.distinct(Query.user_id))).where(func.date(Query.created_at) == today)
+        )
+        or 0
+    )
+    premium_count = await session.scalar(select(func.count(User.id)).where(User.is_premium.is_(True))) or 0
+
+    total_queries = await session.scalar(select(func.count(Query.id))) or 0
+    today_queries = (
+        await session.scalar(select(func.count(Query.id)).where(func.date(Query.created_at) == today)) or 0
+    )
+
+    active_days = await session.scalar(select(func.count(func.distinct(func.date(Query.created_at))))) or 0
+    avg_per_day = total_queries / active_days if active_days else 0.0
+
+    top_questions = (
+        await session.execute(
+            select(Query.question, func.count(Query.id))
+            .group_by(Query.question)
+            .order_by(func.count(Query.id).desc())
+            .limit(10)
+        )
+    ).all()
+
+    subject_counts = (
+        await session.execute(select(Query.subject, func.count(Query.id)).group_by(Query.subject))
+    ).all()
+
+    avg_response_time_ms = await session.scalar(select(func.avg(Query.response_time_ms)))
+
+    return {
+        "total_users": total_users,
+        "new_today": new_today,
+        "active_today": active_today,
+        "premium_count": premium_count,
+        "total_queries": total_queries,
+        "today_queries": today_queries,
+        "avg_per_day": avg_per_day,
+        "top_questions": top_questions,
+        "subject_counts": subject_counts,
+        "avg_response_time_ms": avg_response_time_ms,
+    }

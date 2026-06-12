@@ -5,7 +5,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from bot.handlers import query, start
+from bot.handlers import admin, query, start
 from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 
@@ -20,6 +20,7 @@ async def main() -> None:
 
     dp.message.middleware(LimitsMiddleware())
 
+    dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(query.router)
 
