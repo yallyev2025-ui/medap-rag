@@ -55,14 +55,6 @@ MODE_INSTRUCTIONS = {
     "explanation": "Объясни простыми словами, используй аналогии и примеры ТОЛЬКО из контекста ниже.",
 }
 
-# Ограничение длины ответа per-mode: конспекты длиннее обычных ответов, но и им нужен потолок
-# для предсказуемой стоимости/задержки.
-MAX_TOKENS = {
-    "question": 600,
-    "conspect": 1500,
-    "explanation": 900,
-}
-
 GENERATION_TEMPERATURE = 0.2
 
 USER_PROMPT_TEMPLATE = """{mode_instruction}
@@ -127,7 +119,6 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=GENERATION_TEMPERATURE,
-            max_tokens=MAX_TOKENS[mode],
         )
     except openai.APIError as e:
         raise RuntimeError("Произошла ошибка, попробуй позже.") from e
