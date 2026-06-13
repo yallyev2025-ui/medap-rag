@@ -11,17 +11,19 @@ import asyncio
 from db.models import Book, BookChunk
 from db.session import async_session
 from rag.embedder import embed_passages
-from rag.processor import chunk_text, extract_pages
+from rag.processor import chunk_text, extract_document
 
 BATCH_SIZE = 32
 
 
-async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int:
-    pages = extract_pages(pdf_path)
-    chunks = chunk_text(pages)
+async def load_book(file_path: str, subject: str, author: str, title: str) -> int:
+    # Извлечение текста (включая OCR сканов) и чанкинг — тяжёлая синхронная работа,
+    # уводим в поток, чтобы не блокировать event loop бота во время /addbook.
+    pages, paged = await asyncio.to_thread(extract_document, file_path)
+    chunks = await asyncio.to_thread(chunk_text, pages, paged=paged)
 
     if not chunks:
-        raise ValueError("Не удалось извлечь текст из PDF")
+        raise ValueError("Не удалось извлечь текст из файла")
 
     async with async_session() as session:
         book = Book(title=title, author=author, subject=subject, chunks_count=len(chunks))
@@ -32,7 +34,9 @@ async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int
         try:
             for batch_start in range(0, len(chunks), BATCH_SIZE):
                 batch = chunks[batch_start : batch_start + BATCH_SIZE]
-                embeddings = embed_passages([chunk.content for chunk in batch])
+                embeddings = await asyncio.to_thread(
+                    embed_passages, [chunk.content for chunk in batch]
+                )
 
                 for offset, (chunk, embedding) in enumerate(zip(batch, embeddings)):
                     session.add(
@@ -60,16 +64,17 @@ async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Загрузка PDF учебника в pgvector")
-    parser.add_argument("--pdf", required=True, help="Путь к PDF-файлу")
+    parser = argparse.ArgumentParser(description="Загрузка учебника (PDF/Word/txt) в pgvector")
+    parser.add_argument("--file", "--pdf", dest="file", required=True,
+                        help="Путь к файлу учебника (PDF, .docx или .txt)")
     parser.add_argument("--subject", required=True, help="Предмет (pathanatomy, physiology, ...)")
     parser.add_argument("--author", required=True, help="Автор учебника")
     parser.add_argument("--title", required=True, help="Название учебника")
     args = parser.parse_args()
 
-    print(f"Извлекаю текст и разбиваю на чанки: {args.pdf}...")
-    chunks_count = asyncio.run(load_book(args.pdf, args.subject, args.author, args.title))
-    print(f"Готово. Добавлено чанков: {chunks_count}. Можно удалить исходный PDF: {args.pdf}")
+    print(f"Извлекаю текст и разбиваю на чанки: {args.file}...")
+    chunks_count = asyncio.run(load_book(args.file, args.subject, args.author, args.title))
+    print(f"Готово. Добавлено чанков: {chunks_count}. Можно удалить исходный файл: {args.file}")
 
 
 if __name__ == "__main__":

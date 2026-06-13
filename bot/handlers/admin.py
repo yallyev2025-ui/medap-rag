@@ -25,6 +25,9 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 
 MAX_PDF_SIZE = 20 * 1024 * 1024  # лимит Telegram Bot API на скачивание файла ботом
 
+# Поддерживаемые форматы учебников. Сканированные PDF распознаются OCR на сервере.
+ALLOWED_EXTENSIONS = (".pdf", ".docx", ".txt")
+
 ADDBOOK_TMP_DIR = os.path.join(tempfile.gettempdir(), "medap_addbook")
 
 SUBJECTS = [
@@ -120,42 +123,46 @@ async def cmd_stats(message: Message) -> None:
 @router.message(Command("addbook"))
 async def cmd_addbook(message: Message, state: FSMContext) -> None:
     await state.set_state(AddBookStates.waiting_pdf)
-    await message.answer("Отправь PDF-файл учебника.")
+    await message.answer(
+        "Отправь файл учебника: PDF (в т.ч. сканированный — распознаю текст сам), "
+        "Word (.docx) или текстовый (.txt)."
+    )
 
 
 @router.message(AddBookStates.waiting_pdf, F.document)
 async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
     document = message.document
-    if document.mime_type != "application/pdf":
-        await message.answer("Нужен файл в формате PDF. Попробуй снова.")
+    ext = os.path.splitext(document.file_name or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        await message.answer("Нужен файл PDF, Word (.docx) или текстовый (.txt). Попробуй снова.")
         return
     if document.file_size > MAX_PDF_SIZE:
         await message.answer(
             "Файл слишком большой (максимум 20 МБ — ограничение Telegram для ботов). "
-            "Сжми PDF или разбей на части и попробуй снова."
+            "Сожми файл или разбей на части и попробуй снова."
         )
         return
 
-    fd, pdf_path = tempfile.mkstemp(suffix=".pdf", dir=ADDBOOK_TMP_DIR)
+    fd, file_path = tempfile.mkstemp(suffix=ext, dir=ADDBOOK_TMP_DIR)
     os.close(fd)
     try:
-        await message.bot.download(document, destination=pdf_path)
+        await message.bot.download(document, destination=file_path)
     except TelegramBadRequest:
-        os.remove(pdf_path)
+        os.remove(file_path)
         await message.answer(
             "Не удалось скачать файл (слишком большой для Telegram Bot API, лимит 20 МБ). "
-            "Сжми PDF или разбей на части и попробуй снова."
+            "Сожми файл или разбей на части и попробуй снова."
         )
         return
 
-    await state.update_data(pdf_path=pdf_path)
+    await state.update_data(file_path=file_path)
     await state.set_state(AddBookStates.waiting_subject)
     await message.answer("Выбери предмет:", reply_markup=SUBJECT_KEYBOARD)
 
 
 @router.message(AddBookStates.waiting_pdf)
 async def addbook_invalid_pdf(message: Message) -> None:
-    await message.answer("Нужен файл PDF (документ). Попробуй снова.")
+    await message.answer("Нужен файл-документ (PDF, .docx или .txt). Попробуй снова.")
 
 
 @router.callback_query(AddBookStates.waiting_subject, F.data.startswith("addbook_subject:"))
@@ -190,22 +197,27 @@ async def addbook_author(message: Message, state: FSMContext) -> None:
 @router.message(AddBookStates.waiting_title, F.text)
 async def addbook_title(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    pdf_path = data["pdf_path"]
+    file_path = data["file_path"]
     subject = data["subject"]
     author = data["author"]
     title = message.text.strip()
 
     await state.clear()
-    await message.answer("Загружаю учебник, это может занять время...")
+    await message.answer(
+        "Загружаю учебник, это может занять время "
+        "(для сканированных PDF дольше — распознаю текст)..."
+    )
 
     try:
-        chunks_count = await load_book(pdf_path, subject, author, title)
+        chunks_count = await load_book(file_path, subject, author, title)
     except Exception:
         logger.exception("Ошибка при загрузке учебника")
-        await message.answer("Не удалось загрузить учебник: повреждённый PDF или не найден текст.")
+        await message.answer(
+            "Не удалось загрузить учебник: повреждённый файл или не найден текст."
+        )
         return
     finally:
-        os.remove(pdf_path)
+        os.remove(file_path)
 
     await message.answer(f"Учебник добавлен: {title}, {chunks_count} чанков")
 
