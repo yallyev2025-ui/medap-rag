@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Запасной косинусный порог, если реранкер недоступен.
     MAX_DISTANCE_THRESHOLD: float = 0.5
 
+    # Проверочный проход: второй вызов LLM сверяет ответ с контекстом и при выдумке
+    # запускает корректирующую перегенерацию. Можно выключить ради экономии/скорости.
+    VERIFY_GROUNDING: bool = True
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _normalize_database_url(cls, v: str) -> str:

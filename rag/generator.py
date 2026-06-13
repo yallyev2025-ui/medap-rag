@@ -1,5 +1,6 @@
-"""Генерация ответов через OpenAI GPT-4.1 + главный промпт."""
+"""Генерация ответов через OpenAI GPT + главный промпт + проверка заземления."""
 
+import logging
 import re
 from collections import Counter
 from functools import lru_cache
@@ -9,6 +10,8 @@ import openai
 
 from config import settings
 from rag.retriever import ChunkResult
+
+logger = logging.getLogger(__name__)
 
 NO_CONTEXT_ANSWER = (
     "Этой информации нет в материалах MedAP.\n"
@@ -79,6 +82,37 @@ USER_PROMPT_TEMPLATE = """{mode_instruction}
 
 Напоминание: используй ТОЛЬКО контекст выше. Если ответа в контексте нет — ответь ровно "{no_context_answer}", без пояснений и догадок."""
 
+# --- Проверочный проход (groundedness) ---
+
+VERIFY_SYSTEM_PROMPT = """Ты — строгий фактчекер. Тебе дают КОНТЕКСТ (фрагменты учебников) и ОТВЕТ ассистента.
+Проверь, что КАЖДОЕ фактическое утверждение в ОТВЕТЕ прямо подтверждается КОНТЕКСТОМ.
+Строку источника в конце ([Автор, Название, стр. N]) и вежливые/служебные фразы проверять не нужно.
+
+Если все фактические утверждения подтверждены контекстом — первой строкой выведи ровно:
+GROUNDED
+Если есть хотя бы одно утверждение, которого нет в контексте или которое ему противоречит — первой строкой выведи ровно:
+NOT_GROUNDED
+а ниже коротко перечисли проблемные утверждения."""
+
+VERIFY_USER_TEMPLATE = """КОНТЕКСТ:
+{context}
+
+ОТВЕТ:
+{answer}"""
+
+CORRECTION_TEMPLATE = """{mode_instruction}
+
+Контекст из учебников:
+{context}
+
+Вопрос студента: {question}
+
+Твой предыдущий ответ содержал утверждения, которых НЕТ в контексте:
+{issues}
+
+Перепиши ответ, оставив ТОЛЬКО то, что напрямую подтверждается контекстом выше. \
+Если после удаления неподтверждённого не остаётся содержательного ответа — выведи ровно "{no_context_answer}"."""
+
 CONSPECT_PATTERN = re.compile(
     r"конспект|кратко разбери|структурируй|выпиши основное", re.IGNORECASE
 )
@@ -122,6 +156,42 @@ def _get_client() -> openai.AsyncOpenAI:
     return openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
+async def _complete(system_prompt: str, user_prompt: str, temperature: float) -> str:
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+        )
+    except openai.APIError as e:
+        raise RuntimeError("Произошла ошибка, попробуй позже.") from e
+    return response.choices[0].message.content
+
+
+async def _verify_grounded(context: str, answer: str) -> tuple[bool, str]:
+    """Возвращает (подтверждён ли ответ контекстом, перечень проблемных утверждений).
+
+    Fail-open: при ошибке проверки считаем ответ валидным, чтобы не терять ответы.
+    """
+    user_prompt = VERIFY_USER_TEMPLATE.format(context=context, answer=answer)
+    try:
+        verdict = await _complete(VERIFY_SYSTEM_PROMPT, user_prompt, temperature=0.0)
+    except RuntimeError:
+        logger.warning("Проверочный проход недоступен, пропускаю верификацию")
+        return True, ""
+
+    lines = verdict.strip().splitlines()
+    first = lines[0].strip().upper() if lines else ""
+    if first.startswith("GROUNDED"):
+        return True, ""
+    issues = "\n".join(lines[1:]).strip() or "(не указаны)"
+    return False, issues
+
+
 async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
     mode = detect_mode(question)
     context = build_context(chunks)
@@ -132,17 +202,23 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
         no_context_answer=NO_CONTEXT_ANSWER,
     )
 
-    client = _get_client()
-    try:
-        response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=GENERATION_TEMPERATURE,
-        )
-    except openai.APIError as e:
-        raise RuntimeError("Произошла ошибка, попробуй позже.") from e
+    answer = await _complete(SYSTEM_PROMPT, user_prompt, GENERATION_TEMPERATURE)
 
-    return response.choices[0].message.content
+    # Нечего верифицировать: либо приветствие/small talk, либо честный отказ —
+    # в обоих случаях контекст из учебников не использовался.
+    if context == NO_CONTEXT_PLACEHOLDER or not settings.VERIFY_GROUNDING:
+        return answer
+
+    grounded, issues = await _verify_grounded(context, answer)
+    if grounded:
+        return answer
+
+    logger.info("Ответ не прошёл проверку на заземление, перегенерирую. Проблемы: %s", issues)
+    correction_prompt = CORRECTION_TEMPLATE.format(
+        mode_instruction=MODE_INSTRUCTIONS[mode],
+        context=context,
+        question=question,
+        issues=issues,
+        no_context_answer=NO_CONTEXT_ANSWER,
+    )
+    return await _complete(SYSTEM_PROMPT, correction_prompt, GENERATION_TEMPERATURE)
