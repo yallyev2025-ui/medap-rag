@@ -17,6 +17,8 @@ class ChunkResult:
     author: str
     title: str
     distance: float
+    page_from: int | None = None
+    page_to: int | None = None
 
 
 async def retrieve(question: str, top_k: int = settings.RETRIEVAL_TOP_K) -> list[ChunkResult]:
@@ -29,6 +31,8 @@ async def retrieve(question: str, top_k: int = settings.RETRIEVAL_TOP_K) -> list
             BookChunk.subject,
             BookChunk.author,
             BookChunk.title,
+            BookChunk.page_from,
+            BookChunk.page_to,
             distance,
         )
         .order_by(distance)
@@ -46,6 +50,8 @@ async def retrieve(question: str, top_k: int = settings.RETRIEVAL_TOP_K) -> list
             author=row.author,
             title=row.title,
             distance=row.distance,
+            page_from=row.page_from,
+            page_to=row.page_to,
         )
         for row in rows
     ]

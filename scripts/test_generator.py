@@ -17,6 +17,8 @@ MOCK_CHUNKS = [
         author="Струков",
         title="Патологическая анатомия",
         distance=0.1,
+        page_from=12,
+        page_to=12,
     ),
     ChunkResult(
         content=(
@@ -27,6 +29,8 @@ MOCK_CHUNKS = [
         author="Струков",
         title="Патологическая анатомия",
         distance=0.15,
+        page_from=12,
+        page_to=13,
     ),
     ChunkResult(
         content=(
@@ -37,6 +41,8 @@ MOCK_CHUNKS = [
         author="Струков",
         title="Патологическая анатомия",
         distance=0.2,
+        page_from=13,
+        page_to=13,
     ),
 ]
 

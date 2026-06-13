@@ -11,14 +11,14 @@ import asyncio
 from db.models import Book, BookChunk
 from db.session import async_session
 from rag.embedder import embed_passages
-from rag.processor import chunk_text, extract_text
+from rag.processor import chunk_text, extract_pages
 
 BATCH_SIZE = 32
 
 
 async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int:
-    text = extract_text(pdf_path)
-    chunks = chunk_text(text)
+    pages = extract_pages(pdf_path)
+    chunks = chunk_text(pages)
 
     if not chunks:
         raise ValueError("Не удалось извлечь текст из PDF")
@@ -32,9 +32,9 @@ async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int
         try:
             for batch_start in range(0, len(chunks), BATCH_SIZE):
                 batch = chunks[batch_start : batch_start + BATCH_SIZE]
-                embeddings = embed_passages(batch)
+                embeddings = embed_passages([chunk.content for chunk in batch])
 
-                for offset, (chunk_content, embedding) in enumerate(zip(batch, embeddings)):
+                for offset, (chunk, embedding) in enumerate(zip(batch, embeddings)):
                     session.add(
                         BookChunk(
                             book_id=book_id,
@@ -42,8 +42,10 @@ async def load_book(pdf_path: str, subject: str, author: str, title: str) -> int
                             author=author,
                             title=title,
                             chunk_index=batch_start + offset,
-                            content=chunk_content,
+                            content=chunk.content,
                             embedding=embedding,
+                            page_from=chunk.page_from,
+                            page_to=chunk.page_to,
                         )
                     )
 

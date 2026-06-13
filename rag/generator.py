@@ -44,7 +44,7 @@ SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот Me
 - Указывать источник, если фактический ответ из него не взят (наличие темы в оглавлении источника не считается ответом из него)
 
 ОБЯЗАТЕЛЬНО при ответе на учебные вопросы:
-- В конце указывай источник(и) в формате: [Автор, Название учебника]
+- В конце указывай источник(и) ровно в том виде, в котором они даны в квадратных скобках перед фрагментами контекста (например, [Автор, Название учебника, стр. N] или [Автор, Название учебника, стр. N-M]). Не придумывай и не меняй номера страниц.
 - Отвечать на русском языке
 - Просто и чётко, как студент студенту, без воды и канцеляризмов
 
@@ -86,10 +86,18 @@ def detect_mode(question: str) -> Literal["question", "conspect", "explanation"]
     return "question"
 
 
+def _format_source(chunk: ChunkResult) -> str:
+    if chunk.page_from is None:
+        return f"{chunk.author}, {chunk.title}"
+    if chunk.page_from == chunk.page_to:
+        return f"{chunk.author}, {chunk.title}, стр. {chunk.page_from}"
+    return f"{chunk.author}, {chunk.title}, стр. {chunk.page_from}-{chunk.page_to}"
+
+
 def build_context(chunks: list[ChunkResult]) -> str:
     if not chunks or all(c.distance > MAX_DISTANCE_THRESHOLD for c in chunks):
         return NO_CONTEXT_PLACEHOLDER
-    return "\n---\n".join(f"[{c.author}, {c.title}]\n{c.content}" for c in chunks)
+    return "\n---\n".join(f"[{_format_source(c)}]\n{c.content}" for c in chunks)
 
 
 def detect_subject(chunks: list[ChunkResult]) -> str | None:
