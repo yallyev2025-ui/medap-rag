@@ -16,12 +16,12 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
     EMBEDDING_DIM: int = 1024
 
-    # Реранкер (cross-encoder). По умолчанию — лёгкий мультиязычный, влезает в 8 ГБ
-    # рядом с e5-large. Если перейдёшь на ≥16 ГБ RAM — можно включить топовый по
-    # качеству: RERANKER_MODEL_NAME=BAAI/bge-reranker-v2-m3 (без редеплоя кода).
-    RERANKER_MODEL_NAME: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
-    # Размер батча реранка. Меньше = ниже пик RAM, но чуть медленнее.
-    RERANK_BATCH_SIZE: int = 8
+    # Реранкер (cross-encoder). Топовый по качеству — с RAM ≥16 ГБ влезает спокойно.
+    # При нехватке RAM можно вернуть лёгкий:
+    # RERANKER_MODEL_NAME=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+    RERANKER_MODEL_NAME: str = "BAAI/bge-reranker-v2-m3"
+    # Размер батча реранка — больше при достаточном RAM/CPU, ниже снижает пик памяти.
+    RERANK_BATCH_SIZE: int = 16
 
     FREE_DAILY_LIMIT: int = 10
 
