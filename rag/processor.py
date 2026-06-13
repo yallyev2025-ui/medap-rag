@@ -180,7 +180,10 @@ def chunk_text(
     # (предложение, номер страницы, число токенов) по всем НЕслужебным страницам.
     sentences: list[tuple[str, int, int]] = []
     for page_number, page_text in enumerate(pages, start=1):
-        if is_service_page(page_text):
+        # Фильтр служебных страниц (оглавление и т.п.) уместен только для постраничных
+        # форматов; для единого текстового блока (docx/txt) пропустить его, чтобы
+        # случайно не отбросить весь учебник.
+        if paged and is_service_page(page_text):
             continue
         for sentence in _page_sentences(page_text):
             token_len = len(tokenizer.encode(sentence, add_special_tokens=False))
