@@ -8,7 +8,7 @@ from aiogram.types import BotCommandScopeChat, Message
 
 from bot.commands import ADMIN_COMMANDS
 from config import settings
-from db.crud import get_or_create_user, get_today_usage
+from db.crud import daily_limit_for, get_or_create_user, get_today_usage
 from db.session import async_session
 
 logger = logging.getLogger(__name__)
@@ -63,10 +63,11 @@ async def cmd_limit(message: Message) -> None:
         user = await get_or_create_user(session, message.from_user)
         await session.commit()
 
-        if user.is_premium or user.id in settings.ADMIN_IDS:
+        limit = daily_limit_for(user)
+        if limit is None:
             await message.answer(UNLIMITED_TEXT)
             return
 
         used = await get_today_usage(session, user.id)
 
-    await message.answer(f"Сегодня использовано: {used}/{settings.FREE_DAILY_LIMIT}")
+    await message.answer(f"Сегодня использовано: {used}/{limit}")

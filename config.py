@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     RERANK_BATCH_SIZE: int = 16
 
     FREE_DAILY_LIMIT: int = 10
+    # Дневной лимит для премиум-подписки (защита экономики от злоупотреблений;
+    # обычный юзер столько не задаёт). Админы — без лимита.
+    PREMIUM_DAILY_LIMIT: int = 50
 
     CHUNK_SIZE_TOKENS: int = 512
     CHUNK_OVERLAP_TOKENS: int = 50

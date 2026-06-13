@@ -46,10 +46,20 @@ async def increment_usage(session: AsyncSession, user_id: int) -> None:
     await session.execute(stmt)
 
 
+def daily_limit_for(user: User) -> int | None:
+    """Дневной лимит запросов пользователя. None = безлимит (только админы)."""
+    if user.id in settings.ADMIN_IDS:
+        return None
+    if user.is_premium:
+        return settings.PREMIUM_DAILY_LIMIT
+    return settings.FREE_DAILY_LIMIT
+
+
 async def is_limit_exceeded(session: AsyncSession, user: User) -> bool:
-    if user.is_premium or user.id in settings.ADMIN_IDS:
+    limit = daily_limit_for(user)
+    if limit is None:
         return False
-    return await get_today_usage(session, user.id) >= settings.FREE_DAILY_LIMIT
+    return await get_today_usage(session, user.id) >= limit
 
 
 async def log_query(
