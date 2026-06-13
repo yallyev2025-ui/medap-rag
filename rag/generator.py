@@ -17,8 +17,17 @@ NO_CONTEXT_ANSWER = (
 
 NO_CONTEXT_PLACEHOLDER = "(в базе MedAP не найдено материалов, релевантных вопросу)"
 
-# TODO: подобрать на реальных данных после загрузки учебников (фаза 06).
-MAX_DISTANCE_THRESHOLD = 0.5
+
+def _is_relevant(chunk: ChunkResult) -> bool:
+    """Релевантен ли фрагмент. Основной сигнал — скор реранкера; если реранкер был
+    недоступен (rerank_score=None) — падаем на запасной косинусный порог."""
+    if chunk.rerank_score is not None:
+        return chunk.rerank_score >= settings.RERANK_SCORE_THRESHOLD
+    return chunk.distance <= settings.MAX_DISTANCE_THRESHOLD
+
+
+def relevant_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
+    return [c for c in chunks if _is_relevant(c)]
 
 SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот MedAP. Помогаешь студентам медицинских вузов разбираться в учебном материале.
 
@@ -95,13 +104,14 @@ def _format_source(chunk: ChunkResult) -> str:
 
 
 def build_context(chunks: list[ChunkResult]) -> str:
-    if not chunks or all(c.distance > MAX_DISTANCE_THRESHOLD for c in chunks):
+    relevant = relevant_chunks(chunks)
+    if not relevant:
         return NO_CONTEXT_PLACEHOLDER
-    return "\n---\n".join(f"[{_format_source(c)}]\n{c.content}" for c in chunks)
+    return "\n---\n".join(f"[{_format_source(c)}]\n{c.content}" for c in relevant)
 
 
 def detect_subject(chunks: list[ChunkResult]) -> str | None:
-    relevant = [c for c in chunks if c.distance <= MAX_DISTANCE_THRESHOLD]
+    relevant = relevant_chunks(chunks)
     if not relevant:
         return None
     return Counter(c.subject for c in relevant).most_common(1)[0][0]

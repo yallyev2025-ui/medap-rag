@@ -16,11 +16,23 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
     EMBEDDING_DIM: int = 1024
 
+    # Реранкер (cross-encoder). Лёгкий мультиязычный по умолчанию; для максимального
+    # качества можно поставить RERANKER_MODEL_NAME=BAAI/bge-reranker-v2-m3 (заметно
+    # тяжелее по RAM поверх e5-large).
+    RERANKER_MODEL_NAME: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+
     FREE_DAILY_LIMIT: int = 10
 
     CHUNK_SIZE_TOKENS: int = 512
     CHUNK_OVERLAP_TOKENS: int = 50
-    RETRIEVAL_TOP_K: int = 5
+    # Сколько кандидатов достаём вектором перед реранком и сколько оставляем после.
+    RETRIEVAL_CANDIDATES: int = 20
+    RERANK_TOP_K: int = 5
+    # Порог релевантности реранкера (0..1). Ниже — фрагмент считается нерелевантным.
+    # TODO: откалибровать через scripts/eval_rag.py на реальных вопросах.
+    RERANK_SCORE_THRESHOLD: float = 0.3
+    # Запасной косинусный порог, если реранкер недоступен.
+    MAX_DISTANCE_THRESHOLD: float = 0.5
 
     @field_validator("DATABASE_URL")
     @classmethod
