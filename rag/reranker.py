@@ -22,10 +22,14 @@ def _sigmoid(x: float) -> float:
 
 
 def rerank_scores(query: str, passages: list[str]) -> list[float]:
-    """Релевантность каждого passage к query в диапазоне 0..1 (sigmoid от логита)."""
+    """Релевантность каждого passage к query в диапазоне 0..1 (sigmoid от логита).
+
+    Реранк идёт небольшими батчами (RERANK_BATCH_SIZE), чтобы ограничить пик RAM —
+    это критично для тяжёлого bge-reranker-v2-m3 поверх e5-large на лимите 8 ГБ.
+    """
     if not passages:
         return []
     model = _get_reranker()
     pairs = [(query, passage) for passage in passages]
-    raw_scores = model.predict(pairs)
+    raw_scores = model.predict(pairs, batch_size=settings.RERANK_BATCH_SIZE)
     return [_sigmoid(float(score)) for score in raw_scores]
