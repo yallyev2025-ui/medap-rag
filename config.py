@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     CHUNK_SIZE_TOKENS: int = 512
     CHUNK_OVERLAP_TOKENS: int = 50
     # Сколько кандидатов достаём вектором перед реранком и сколько оставляем после.
-    RETRIEVAL_CANDIDATES: int = 20
-    RERANK_TOP_K: int = 5
+    # TOP_K крупнее → больше материала в контексте → полнее ответ (важно для экзамена).
+    RETRIEVAL_CANDIDATES: int = 40
+    RERANK_TOP_K: int = 8
     # Порог релевантности реранкера (0..1). Ниже — фрагмент считается нерелевантным.
     # TODO: откалибровать через scripts/eval_rag.py на реальных вопросах.
     RERANK_SCORE_THRESHOLD: float = 0.3
