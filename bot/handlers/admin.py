@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import settings
-from db.crud import get_active_user_ids, get_stats, set_ban, set_premium
+from db.crud import delete_book, get_active_user_ids, get_stats, list_books, set_ban, set_premium
 from db.session import async_session
 from scripts.load_books import load_book
 
@@ -208,6 +208,72 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
         os.remove(pdf_path)
 
     await message.answer(f"Учебник добавлен: {title}, {chunks_count} чанков")
+
+
+@router.message(Command("delbook"))
+async def cmd_delbook(message: Message) -> None:
+    async with async_session() as session:
+        books = await list_books(session)
+
+    if not books:
+        await message.answer("Учебников пока нет.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🗑 {b.title} — {b.author}", callback_data=f"delbook:{b.id}")]
+            for b in books
+        ]
+    )
+    await message.answer("Выбери учебник для удаления:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("delbook:"))
+async def delbook_ask_confirm(callback: CallbackQuery) -> None:
+    book_id = int(callback.data.split(":", 1)[1])
+    await callback.answer()
+
+    async with async_session() as session:
+        books = {b.id: b for b in await list_books(session)}
+
+    book = books.get(book_id)
+    if book is None:
+        await callback.message.edit_text("Учебник уже удалён.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Да, удалить", callback_data=f"delbook_yes:{book_id}"),
+                InlineKeyboardButton(text="Отмена", callback_data="delbook_cancel"),
+            ]
+        ]
+    )
+    await callback.message.edit_text(
+        f"Удалить учебник «{book.title}» ({book.author})?\nВместе с ним удалятся все его чанки.",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("delbook_yes:"))
+async def delbook_do(callback: CallbackQuery) -> None:
+    book_id = int(callback.data.split(":", 1)[1])
+    await callback.answer()
+
+    async with async_session() as session:
+        title = await delete_book(session, book_id)
+        await session.commit()
+
+    if title is None:
+        await callback.message.edit_text("Учебник уже удалён.")
+    else:
+        await callback.message.edit_text(f"Учебник удалён: {title}")
+
+
+@router.callback_query(F.data == "delbook_cancel")
+async def delbook_cancel(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text("Удаление отменено.")
 
 
 @router.message(Command("broadcast"))

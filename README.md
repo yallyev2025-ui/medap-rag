@@ -142,5 +142,5 @@ python -m db.init_db
 
 **Все пользователи**: `/start`, `/help`, `/limit`
 
-**Администраторы** (`ADMIN_IDS_RAW`): `/stats`, `/addbook`, `/broadcast`, `/ban`,
-`/unban`, `/premium`, `/unpremium`
+**Администраторы** (`ADMIN_IDS_RAW`): `/stats`, `/addbook`, `/delbook`, `/broadcast`,
+`/ban`, `/unban`, `/premium`, `/unpremium`

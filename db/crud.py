@@ -3,12 +3,12 @@
 from datetime import date, datetime, timezone
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from db.models import Query, Usage, User
+from db.models import Book, BookChunk, Query, Usage, User
 
 
 def _today() -> date:
@@ -95,6 +95,22 @@ async def set_premium(session: AsyncSession, user_id: int, premium: bool) -> boo
         return False
     user.is_premium = premium
     return True
+
+
+async def list_books(session: AsyncSession) -> list[Book]:
+    result = await session.execute(select(Book).order_by(Book.id))
+    return list(result.scalars().all())
+
+
+async def delete_book(session: AsyncSession, book_id: int) -> str | None:
+    """Удаляет книгу и все её чанки. Возвращает название удалённой книги или None."""
+    book = await session.get(Book, book_id)
+    if book is None:
+        return None
+    title = book.title
+    await session.execute(delete(BookChunk).where(BookChunk.book_id == book_id))
+    await session.delete(book)
+    return title
 
 
 async def get_active_user_ids(session: AsyncSession) -> list[int]:
