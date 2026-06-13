@@ -55,12 +55,24 @@ MODE_INSTRUCTIONS = {
     "explanation": "Объясни простыми словами, используй аналогии и примеры ТОЛЬКО из контекста ниже.",
 }
 
+# Ограничение длины ответа per-mode: конспекты длиннее обычных ответов, но и им нужен потолок
+# для предсказуемой стоимости/задержки.
+MAX_TOKENS = {
+    "question": 600,
+    "conspect": 1500,
+    "explanation": 900,
+}
+
+GENERATION_TEMPERATURE = 0.2
+
 USER_PROMPT_TEMPLATE = """{mode_instruction}
 
 Контекст из учебников:
 {context}
 
-Вопрос студента: {question}"""
+Вопрос студента: {question}
+
+Напоминание: используй ТОЛЬКО контекст выше. Если ответа в контексте нет — ответь ровно "{no_context_answer}", без пояснений и догадок."""
 
 CONSPECT_PATTERN = re.compile(
     r"конспект|кратко разбери|структурируй|выпиши основное", re.IGNORECASE
@@ -103,6 +115,7 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
         mode_instruction=MODE_INSTRUCTIONS[mode],
         context=context,
         question=question,
+        no_context_answer=NO_CONTEXT_ANSWER,
     )
 
     client = _get_client()
@@ -113,6 +126,8 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            temperature=GENERATION_TEMPERATURE,
+            max_tokens=MAX_TOKENS[mode],
         )
     except openai.APIError as e:
         raise RuntimeError("Произошла ошибка, попробуй позже.") from e
