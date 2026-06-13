@@ -30,6 +30,14 @@ ALLOWED_EXTENSIONS = (".pdf", ".docx", ".txt")
 
 ADDBOOK_TMP_DIR = os.path.join(tempfile.gettempdir(), "medap_addbook")
 
+# Блокировки на пользователя: файлы альбома приходят почти одновременно (отдельными
+# сообщениями), без этого read-modify-write списка файлов в FSM терял бы часть.
+_addbook_locks: dict[int, asyncio.Lock] = {}
+
+DONE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="✅ Готово, дальше", callback_data="addbook_files_done")]]
+)
+
 SUBJECTS = [
     ("pathanatomy", "Патанатомия"),
     ("pathphys", "Патофизиология"),
@@ -123,9 +131,12 @@ async def cmd_stats(message: Message) -> None:
 @router.message(Command("addbook"))
 async def cmd_addbook(message: Message, state: FSMContext) -> None:
     await state.set_state(AddBookStates.waiting_pdf)
+    await state.update_data(files=[])
     await message.answer(
-        "Отправь файл учебника: PDF (в т.ч. сканированный — распознаю текст сам), "
-        "Word (.docx) или текстовый (.txt)."
+        "Отправь файл(ы) учебника: PDF (в т.ч. сканированный — распознаю текст сам), "
+        "Word (.docx) или текстовый (.txt).\n\n"
+        "Можно прислать сразу несколько файлов — это будут части одной книги "
+        "(пронумерую их «Часть 1, 2, …»). Когда закончишь — нажми «Готово»."
     )
 
 
@@ -138,8 +149,8 @@ async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
         return
     if document.file_size > MAX_PDF_SIZE:
         await message.answer(
-            "Файл слишком большой (максимум 20 МБ — ограничение Telegram для ботов). "
-            "Сожми файл или разбей на части и попробуй снова."
+            f"Файл «{document.file_name}» слишком большой (максимум 20 МБ — ограничение "
+            "Telegram для ботов). Сожми его или разбей на части и пришли снова."
         )
         return
 
@@ -150,14 +161,35 @@ async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
     except TelegramBadRequest:
         os.remove(file_path)
         await message.answer(
-            "Не удалось скачать файл (слишком большой для Telegram Bot API, лимит 20 МБ). "
-            "Сожми файл или разбей на части и попробуй снова."
+            f"Не удалось скачать «{document.file_name}» (слишком большой для Telegram Bot "
+            "API, лимит 20 МБ). Сожми его или разбей на части и пришли снова."
         )
         return
 
-    await state.update_data(file_path=file_path)
+    # Список файлов в FSM пополняем под блокировкой — файлы альбома приходят гонкой.
+    lock = _addbook_locks.setdefault(message.from_user.id, asyncio.Lock())
+    async with lock:
+        data = await state.get_data()
+        files = data.get("files", [])
+        files.append(file_path)
+        await state.update_data(files=files)
+        count = len(files)
+
+    await message.answer(
+        f"Принято файлов: {count}. Пришли ещё или нажми «Готово».",
+        reply_markup=DONE_KEYBOARD,
+    )
+
+
+@router.callback_query(AddBookStates.waiting_pdf, F.data == "addbook_files_done")
+async def addbook_files_done(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    if not data.get("files"):
+        await callback.message.answer("Сначала пришли хотя бы один файл.")
+        return
     await state.set_state(AddBookStates.waiting_subject)
-    await message.answer("Выбери предмет:", reply_markup=SUBJECT_KEYBOARD)
+    await callback.message.edit_text("Выбери предмет:", reply_markup=SUBJECT_KEYBOARD)
 
 
 @router.message(AddBookStates.waiting_pdf)
@@ -197,29 +229,39 @@ async def addbook_author(message: Message, state: FSMContext) -> None:
 @router.message(AddBookStates.waiting_title, F.text)
 async def addbook_title(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    file_path = data["file_path"]
+    files = data.get("files", [])
     subject = data["subject"]
     author = data["author"]
-    title = message.text.strip()
+    base_title = message.text.strip()
 
     await state.clear()
+    _addbook_locks.pop(message.from_user.id, None)
+
+    if not files:
+        await message.answer("Файлы не найдены, начни заново через /addbook.")
+        return
+
+    multiple = len(files) > 1
     await message.answer(
-        "Загружаю учебник, это может занять время "
+        f"Загружаю {'части книги' if multiple else 'учебник'} "
+        f"({len(files)} шт.), это может занять время "
         "(для сканированных PDF дольше — распознаю текст)..."
     )
 
-    try:
-        chunks_count = await load_book(file_path, subject, author, title)
-    except Exception:
-        logger.exception("Ошибка при загрузке учебника")
-        await message.answer(
-            "Не удалось загрузить учебник: повреждённый файл или не найден текст."
-        )
-        return
-    finally:
-        os.remove(file_path)
+    results = []
+    for i, file_path in enumerate(files, start=1):
+        title = f"{base_title} — Часть {i}" if multiple else base_title
+        try:
+            chunks_count = await load_book(file_path, subject, author, title)
+            results.append(f"✅ {title}: {chunks_count} чанков")
+        except Exception:
+            logger.exception("Ошибка при загрузке учебника: %s", title)
+            results.append(f"❌ {title}: не удалось (повреждён файл или не найден текст)")
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
-    await message.answer(f"Учебник добавлен: {title}, {chunks_count} чанков")
+    await message.answer("Готово:\n" + "\n".join(results))
 
 
 @router.message(Command("delbook"))
