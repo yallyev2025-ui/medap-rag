@@ -248,20 +248,25 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
         "(для сканированных PDF дольше — распознаю текст)..."
     )
 
-    results = []
+    ok = 0
     for i, file_path in enumerate(files, start=1):
         title = f"{base_title} — Часть {i}" if multiple else base_title
+        progress = f"({i}/{len(files)}) " if multiple else ""
         try:
             chunks_count = await load_book(file_path, subject, author, title)
-            results.append(f"✅ {title}: {chunks_count} чанков")
+            ok += 1
+            await message.answer(f"✅ {progress}«{title}» добавлен: {chunks_count} чанков")
         except Exception:
             logger.exception("Ошибка при загрузке учебника: %s", title)
-            results.append(f"❌ {title}: не удалось (повреждён файл или не найден текст)")
+            await message.answer(
+                f"❌ {progress}«{title}»: не удалось (повреждён файл или не найден текст)"
+            )
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
 
-    await message.answer("Готово:\n" + "\n".join(results))
+    if multiple:
+        await message.answer(f"Загрузка завершена: успешно {ok} из {len(files)}.")
 
 
 @router.message(Command("delbook"))
