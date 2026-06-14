@@ -101,7 +101,7 @@ Telegram-бот MedAP — RAG-ассистент для студентов ме�
 | `ADMIN_IDS_RAW` | Telegram ID админов через запятую |
 | `EMBEDDING_MODEL_NAME` | `intfloat/multilingual-e5-large` |
 | `EMBEDDING_DIM` | `1024` |
-| `FREE_DAILY_LIMIT` | например, `10` |
+| `FREE_DAILY_LIMIT` | например, `5` |
 
 `DATABASE_URL` от Railway приходит со схемой `postgres://`/`postgresql://` —
 `config.py` автоматически приводит её к `postgresql+asyncpg://`, дополнительно

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # Размер батча реранка — больше при достаточном RAM/CPU, ниже снижает пик памяти.
     RERANK_BATCH_SIZE: int = 16
 
-    FREE_DAILY_LIMIT: int = 10
+    FREE_DAILY_LIMIT: int = 5
     # Дневной лимит для премиум-подписки (защита экономики от злоупотреблений;
     # обычный юзер столько не задаёт). Админы — без лимита.
     PREMIUM_DAILY_LIMIT: int = 50
