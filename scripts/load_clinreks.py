@@ -35,7 +35,8 @@ from constants import SOURCE_CLINREK
 from db.models import Book, BookChunk
 from db.session import async_session
 from rag.embedder import embed_passages, _get_model
-from rag.processor import chunk_text, extract_document
+from rag.processor import chunk_text
+from scripts._pdf_worker import extract_worker
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +45,9 @@ CATEGORY_SUBDIRS = ["взрослые", "дети", "взрослые_и_дет�
 
 ERRORS_LOG = "errors.log"
 DEFAULT_BATCH_SIZE = 64
-DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
-
-
-def _extract_worker(path_str: str) -> tuple[list[str], bool]:
-    """Извлечение текста в отдельном процессе (без загрузки ML-модели)."""
-    return extract_document(path_str)
+# Немного воркеров: извлечение PDF лёгкое, а основной ресурс (CPU) нужен расчёту
+# эмбеддингов в главном процессе. Много воркеров только отбирают у него ядра.
+DEFAULT_WORKERS = min(4, os.cpu_count() or 1)
 
 
 async def _reset_clinreks() -> int:
@@ -166,7 +164,7 @@ async def load_all(root: Path, workers: int, batch_size: int, reset: bool = Fals
             async with gate:
                 try:
                     pages, paged = await loop.run_in_executor(
-                        pool, _extract_worker, str(pdf)
+                        pool, extract_worker, str(pdf)
                     )
                     chunks = await asyncio.to_thread(chunk_text, pages, paged=paged)
                     if not chunks:

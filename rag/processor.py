@@ -9,9 +9,13 @@ from dataclasses import dataclass
 import pdfplumber
 
 from config import settings
-from rag.embedder import _get_model
 
 logger = logging.getLogger(__name__)
+
+# ВАЖНО: не импортируем rag.embedder (и через него torch) на уровне модуля.
+# Извлечение текста из PDF (extract_document) в параллельных процессах-воркерах
+# импортирует этот модуль, но модель ему не нужна — иначе каждый воркер тянул бы
+# ~1 ГБ torch в память. _get_model загружаем лениво, только где реально нужен.
 
 # OCR для сканированных PDF (страницы-картинки без текстового слоя). Зависимости
 # системные (tesseract + poppler) — если их нет (локально), мягко деградируем:
@@ -186,6 +190,8 @@ def chunk_text(
 ) -> list[Chunk]:
     """Режет текст на чанки. paged=False — у формата нет номеров страниц
     (docx, txt без разметки), у чанков page_from/page_to будут None."""
+    from rag.embedder import _get_model  # ленивый импорт: torch грузится только здесь
+
     tokenizer = _get_model().tokenizer
 
     # (предложение, номер страницы, число токенов) по всем НЕслужебным страницам.
@@ -251,6 +257,8 @@ def _enforce_model_window(chunks: list[Chunk], tokenizer) -> list[Chunk]:
     в окно модели-эмбеддера. Эмбеддер считает вектор только по первым max_seq
     токенам, поэтому фрагменты длиннее дорезаем по фактическим токенам — так ни один
     кусок текста не остаётся вне поискового индекса (критично для клинреков)."""
+    from rag.embedder import _get_model  # ленивый импорт: torch грузится только здесь
+
     model = _get_model()
     max_tokens = getattr(model, "max_seq_length", None) or DEFAULT_MODEL_MAX_TOKENS
     budget = max_tokens - MODEL_TOKEN_RESERVE
