@@ -266,9 +266,11 @@ def _enforce_model_window(chunks: list[Chunk], tokenizer) -> list[Chunk]:
     safe: list[Chunk] = []
     for chunk in chunks:
         # Длину считаем ровно так, как её увидит эмбеддер: с префиксом "passage: "
-        # и служебными токенами. Это ловит любой дрейф токенизации при склейке.
+        # и служебными токенами. Сравниваем с budget (окно минус запас), а не с
+        # самим окном: внутренняя токенизация модели может дать на пару токенов
+        # больше, чем этот замер, — запас гарантирует, что даже с дрейфом влезем.
         encoded = tokenizer.encode("passage: " + chunk.content, add_special_tokens=True)
-        if len(encoded) <= max_tokens:
+        if len(encoded) <= budget:
             safe.append(chunk)
             continue
         body_ids = tokenizer.encode(chunk.content, add_special_tokens=False)
