@@ -8,6 +8,8 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message
 
 from bot.formatting import split_for_telegram, to_telegram_html
+from bot.handlers.menu import send_main_menu
+from constants import SOURCE_CLINREK
 from db.crud import log_query
 from db.models import User
 from db.session import async_session
@@ -20,16 +22,31 @@ router = Router()
 
 ERROR_TEXT = "Произошла ошибка, попробуй ещё раз через минуту."
 
+CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу ответы строго по выбранной базе."
+
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
+    # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
+    if db_user.current_source_type is None:
+        await message.answer(CHOOSE_MODE_TEXT)
+        await send_main_menu(message)
+        usage_ctx["count"] = False
+        return
+
+    source_type = db_user.current_source_type
+    subject = db_user.current_subject
+    source_label = (
+        "клинических рекомендаций" if source_type == SOURCE_CLINREK else "учебников"
+    )
+
     await message.bot.send_chat_action(message.chat.id, "typing")
     question = message.text
 
     try:
         start_time = time.monotonic()
-        chunks = await retrieve(question)
-        answer = await generate_answer(question, chunks)
+        chunks = await retrieve(question, source_type=source_type, subject=subject)
+        answer = await generate_answer(question, chunks, source_label=source_label)
         response_time_ms = int((time.monotonic() - start_time) * 1000)
     except Exception:
         logger.exception("Ошибка при обработке вопроса")

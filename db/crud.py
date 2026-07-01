@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from constants import SOURCE_TEXTBOOK
 from db.models import Book, BookChunk, Query, Usage, User
 
 
@@ -97,6 +98,29 @@ async def set_premium(session: AsyncSession, user_id: int, premium: bool) -> boo
     return True
 
 
+async def set_user_selection(
+    session: AsyncSession, user_id: int, source_type: str | None, subject: str | None
+) -> None:
+    """Сохраняет выбранный пользователем режим (source_type) и предмет/категорию."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return
+    user.current_source_type = source_type
+    user.current_subject = subject
+
+
+async def get_textbook_subjects(session: AsyncSession) -> list[str]:
+    """Уникальные предметы реально загруженных учебников — для динамического меню."""
+    stmt = (
+        select(Book.subject)
+        .where(Book.source_type == SOURCE_TEXTBOOK)
+        .distinct()
+        .order_by(Book.subject)
+    )
+    result = await session.execute(stmt)
+    return [row[0] for row in result.all()]
+
+
 async def list_books(session: AsyncSession) -> list[Book]:
     result = await session.execute(select(Book).order_by(Book.id))
     return list(result.scalars().all())
@@ -116,6 +140,26 @@ async def delete_book(session: AsyncSession, book_id: int) -> str | None:
 async def get_active_user_ids(session: AsyncSession) -> list[int]:
     result = await session.execute(select(User.id).where(User.is_banned.is_(False)))
     return [row[0] for row in result.all()]
+
+
+async def get_base_stats(session: AsyncSession) -> dict:
+    """Статистика базы знаний для админа: чанки и книги по source_type и subject."""
+    chunk_rows = (
+        await session.execute(
+            select(BookChunk.source_type, BookChunk.subject, func.count(BookChunk.id))
+            .group_by(BookChunk.source_type, BookChunk.subject)
+            .order_by(BookChunk.source_type, BookChunk.subject)
+        )
+    ).all()
+    books_rows = (
+        await session.execute(
+            select(Book.source_type, func.count(Book.id)).group_by(Book.source_type)
+        )
+    ).all()
+    return {
+        "chunks_by_subject": chunk_rows,  # (source_type, subject, count)
+        "books_by_source": {src: cnt for src, cnt in books_rows},
+    }
 
 
 async def get_stats(session: AsyncSession) -> dict:

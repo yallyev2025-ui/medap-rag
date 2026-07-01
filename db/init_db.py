@@ -17,6 +17,20 @@ async def init_db() -> None:
         # Миграция для таблиц, созданных до появления номеров страниц в чанках.
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS page_from INTEGER;"))
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS page_to INTEGER;"))
+        # Миграция v2: разделение на учебники/клинреки + состояние выбора у пользователя.
+        # DEFAULT 'учебник' проставит существующим ~12.4K чанкам корректный тип автоматически.
+        await conn.execute(
+            text("ALTER TABLE books ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'учебник';")
+        )
+        await conn.execute(
+            text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'учебник';")
+        )
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_source_type VARCHAR(20);"))
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_subject VARCHAR(100);"))
+        # Индекс под фильтрацию поиска по режиму/предмету.
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_book_chunks_source_subject ON book_chunks (source_type, subject);")
+        )
     await engine.dispose()
 
 

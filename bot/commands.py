@@ -9,6 +9,7 @@ USER_COMMANDS = [
 ]
 
 ADMIN_COMMANDS = USER_COMMANDS + [
+    BotCommand(command="admin", description="Меню администратора"),
     BotCommand(command="stats", description="Статистика"),
     BotCommand(command="addbook", description="Добавить учебник"),
     BotCommand(command="delbook", description="Удалить учебник"),

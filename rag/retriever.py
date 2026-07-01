@@ -27,7 +27,12 @@ class ChunkResult:
     rerank_score: float | None = None
 
 
-async def _fetch_candidates(question: str, limit: int) -> list[ChunkResult]:
+async def _fetch_candidates(
+    question: str,
+    limit: int,
+    source_type: str | None = None,
+    subject: str | None = None,
+) -> list[ChunkResult]:
     query_embedding = embed_query(question)
 
     distance = BookChunk.embedding.cosine_distance(query_embedding).label("distance")
@@ -44,6 +49,13 @@ async def _fetch_candidates(question: str, limit: int) -> list[ChunkResult]:
         .order_by(distance)
         .limit(limit)
     )
+    # Жёсткое разделение баз: учебники и клинреки никогда не смешиваются, а внутри
+    # режима поиск идёт строго по выбранному предмету/категории (subject=None —
+    # без фильтра по предмету, например «Все категории» клинреков).
+    if source_type is not None:
+        stmt = stmt.where(BookChunk.source_type == source_type)
+    if subject is not None:
+        stmt = stmt.where(BookChunk.subject == subject)
 
     async with async_session() as session:
         result = await session.execute(stmt)
@@ -67,14 +79,19 @@ async def retrieve(
     question: str,
     candidates: int = settings.RETRIEVAL_CANDIDATES,
     top_k: int = settings.RERANK_TOP_K,
+    source_type: str | None = None,
+    subject: str | None = None,
 ) -> list[ChunkResult]:
     """Возвращает top_k фрагментов, переупорядоченных реранкером (rerank_score проставлен).
+
+    source_type/subject задают логическую базу: например (учебник, physiology) или
+    (клинрек, взрослые). Оба None — поиск по всему (обратная совместимость).
 
     Если реранкер недоступен (например, не хватило RAM на загрузку модели) — мягко
     деградируем до порядка по векторной дистанции, rerank_score остаётся None,
     а логика отказа падает обратно на косинусный порог.
     """
-    chunk_list = await _fetch_candidates(question, candidates)
+    chunk_list = await _fetch_candidates(question, candidates, source_type, subject)
     if not chunk_list:
         return []
 

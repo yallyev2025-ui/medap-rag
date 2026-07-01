@@ -8,6 +8,7 @@
 import argparse
 import asyncio
 
+from constants import SOURCE_TEXTBOOK
 from db.models import Book, BookChunk
 from db.session import async_session
 from rag.embedder import embed_passages
@@ -16,7 +17,13 @@ from rag.processor import chunk_text, extract_document
 BATCH_SIZE = 32
 
 
-async def load_book(file_path: str, subject: str, author: str, title: str) -> int:
+async def load_book(
+    file_path: str,
+    subject: str,
+    author: str,
+    title: str,
+    source_type: str = SOURCE_TEXTBOOK,
+) -> int:
     # Извлечение текста (включая OCR сканов) и чанкинг — тяжёлая синхронная работа,
     # уводим в поток, чтобы не блокировать event loop бота во время /addbook.
     pages, paged = await asyncio.to_thread(extract_document, file_path)
@@ -26,7 +33,13 @@ async def load_book(file_path: str, subject: str, author: str, title: str) -> in
         raise ValueError("Не удалось извлечь текст из файла")
 
     async with async_session() as session:
-        book = Book(title=title, author=author, subject=subject, chunks_count=len(chunks))
+        book = Book(
+            title=title,
+            author=author,
+            subject=subject,
+            source_type=source_type,
+            chunks_count=len(chunks),
+        )
         session.add(book)
         await session.flush()
         book_id = book.id
@@ -45,6 +58,7 @@ async def load_book(file_path: str, subject: str, author: str, title: str) -> in
                             subject=subject,
                             author=author,
                             title=title,
+                            source_type=source_type,
                             chunk_index=batch_start + offset,
                             content=chunk.content,
                             embedding=embedding,

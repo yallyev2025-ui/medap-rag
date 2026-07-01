@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommandScopeDefault
 
 from bot.commands import USER_COMMANDS
-from bot.handlers import admin, query, start
+from bot.handlers import admin, menu, query, start
 from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 from db.init_db import init_db
@@ -27,6 +27,7 @@ async def main() -> None:
     dp.message.middleware(LimitsMiddleware())
 
     dp.include_router(admin.router)
+    dp.include_router(menu.router)
     dp.include_router(start.router)
     dp.include_router(query.router)
 

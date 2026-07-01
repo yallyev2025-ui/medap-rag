@@ -180,10 +180,10 @@ GENERATION_TEMPERATURE = 0.2
 
 USER_PROMPT_TEMPLATE = """{mode_instruction}
 
-Контекст из учебников:
+Контекст из {source_label}:
 {context}
 
-Вопрос студента: {question}
+Вопрос: {question}
 
 Напоминание: используй ТОЛЬКО контекст выше. Если ответа в контексте нет — ответь ровно "{no_context_answer}", без пояснений и догадок."""
 
@@ -207,7 +207,7 @@ VERIFY_USER_TEMPLATE = """КОНТЕКСТ:
 
 CORRECTION_TEMPLATE = """{mode_instruction}
 
-Контекст из учебников:
+Контекст из {source_label}:
 {context}
 
 Вопрос студента: {question}
@@ -235,11 +235,13 @@ def detect_mode(question: str) -> Literal["question", "conspect", "explanation"]
 
 
 def _format_source(chunk: ChunkResult) -> str:
+    # У клинреков автора нет (author пустой) — источником служит название рекомендации.
+    head = f"{chunk.author}, {chunk.title}" if chunk.author else chunk.title
     if chunk.page_from is None:
-        return f"{chunk.author}, {chunk.title}"
+        return head
     if chunk.page_from == chunk.page_to:
-        return f"{chunk.author}, {chunk.title}, стр. {chunk.page_from}"
-    return f"{chunk.author}, {chunk.title}, стр. {chunk.page_from}-{chunk.page_to}"
+        return f"{head}, стр. {chunk.page_from}"
+    return f"{head}, стр. {chunk.page_from}-{chunk.page_to}"
 
 
 def build_context(chunks: list[ChunkResult]) -> str:
@@ -297,7 +299,11 @@ async def _verify_grounded(context: str, answer: str) -> tuple[bool, str]:
     return False, issues
 
 
-async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
+async def generate_answer(
+    question: str, chunks: list[ChunkResult], source_label: str = "учебников"
+) -> str:
+    """source_label — родительный падеж названия базы для промпта: «учебников»
+    (учебники) или «клинических рекомендаций» (клинреки)."""
     mode = detect_mode(question)
     context = build_context(chunks)
 
@@ -307,6 +313,7 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
 
     user_prompt = USER_PROMPT_TEMPLATE.format(
         mode_instruction=mode_instruction,
+        source_label=source_label,
         context=context,
         question=question,
         no_context_answer=NO_CONTEXT_ANSWER,
@@ -326,6 +333,7 @@ async def generate_answer(question: str, chunks: list[ChunkResult]) -> str:
     logger.info("Ответ не прошёл проверку на заземление, перегенерирую. Проблемы: %s", issues)
     correction_prompt = CORRECTION_TEMPLATE.format(
         mode_instruction=MODE_INSTRUCTIONS[mode],
+        source_label=source_label,
         context=context,
         question=question,
         issues=issues,

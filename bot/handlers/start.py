@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import BotCommandScopeChat, Message
 
 from bot.commands import ADMIN_COMMANDS
+from bot.handlers.menu import send_main_menu
 from config import settings
 from db.crud import daily_limit_for, get_or_create_user, get_today_usage
 from db.session import async_session
@@ -15,24 +16,20 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-WELCOME_TEXT = """Привет! Я MedAP — бот-ассистент для медицинских студентов.
+HELP_TEXT = """Я отвечаю строго по загруженным материалам MedAP: учебникам и клиническим рекомендациями.
 
-Просто напиши мне вопрос по теме из учебников — я найду
-ответ строго по материалам и пришлю с указанием источника.
+Как пользоваться:
+1. /start — выбрать режим (📚 Учебники или 📋 Клин. рекомендации) и предмет/категорию.
+2. Задавайте вопросы — я ищу ответ только в выбранной базе и указываю источник.
+3. Сменить предмет или режим можно кнопками под сообщением или командой /start.
 
-Доступные команды:
-/help — как пользоваться
-/limit — сколько запросов осталось сегодня"""
-
-HELP_TEXT = """Я отвечаю на вопросы строго по материалам из учебников MedAP.
-
-Доступные режимы:
+Форматы вопроса:
 - Вопрос: "Что такое инфаркт миокарда?"
 - Конспект: "Сделай конспект по теме инфаркт миокарда"
 - Объяснение простыми словами: "Объясни простыми словами, что такое инфаркт"
 
 Команды:
-/start — приветствие
+/start — выбор режима
 /help — это сообщение
 /limit — сколько запросов осталось сегодня"""
 
@@ -49,7 +46,7 @@ async def cmd_start(message: Message) -> None:
         except Exception:
             logger.warning("Не удалось задать меню команд для админа %s", message.from_user.id, exc_info=True)
 
-    await message.answer(WELCOME_TEXT)
+    await send_main_menu(message)
 
 
 @router.message(Command("help"))

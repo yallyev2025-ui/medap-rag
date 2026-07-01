@@ -13,7 +13,21 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import settings
-from db.crud import delete_book, get_active_user_ids, get_stats, list_books, set_ban, set_premium
+from constants import (
+    CLINREK_CATEGORIES,
+    SOURCE_CLINREK,
+    SOURCE_TEXTBOOK,
+    clinrek_label,
+)
+from db.crud import (
+    delete_book,
+    get_active_user_ids,
+    get_base_stats,
+    get_stats,
+    list_books,
+    set_ban,
+    set_premium,
+)
 from db.session import async_session
 from scripts.load_books import load_book
 
@@ -54,9 +68,27 @@ SUBJECT_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+# Выбор типа источника при добавлении файла через бота.
+SOURCE_TYPE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📚 Учебник", callback_data="addbook_src:textbook")],
+        [InlineKeyboardButton(text="📋 Клин. рекомендация", callback_data="addbook_src:clinrek")],
+    ]
+)
+
+# Категории для добавления клинрека: только конкретные (без «Все категории»).
+CLINREK_ADD_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"addbook_cat:{code}")]
+        for code, label, value in CLINREK_CATEGORIES
+        if value is not None
+    ]
+)
+
 
 class AddBookStates(StatesGroup):
     waiting_pdf = State()
+    waiting_source_type = State()
     waiting_subject = State()
     waiting_subject_custom = State()
     waiting_author = State()
@@ -128,6 +160,96 @@ async def cmd_stats(message: Message) -> None:
     await message.answer(text)
 
 
+ADMIN_MENU_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика базы", callback_data="admin:basestats")],
+        [InlineKeyboardButton(text="🗑 Удалить книгу", callback_data="admin:delbook")],
+        [InlineKeyboardButton(text="➕ Добавить книгу через файл", callback_data="admin:addbook")],
+        [InlineKeyboardButton(text="🔄 Обновить клин. рекомендации", callback_data="admin:clinreks")],
+    ]
+)
+
+CLINREKS_HELP_TEXT = (
+    "🔄 <b>Массовая загрузка клин. рекомендаций</b>\n\n"
+    "Это тяжёлая операция — не через бота, а отдельным скриптом. Разложите PDF по папкам:\n\n"
+    "<code>клинреки/\n"
+    "├── взрослые/\n"
+    "├── дети/\n"
+    "└── взрослые_и_дети/</code>\n\n"
+    "и запустите (локально или на Railway):\n\n"
+    "<code>python -m scripts.load_clinreks клинреки</code>\n\n"
+    "Скрипт возобновляемый: уже загруженные файлы пропускаются, можно прерывать и "
+    "запускать повторно. Ошибки пишутся в <code>errors.log</code>.\n\n"
+    "Одиночную рекомендацию можно добавить и через «➕ Добавить книгу через файл»."
+)
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message) -> None:
+    await message.answer("Меню администратора:", reply_markup=ADMIN_MENU_KEYBOARD)
+
+
+@router.callback_query(F.data == "admin:basestats")
+async def admin_basestats(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        stats = await get_base_stats(session)
+
+    lines = ["📊 <b>База знаний</b>\n"]
+    books = stats["books_by_source"]
+    lines.append(f"Книг-учебников: {books.get(SOURCE_TEXTBOOK, 0)}")
+    lines.append(f"Клин. рекомендаций: {books.get(SOURCE_CLINREK, 0)}\n")
+
+    textbook_rows = [(s, c) for (st, s, c) in stats["chunks_by_subject"] if st == SOURCE_TEXTBOOK]
+    clinrek_rows = [(s, c) for (st, s, c) in stats["chunks_by_subject"] if st == SOURCE_CLINREK]
+
+    if textbook_rows:
+        lines.append("<b>Учебники (чанков по предметам):</b>")
+        lines += [f"- {s}: {c}" for s, c in textbook_rows]
+        lines.append("")
+    if clinrek_rows:
+        lines.append("<b>Клинреки (чанков по категориям):</b>")
+        lines += [f"- {clinrek_label(s)}: {c}" for s, c in clinrek_rows]
+
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin:delbook")
+async def admin_delbook(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        books = await list_books(session)
+
+    if not books:
+        await callback.message.edit_text("Книг пока нет.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🗑 {b.title}", callback_data=f"delbook:{b.id}")]
+            for b in books
+        ]
+    )
+    await callback.message.edit_text("Выбери книгу для удаления:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "admin:addbook")
+async def admin_addbook(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(AddBookStates.waiting_pdf)
+    await state.update_data(files=[])
+    await callback.message.edit_text(
+        "Отправь файл(ы): PDF (в т.ч. сканы — распознаю), Word (.docx) или текст (.txt). "
+        "Когда закончишь — нажми «Готово»."
+    )
+
+
+@router.callback_query(F.data == "admin:clinreks")
+async def admin_clinreks(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text(CLINREKS_HELP_TEXT, parse_mode="HTML")
+
+
 @router.message(Command("addbook"))
 async def cmd_addbook(message: Message, state: FSMContext) -> None:
     await state.set_state(AddBookStates.waiting_pdf)
@@ -188,8 +310,35 @@ async def addbook_files_done(callback: CallbackQuery, state: FSMContext) -> None
     if not data.get("files"):
         await callback.message.answer("Сначала пришли хотя бы один файл.")
         return
+    await state.set_state(AddBookStates.waiting_source_type)
+    await callback.message.edit_text("Что это за материал?", reply_markup=SOURCE_TYPE_KEYBOARD)
+
+
+@router.callback_query(AddBookStates.waiting_source_type, F.data.startswith("addbook_src:"))
+async def addbook_choose_source(callback: CallbackQuery, state: FSMContext) -> None:
+    kind = callback.data.split(":", 1)[1]
+    await callback.answer()
+
+    if kind == "clinrek":
+        await state.update_data(source_type=SOURCE_CLINREK)
+        await state.set_state(AddBookStates.waiting_subject)
+        await callback.message.edit_text("Выбери категорию:", reply_markup=CLINREK_ADD_KEYBOARD)
+        return
+
+    await state.update_data(source_type=SOURCE_TEXTBOOK)
     await state.set_state(AddBookStates.waiting_subject)
     await callback.message.edit_text("Выбери предмет:", reply_markup=SUBJECT_KEYBOARD)
+
+
+@router.callback_query(AddBookStates.waiting_subject, F.data.startswith("addbook_cat:"))
+async def addbook_choose_category(callback: CallbackQuery, state: FSMContext) -> None:
+    code = callback.data.split(":", 1)[1]
+    subject = next((v for c, _l, v in CLINREK_CATEGORIES if c == code), None)
+    await callback.answer()
+    # У клинрека нет автора — источником будет название файла. Автора не спрашиваем.
+    await state.update_data(subject=subject, author="")
+    await state.set_state(AddBookStates.waiting_title)
+    await callback.message.edit_text("Введи название рекомендации (или отправь как есть):")
 
 
 @router.message(AddBookStates.waiting_pdf)
@@ -232,6 +381,7 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
     files = data.get("files", [])
     subject = data["subject"]
     author = data["author"]
+    source_type = data.get("source_type", SOURCE_TEXTBOOK)
     base_title = message.text.strip()
 
     await state.clear()
@@ -253,7 +403,7 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
         title = f"{base_title} — Часть {i}" if multiple else base_title
         progress = f"({i}/{len(files)}) " if multiple else ""
         try:
-            chunks_count = await load_book(file_path, subject, author, title)
+            chunks_count = await load_book(file_path, subject, author, title, source_type)
             ok += 1
             await message.answer(f"✅ {progress}«{title}» добавлен: {chunks_count} чанков")
         except Exception:

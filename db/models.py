@@ -7,6 +7,7 @@ from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer,
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config import settings
+from constants import SOURCE_TEXTBOOK
 
 
 class Base(DeclarativeBase):
@@ -20,6 +21,9 @@ class Book(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     author: Mapped[str] = mapped_column(String, nullable=False)
     subject: Mapped[str] = mapped_column(String, nullable=False)
+    # Тип источника: 'учебник' или 'клинрек'. По умолчанию учебник — существующие
+    # книги, загруженные до v2, автоматически считаются учебниками.
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_TEXTBOOK)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0)
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -32,6 +36,8 @@ class BookChunk(Base):
     subject: Mapped[str] = mapped_column(String, nullable=False)
     author: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
+    # Дублируем source_type в чанки, чтобы фильтровать поиск одним WHERE без JOIN.
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_TEXTBOOK)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.EMBEDDING_DIM), nullable=False)
@@ -48,6 +54,11 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     is_premium: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Выбранный режим работы (source_type: 'учебник'/'клинрек') и предмет/категория.
+    # None у обоих — режим ещё не выбран, показываем главное меню. У клинреков
+    # current_subject=None при source_type='клинрек' означает «Все категории».
+    current_source_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    current_subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
 class Usage(Base):
