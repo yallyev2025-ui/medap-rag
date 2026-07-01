@@ -29,7 +29,7 @@ from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from constants import SOURCE_CLINREK
 from db.models import Book, BookChunk
@@ -50,6 +50,15 @@ DEFAULT_WORKERS = min(8, os.cpu_count() or 1)
 def _extract_worker(path_str: str) -> tuple[list[str], bool]:
     """Извлечение текста в отдельном процессе (без загрузки ML-модели)."""
     return extract_document(path_str)
+
+
+async def _reset_clinreks() -> int:
+    """Удаляет все ранее загруженные клинреки (чанки + книги). Учебники не трогает."""
+    async with async_session() as session:
+        await session.execute(delete(BookChunk).where(BookChunk.source_type == SOURCE_CLINREK))
+        result = await session.execute(delete(Book).where(Book.source_type == SOURCE_CLINREK))
+        await session.commit()
+    return result.rowcount or 0
 
 
 async def _load_existing_titles() -> set[str]:
@@ -120,12 +129,16 @@ def _collect_files(root: Path) -> list[tuple[Path, str]]:
     return files
 
 
-async def load_all(root: Path, workers: int, batch_size: int) -> None:
+async def load_all(root: Path, workers: int, batch_size: int, reset: bool = False) -> None:
     files = _collect_files(root)
     total = len(files)
     if total == 0:
         print(f"В {root} не найдено PDF в подпапках {CATEGORY_SUBDIRS}.")
         return
+
+    if reset:
+        removed = await _reset_clinreks()
+        print(f"🧹 Очищены ранее загруженные клинреки: удалено книг {removed}. Гружу заново.")
 
     existing = await _load_existing_titles()
     # Загружаем модель заранее (один раз в главном процессе) — дальше переиспользуется.
@@ -191,13 +204,15 @@ def main() -> None:
                         help=f"Процессов для извлечения PDF (по умолчанию {DEFAULT_WORKERS})")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
                         help=f"Размер батча эмбеддингов (по умолчанию {DEFAULT_BATCH_SIZE})")
+    parser.add_argument("--reset", action="store_true",
+                        help="Удалить все ранее загруженные клинреки и залить заново с нуля")
     args = parser.parse_args()
 
     root = Path(args.folder)
     if not root.is_dir():
         parser.error(f"Папка не найдена: {root}")
 
-    asyncio.run(load_all(root, args.workers, args.batch_size))
+    asyncio.run(load_all(root, args.workers, args.batch_size, args.reset))
 
 
 if __name__ == "__main__":

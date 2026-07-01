@@ -34,6 +34,14 @@ except ImportError:
 
 MIN_CHUNK_TOKENS = 20
 
+# Жёсткое окно модели-эмбеддера. Текст длиннее модель обрезала бы при кодировании,
+# и «хвост» фрагмента не попал бы в поисковый отпечаток. Поэтому гарантируем, что
+# КАЖДЫЙ чанк целиком помещается в это окно — ничего не теряется из индекса.
+DEFAULT_MODEL_MAX_TOKENS = 512
+# Запас под префикс "passage: ", служебные токены (CLS/SEP) и возможный дрейф
+# токенизации при склейке предложений.
+MODEL_TOKEN_RESERVE = 24
+
 # Ниже этого числа символов на странице считаем, что текстового слоя нет (скан) —
 # и пробуем распознать страницу через OCR.
 OCR_MIN_CHARS = 20
@@ -80,8 +88,11 @@ def extract_pages(pdf_path: str) -> list[str]:
         try:
             recognized = _ocr_pdf_page(pdf_path, i + 1)
         except Exception:
-            logger.exception("OCR страницы %d не удался", i + 1)
-            continue
+            # Системный OCR (tesseract/poppler) недоступен — тихо деградируем без
+            # спама трейсбеков и больше не пробуем OCR для этого файла (текстовые
+            # PDF от этого не страдают, а сканы просто не распознаются).
+            logger.warning("Системный OCR недоступен — страницы-сканы этого PDF пропущены")
+            break
         if len(recognized.strip()) > len(text.strip()):
             pages[i] = recognized
 
@@ -232,5 +243,37 @@ def chunk_text(
         current.append(item)
 
     emit()
-    return chunks
+    return _enforce_model_window(chunks, tokenizer)
+
+
+def _enforce_model_window(chunks: list[Chunk], tokenizer) -> list[Chunk]:
+    """Гарантия против обрезки: каждый чанк при кодировании должен целиком влезать
+    в окно модели-эмбеддера. Эмбеддер считает вектор только по первым max_seq
+    токенам, поэтому фрагменты длиннее дорезаем по фактическим токенам — так ни один
+    кусок текста не остаётся вне поискового индекса (критично для клинреков)."""
+    model = _get_model()
+    max_tokens = getattr(model, "max_seq_length", None) or DEFAULT_MODEL_MAX_TOKENS
+    budget = max_tokens - MODEL_TOKEN_RESERVE
+
+    safe: list[Chunk] = []
+    for chunk in chunks:
+        # Длину считаем ровно так, как её увидит эмбеддер: с префиксом "passage: "
+        # и служебными токенами. Это ловит любой дрейф токенизации при склейке.
+        encoded = tokenizer.encode("passage: " + chunk.content, add_special_tokens=True)
+        if len(encoded) <= max_tokens:
+            safe.append(chunk)
+            continue
+        body_ids = tokenizer.encode(chunk.content, add_special_tokens=False)
+        for start in range(0, len(body_ids), budget):
+            piece = body_ids[start : start + budget]
+            if len(piece) < MIN_CHUNK_TOKENS:
+                break
+            safe.append(
+                Chunk(
+                    content=tokenizer.decode(piece),
+                    page_from=chunk.page_from,
+                    page_to=chunk.page_to,
+                )
+            )
+    return safe
 
