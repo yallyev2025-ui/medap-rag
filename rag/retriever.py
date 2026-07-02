@@ -32,6 +32,7 @@ async def _fetch_candidates(
     limit: int,
     source_type: str | None = None,
     subject: str | None = None,
+    title: str | None = None,
 ) -> list[ChunkResult]:
     query_embedding = embed_query(question)
 
@@ -57,6 +58,9 @@ async def _fetch_candidates(
     if subject is not None:
         stmt = stmt.where(BookChunk.subject == subject)
 
+    if title is not None:
+        stmt = stmt.where(BookChunk.title == title)
+
     async with async_session() as session:
         result = await session.execute(stmt)
         rows = result.all()
@@ -75,17 +79,43 @@ async def _fetch_candidates(
     ]
 
 
+async def _rerank(question: str, chunks: list[ChunkResult]) -> list[ChunkResult]:
+    """Переупорядочивает чанки cross-encoder реранкером (проставляет rerank_score).
+    При недоступности реранкера мягко деградирует до порядка по векторной дистанции."""
+    try:
+        scores = await asyncio.to_thread(
+            rerank_scores, question, [c.content for c in chunks]
+        )
+        for chunk, score in zip(chunks, scores):
+            chunk.rerank_score = score
+        chunks.sort(key=lambda c: c.rerank_score, reverse=True)
+    except Exception:
+        logger.exception("Реранкер недоступен, использую порядок по векторной дистанции")
+    return chunks
+
+
+def _is_relevant(chunk: ChunkResult) -> bool:
+    if chunk.rerank_score is not None:
+        return chunk.rerank_score >= settings.RERANK_SCORE_THRESHOLD
+    return chunk.distance <= settings.MAX_DISTANCE_THRESHOLD
+
+
 async def retrieve(
     question: str,
     candidates: int = settings.RETRIEVAL_CANDIDATES,
     top_k: int = settings.RERANK_TOP_K,
     source_type: str | None = None,
     subject: str | None = None,
+    focus_document: bool = False,
 ) -> list[ChunkResult]:
     """Возвращает top_k фрагментов, переупорядоченных реранкером (rerank_score проставлен).
 
     source_type/subject задают логическую базу: например (учебник, physiology) или
     (клинрек, взрослые). Оба None — поиск по всему (обратная совместимость).
+
+    focus_document=True (для клинреков): после реранка бот определяет ОДНУ самую
+    релевантную рекомендацию и глубоко добирает материал строго из неё. Это убирает
+    «мешанину» из разных рекомендаций и даёт врачу точный ответ из одного документа.
 
     Если реранкер недоступен (например, не хватило RAM на загрузку модели) — мягко
     деградируем до порядка по векторной дистанции, rerank_score остаётся None,
@@ -95,14 +125,22 @@ async def retrieve(
     if not chunk_list:
         return []
 
-    try:
-        scores = await asyncio.to_thread(
-            rerank_scores, question, [c.content for c in chunk_list]
-        )
-        for chunk, score in zip(chunk_list, scores):
-            chunk.rerank_score = score
-        chunk_list.sort(key=lambda c: c.rerank_score, reverse=True)
-    except Exception:
-        logger.exception("Реранкер недоступен, использую порядок по векторной дистанции")
+    chunk_list = await _rerank(question, chunk_list)
+    top = chunk_list[:top_k]
 
-    return chunk_list[:top_k]
+    if not focus_document:
+        return top
+
+    # Выбираем доминирующую рекомендацию по верхнему релевантному чанку и добираем
+    # из неё больше контекста для глубокого ответа. Если релевантного нет — вернём
+    # как есть (дальше сработает честный отказ/фолбэк).
+    relevant = [c for c in top if _is_relevant(c)]
+    if not relevant:
+        return top
+
+    dominant_title = relevant[0].title
+    doc_chunks = await _fetch_candidates(
+        question, candidates, source_type, subject, title=dominant_title
+    )
+    doc_chunks = await _rerank(question, doc_chunks)
+    return doc_chunks[: settings.CLINREK_TOP_K]

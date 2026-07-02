@@ -36,17 +36,18 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
 
     source_type = db_user.current_source_type
     subject = db_user.current_subject
-    source_label = (
-        "клинических рекомендаций" if source_type == SOURCE_CLINREK else "учебников"
-    )
+    # Для клинреков — фокус на одной рекомендации (без мешанины из разных документов).
+    focus_document = source_type == SOURCE_CLINREK
 
     await message.bot.send_chat_action(message.chat.id, "typing")
     question = message.text
 
     try:
         start_time = time.monotonic()
-        chunks = await retrieve(question, source_type=source_type, subject=subject)
-        answer = await generate_answer(question, chunks, source_label=source_label)
+        chunks = await retrieve(
+            question, source_type=source_type, subject=subject, focus_document=focus_document
+        )
+        answer = await generate_answer(question, chunks, source_type=source_type)
         response_time_ms = int((time.monotonic() - start_time) * 1000)
     except Exception:
         logger.exception("Ошибка при обработке вопроса")
