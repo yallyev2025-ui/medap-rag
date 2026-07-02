@@ -1,6 +1,6 @@
 """Хендлер вопросов: роутер интентов (одна болезнь / дифдиагноз / сочетание /
 приветствие), поиск под стратегию и генерация. Плюс согласие на ответ из общих
-знаний, когда в загруженных материалах ничего нет."""
+знаний, когда в загруженных материалах ничего нет, и статус-индикатор «думает»."""
 
 import logging
 import time
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-ERROR_TEXT = "Произошла ошибка, попробуй ещё раз через минуту."
+ERROR_TEXT = "⚠️ Произошла ошибка, попробуй ещё раз через минуту."
 CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу ответы строго по выбранной базе."
 NOT_FOUND_ASK = (
     "В загруженных материалах по этому вопросу ничего нет.\n"
@@ -62,6 +62,26 @@ async def _send_answer(message: Message, answer: str) -> None:
         await message.answer(part, parse_mode=ParseMode.HTML)
 
 
+async def _set_status(status: Message | None, text: str) -> None:
+    """Обновляет статус-сообщение «думает». Молча игнорирует сбои (например, если
+    текст не изменился или сообщение удалено)."""
+    if status is None:
+        return
+    try:
+        await status.edit_text(text)
+    except Exception:
+        pass
+
+
+async def _clear_status(status: Message | None) -> None:
+    if status is None:
+        return
+    try:
+        await status.delete()
+    except Exception:
+        pass
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
     # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
@@ -75,7 +95,8 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
     subject = db_user.current_subject
     question = message.text
 
-    await message.bot.send_chat_action(message.chat.id, "typing")
+    # Статус-индикатор: сразу показываем, что бот жив и работает, и меняем по этапам.
+    status = await message.answer("🔎 Определяю тип вопроса…")
 
     try:
         start_time = time.monotonic()
@@ -83,15 +104,16 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
 
         # Приветствие / small talk — дружелюбный ответ, лимит не тратим.
         if intent == "CHITCHAT":
+            await _set_status(status, "💬 Отвечаю…")
             answer = await generate_fallback(question)
+            await _clear_status(status)
             await _send_answer(message, answer)
             usage_ctx["count"] = False
             return
 
-        # Дифдиагноз/сочетание болезней (только клинреки) — широкий поиск по многим
-        # рекомендациям. Иначе — фокус на одной рекомендации (клинреки) или обычный
-        # поиск (учебники).
         reasoning = source_type == SOURCE_CLINREK and intent in ("DIFFERENTIAL", "MULTI")
+
+        await _set_status(status, "📚 Ищу в материалах…")
         chunks = await retrieve(
             question,
             source_type=source_type,
@@ -102,10 +124,16 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
 
         # В материалах ничего релевантного — спрашиваем согласие на общие знания.
         if not relevant_chunks(chunks):
+            await _clear_status(status)
             _pending_general[db_user.id] = question
             await message.answer(NOT_FOUND_ASK, reply_markup=CONSENT_KEYBOARD)
             usage_ctx["count"] = False
             return
+
+        if reasoning:
+            await _set_status(status, "🩺 Провожу клинический разбор…")
+        else:
+            await _set_status(status, "🧠 Готовлю ответ…")
 
         if intent == "DIFFERENTIAL":
             answer = await generate_differential(question, chunks, source_type)
@@ -117,10 +145,11 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         response_time_ms = int((time.monotonic() - start_time) * 1000)
     except Exception:
         logger.exception("Ошибка при обработке вопроса")
-        await message.answer(ERROR_TEXT)
+        await _set_status(status, ERROR_TEXT)
         usage_ctx["count"] = False
         return
 
+    await _clear_status(status)
     await _send_answer(message, answer)
 
     subject_used = detect_subject(chunks)
@@ -142,14 +171,15 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
         await callback.message.answer("Запрос устарел — задайте вопрос заново.")
         return
 
-    await callback.message.bot.send_chat_action(callback.message.chat.id, "typing")
+    status = await callback.message.answer("🧠 Готовлю ответ из общих знаний…")
     try:
         answer = await generate_fallback(question)
     except Exception:
         logger.exception("Ошибка при ответе из общих знаний")
-        await callback.message.answer(ERROR_TEXT)
+        await _set_status(status, ERROR_TEXT)
         return
 
+    await _clear_status(status)
     await _send_answer(callback.message, answer)
 
     # Это полноценный ответ — засчитываем в дневной лимит (middleware колбэки не ловит).
