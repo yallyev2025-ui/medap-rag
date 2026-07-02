@@ -1,12 +1,13 @@
-"""Хендлер вопросов: роутер интентов (одна болезнь / дифдиагноз / сочетание /
-приветствие), поиск под стратегию и генерация. Плюс согласие на ответ из общих
-знаний, когда в загруженных материалах ничего нет, и статус-индикатор «думает»."""
+"""Хендлер вопросов: лёгкая память диалога, роутер интентов (одна болезнь /
+дифдиагноз / сочетание / приветствие), поиск под стратегию и генерация. Плюс
+согласие на общие знания, режим «Разбор по симптомам» и статус-индикатор «думает»."""
 
 import logging
 import time
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -18,10 +19,17 @@ from bot.formatting import split_for_telegram, to_telegram_html
 from bot.handlers.menu import send_main_menu
 from config import settings
 from constants import SOURCE_CLINREK
-from db.crud import get_or_create_user, increment_usage, log_query
+from db.crud import (
+    get_or_create_user,
+    get_recent_turns,
+    increment_usage,
+    log_query,
+    reset_chat,
+)
 from db.models import User
 from db.session import async_session
 from rag.generator import (
+    build_history_messages,
     detect_intent,
     detect_subject,
     generate_answer,
@@ -29,6 +37,7 @@ from rag.generator import (
     generate_fallback,
     generate_multi,
     relevant_chunks,
+    rewrite_query,
 )
 from rag.retriever import retrieve
 
@@ -36,8 +45,12 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
+# Сколько последних обменов держим в лёгкой памяти диалога.
+HISTORY_TURNS = 3
+
 ERROR_TEXT = "⚠️ Произошла ошибка, попробуй ещё раз через минуту."
 CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу ответы строго по выбранной базе."
+NEW_CHAT_TEXT = "🆕 Начал новую тему — предыдущий разговор забыт."
 NOT_FOUND_ASK = (
     "В загруженных материалах по этому вопросу ничего нет.\n"
     "Ответить из общих знаний ИИ? Это не официальный источник — перепроверьте."
@@ -53,7 +66,6 @@ CONSENT_KEYBOARD = InlineKeyboardMarkup(
 )
 
 # Вопрос, ожидающий согласия на ответ из общих знаний (по пользователю).
-# In-memory: сбрасывается при рестарте — для транзиентного согласия это приемлемо.
 _pending_general: dict[int, str] = {}
 
 
@@ -63,8 +75,6 @@ async def _send_answer(message: Message, answer: str) -> None:
 
 
 async def _set_status(status: Message | None, text: str) -> None:
-    """Обновляет статус-сообщение «думает». Молча игнорирует сбои (например, если
-    текст не изменился или сообщение удалено)."""
     if status is None:
         return
     try:
@@ -82,6 +92,15 @@ async def _clear_status(status: Message | None) -> None:
         pass
 
 
+@router.message(Command("new"))
+async def cmd_new(message: Message) -> None:
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user)
+        await reset_chat(session, user.id)
+        await session.commit()
+    await message.answer(NEW_CHAT_TEXT)
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
     # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
@@ -95,12 +114,20 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
     subject = db_user.current_subject
     question = message.text
 
-    # Статус-индикатор: сразу показываем, что бот жив и работает, и меняем по этапам.
     status = await message.answer("🔎 Определяю тип вопроса…")
 
     try:
         start_time = time.monotonic()
-        intent = await detect_intent(question)
+
+        # Лёгкая память: последние обмены текущего чата.
+        async with async_session() as session:
+            turns = await get_recent_turns(
+                session, db_user.id, db_user.chat_started_at, HISTORY_TURNS
+            )
+
+        # Уточняющий вопрос («а дозы?») превращаем в самостоятельный запрос для поиска.
+        search_query = await rewrite_query(question, turns)
+        intent = await detect_intent(search_query)
 
         # Приветствие / small talk — дружелюбный ответ, лимит не тратим.
         if intent == "CHITCHAT":
@@ -111,11 +138,15 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             usage_ctx["count"] = False
             return
 
+        # Явный режим «Разбор по симптомам» (кнопкой) — всегда дифдиагноз.
+        if source_type == SOURCE_CLINREK and db_user.clinrek_symptom_mode:
+            intent = "DIFFERENTIAL"
+
         reasoning = source_type == SOURCE_CLINREK and intent in ("DIFFERENTIAL", "MULTI")
 
         await _set_status(status, "📚 Ищу в материалах…")
         chunks = await retrieve(
-            question,
+            search_query,
             source_type=source_type,
             subject=subject,
             focus_document=(source_type == SOURCE_CLINREK and not reasoning),
@@ -130,17 +161,19 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             usage_ctx["count"] = False
             return
 
+        history = build_history_messages(turns)
+
         if reasoning:
             await _set_status(status, "🩺 Провожу клинический разбор…")
         else:
             await _set_status(status, "🧠 Готовлю ответ…")
 
         if intent == "DIFFERENTIAL":
-            answer = await generate_differential(question, chunks, source_type)
+            answer = await generate_differential(question, chunks, source_type, history)
         elif intent == "MULTI":
-            answer = await generate_multi(question, chunks, source_type)
+            answer = await generate_multi(question, chunks, source_type, history)
         else:
-            answer = await generate_answer(question, chunks, source_type=source_type)
+            answer = await generate_answer(question, chunks, source_type, history)
 
         response_time_ms = int((time.monotonic() - start_time) * 1000)
     except Exception:
@@ -163,7 +196,7 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
     await callback.answer()
     question = _pending_general.pop(callback.from_user.id, None)
     try:
-        await callback.message.edit_reply_markup()  # убрать кнопки
+        await callback.message.edit_reply_markup()
     except Exception:
         pass
 
@@ -182,7 +215,6 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
     await _clear_status(status)
     await _send_answer(callback.message, answer)
 
-    # Это полноценный ответ — засчитываем в дневной лимит (middleware колбэки не ловит).
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
         await increment_usage(session, user.id)

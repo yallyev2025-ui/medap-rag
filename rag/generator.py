@@ -154,6 +154,41 @@ async def detect_intent(question: str) -> str:
     return "SINGLE"
 
 
+# --- Лёгкая память диалога ---
+# Сколько символов ответа держим в истории (полные ответы раздувают промпт).
+HISTORY_ANSWER_CHARS = 800
+
+REWRITE_SYSTEM_PROMPT = """Переформулируй ПОСЛЕДНИЙ вопрос пользователя в самостоятельный поисковый запрос с учётом диалога — так, чтобы он был понятен без предыдущих сообщений (раскрой отсылки вроде «а дозы?», «при нём», «это» в конкретную тему из диалога). Сохрани медицинские термины.
+Выведи ТОЛЬКО переформулированный запрос, одной строкой, без пояснений. Если вопрос и так самостоятельный — верни его без изменений."""
+
+
+async def rewrite_query(question: str, turns: list[tuple[str, str]]) -> str:
+    """Уточняющий вопрос («а какие дозы?») превращает в самостоятельный запрос для
+    поиска, используя историю диалога. Без истории возвращает вопрос как есть."""
+    if not turns:
+        return question
+    hist = "\n".join(f"Вопрос: {q}\nОтвет: {a[:300]}" for q, a in turns)
+    try:
+        out = await _complete(
+            REWRITE_SYSTEM_PROMPT,
+            f"Диалог:\n{hist}\n\nПоследний вопрос: {question}",
+            0.0,
+            settings.OPENAI_MODEL,
+        )
+    except RuntimeError:
+        return question
+    return out.strip() or question
+
+
+def build_history_messages(turns: list[tuple[str, str]]) -> list[dict]:
+    """Готовит историю диалога в формате сообщений для модели (ответы усечены)."""
+    messages: list[dict] = []
+    for q, a in turns:
+        messages.append({"role": "user", "content": q})
+        messages.append({"role": "assistant", "content": a[:HISTORY_ANSWER_CHARS]})
+    return messages
+
+
 # --- Дифференциальный диагноз по симптомам (много рекомендаций, строго по контексту) ---
 DIFFERENTIAL_SYSTEM_PROMPT = """Ты — клинический ассистент MedAP для врача. Тебе даны фрагменты официальных клинических рекомендаций (КОНТЕКСТ) и описание симптомов/картины пациента.
 Проведи дифференциально-диагностический разбор СТРОГО на основе контекста.
@@ -385,16 +420,21 @@ def _model_for(source_type: str) -> str:
 
 
 async def _complete(
-    system_prompt: str, user_prompt: str, temperature: float, model: str | None = None
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    model: str | None = None,
+    history: list[dict] | None = None,
 ) -> str:
     client = _get_client()
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_prompt})
     try:
         response = await client.chat.completions.create(
             model=model or settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             temperature=temperature,
         )
     except openai.APIError as e:
@@ -426,6 +466,7 @@ async def generate_answer(
     question: str,
     chunks: list[ChunkResult],
     source_type: str = SOURCE_TEXTBOOK,
+    history: list[dict] | None = None,
 ) -> str:
     """Генерирует ответ с учётом режима.
 
@@ -445,6 +486,7 @@ async def generate_answer(
             FALLBACK_SYSTEM_PROMPT,
             FALLBACK_USER_TEMPLATE.format(question=question),
             GENERATION_TEMPERATURE,
+            history=history,
         )
 
     system_prompt = CLINREK_SYSTEM_PROMPT if is_clinrek else SYSTEM_PROMPT
@@ -466,7 +508,7 @@ async def generate_answer(
     )
 
     model = _model_for(source_type)
-    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model)
+    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model, history)
 
     if not settings.VERIFY_GROUNDING:
         return answer
@@ -484,11 +526,15 @@ async def generate_answer(
         issues=issues,
         no_context_answer=NO_CONTEXT_ANSWER,
     )
-    return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, model)
+    return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, model, history)
 
 
 async def _reasoning_answer(
-    system_prompt: str, question: str, chunks: list[ChunkResult], source_type: str
+    system_prompt: str,
+    question: str,
+    chunks: list[ChunkResult],
+    source_type: str,
+    history: list[dict] | None = None,
 ) -> str | None:
     """Заземлённый клинический разбор (дифдиагноз/сочетание). Возвращает None, если
     релевантных материалов нет — тогда вызывающий спросит согласие на общие знания."""
@@ -498,7 +544,7 @@ async def _reasoning_answer(
 
     model = _model_for(source_type)
     user_prompt = REASONING_USER_TEMPLATE.format(context=context, question=question)
-    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model)
+    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model, history)
 
     if not settings.VERIFY_GROUNDING:
         return answer
@@ -512,21 +558,27 @@ async def _reasoning_answer(
         "\n\nВАЖНО: убери из ответа ВСЕ утверждения, которых нет в контексте выше "
         "(медицина — выдумки недопустимы). Проблемные места:\n" + issues
     )
-    return await _complete(system_prompt, correction, GENERATION_TEMPERATURE, model)
+    return await _complete(system_prompt, correction, GENERATION_TEMPERATURE, model, history)
 
 
 async def generate_differential(
-    question: str, chunks: list[ChunkResult], source_type: str = SOURCE_CLINREK
+    question: str,
+    chunks: list[ChunkResult],
+    source_type: str = SOURCE_CLINREK,
+    history: list[dict] | None = None,
 ) -> str | None:
     """Дифференциальный диагноз по симптомам (строго по многим рекомендациям)."""
-    return await _reasoning_answer(DIFFERENTIAL_SYSTEM_PROMPT, question, chunks, source_type)
+    return await _reasoning_answer(DIFFERENTIAL_SYSTEM_PROMPT, question, chunks, source_type, history)
 
 
 async def generate_multi(
-    question: str, chunks: list[ChunkResult], source_type: str = SOURCE_CLINREK
+    question: str,
+    chunks: list[ChunkResult],
+    source_type: str = SOURCE_CLINREK,
+    history: list[dict] | None = None,
 ) -> str | None:
     """Разбор сочетания/последовательности заболеваний (по многим рекомендациям)."""
-    return await _reasoning_answer(MULTI_SYSTEM_PROMPT, question, chunks, source_type)
+    return await _reasoning_answer(MULTI_SYSTEM_PROMPT, question, chunks, source_type, history)
 
 
 async def generate_fallback(question: str) -> str:

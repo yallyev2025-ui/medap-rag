@@ -114,6 +114,26 @@ async def set_user_selection(
     user.clinrek_symptom_mode = symptom_mode
 
 
+async def reset_chat(session: AsyncSession, user_id: int) -> None:
+    """«Новая тема»: сдвигает границу — прошлые сообщения перестают учитываться в памяти."""
+    user = await session.get(User, user_id)
+    if user is not None:
+        user.chat_started_at = datetime.now(timezone.utc)
+
+
+async def get_recent_turns(
+    session: AsyncSession, user_id: int, since: datetime | None, limit: int
+) -> list[tuple[str, str]]:
+    """Последние ходы диалога (вопрос, ответ) в хронологическом порядке — лёгкая память.
+    Учитываются только сообщения после начала текущего чата (since)."""
+    stmt = select(Query.question, Query.answer).where(Query.user_id == user_id)
+    if since is not None:
+        stmt = stmt.where(Query.created_at >= since)
+    stmt = stmt.order_by(Query.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).all()
+    return [(r.question, r.answer) for r in reversed(rows)]
+
+
 async def get_textbook_subjects(session: AsyncSession) -> list[str]:
     """Уникальные предметы реально загруженных учебников — для динамического меню."""
     stmt = (

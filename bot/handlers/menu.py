@@ -62,6 +62,8 @@ def _categories_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=label, callback_data=f"cat:{code}")]
         for code, label, _value in CLINREK_CATEGORIES
     ]
+    # Отдельный режим: врач вводит симптомы — бот делает дифференциальный разбор.
+    rows.append([InlineKeyboardButton(text="🩺 Разбор по симптомам", callback_data="cat:symptom")])
     rows.append(_CHANGE_MODE_ROW)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -133,6 +135,29 @@ async def cb_clinrek_menu(callback: CallbackQuery) -> None:
 async def cb_pick_category(callback: CallbackQuery) -> None:
     await callback.answer()
     code = callback.data.split(":", 1)[1]
+
+    # Режим «Разбор по симптомам»: поиск по всем категориям, каждый вопрос — дифдиагноз.
+    if code == "symptom":
+        async with async_session() as session:
+            await get_or_create_user(session, callback.from_user)
+            await set_user_selection(
+                session, callback.from_user.id, SOURCE_CLINREK, None, symptom_mode=True
+            )
+            await session.commit()
+        await callback.message.edit_text(
+            "🩺 Режим: Разбор по симптомам.\n\n"
+            "Опишите жалобы и картину пациента (пол, возраст, симптомы, длительность) — "
+            "я подберу вероятные версии по клиническим рекомендациям с «за/против», что "
+            "уточнить и красные флаги. Это ориентир, не диагноз — решает врач.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Обычные вопросы", callback_data="menu:clinrek")],
+                    _CHANGE_MODE_ROW,
+                ]
+            ),
+        )
+        return
+
     subject = next((value for c, _label, value in CLINREK_CATEGORIES if c == code), None)
 
     async with async_session() as session:

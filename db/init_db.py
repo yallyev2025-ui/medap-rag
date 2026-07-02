@@ -27,10 +27,11 @@ async def init_db() -> None:
         )
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_source_type VARCHAR(20);"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_subject VARCHAR(100);"))
-        # Режим «Разбор по симптомам» (v2.1).
+        # Режим «Разбор по симптомам» + лёгкая память диалога (v2.1).
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS clinrek_symptom_mode BOOLEAN NOT NULL DEFAULT FALSE;")
         )
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_started_at TIMESTAMPTZ;"))
         # Индекс под фильтрацию поиска по режиму/предмету.
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_book_chunks_source_subject ON book_chunks (source_type, subject);")

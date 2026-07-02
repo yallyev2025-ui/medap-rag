@@ -4,6 +4,7 @@ from aiogram.types import BotCommand
 
 USER_COMMANDS = [
     BotCommand(command="start", description="Начать"),
+    BotCommand(command="new", description="Новая тема (забыть контекст диалога)"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="limit", description="Сколько запросов осталось сегодня"),
 ]

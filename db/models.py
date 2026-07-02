@@ -61,6 +61,9 @@ class User(Base):
     current_subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Режим «Разбор по симптомам» (клинреки): каждый вопрос трактуется как дифдиагноз.
     clinrek_symptom_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Начало текущего «чата»: лёгкая память диалога берётся только с этого момента.
+    # Кнопка/команда «Новая тема» сдвигает границу — прошлые сообщения забываются.
+    chat_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Usage(Base):
