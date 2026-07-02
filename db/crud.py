@@ -99,14 +99,19 @@ async def set_premium(session: AsyncSession, user_id: int, premium: bool) -> boo
 
 
 async def set_user_selection(
-    session: AsyncSession, user_id: int, source_type: str | None, subject: str | None
+    session: AsyncSession,
+    user_id: int,
+    source_type: str | None,
+    subject: str | None,
+    symptom_mode: bool = False,
 ) -> None:
-    """Сохраняет выбранный пользователем режим (source_type) и предмет/категорию."""
+    """Сохраняет выбранный режим (source_type), предмет/категорию и режим симптомов."""
     user = await session.get(User, user_id)
     if user is None:
         return
     user.current_source_type = source_type
     user.current_subject = subject
+    user.clinrek_symptom_mode = symptom_mode
 
 
 async def get_textbook_subjects(session: AsyncSession) -> list[str]:

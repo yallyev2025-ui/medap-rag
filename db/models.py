@@ -59,6 +59,8 @@ class User(Base):
     # current_subject=None при source_type='клинрек' означает «Все категории».
     current_source_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     current_subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Режим «Разбор по симптомам» (клинреки): каждый вопрос трактуется как дифдиагноз.
+    clinrek_symptom_mode: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Usage(Base):
