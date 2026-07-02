@@ -129,6 +129,65 @@ FALLBACK_SYSTEM_PROMPT = """Ты — медицинский ассистент M
 
 FALLBACK_USER_TEMPLATE = "Сообщение пользователя: {question}"
 
+# --- Роутер: определяет тип клинического запроса, чтобы выбрать стратегию поиска ---
+INTENT_SYSTEM_PROMPT = """Определи тип медицинского запроса врача и выведи РОВНО одно слово-код:
+
+- SINGLE — вопрос про одну конкретную болезнь/препарат/тему (что это, диагностика, лечение чего-то НАЗВАННОГО по имени).
+- DIFFERENTIAL — описаны симптомы/жалобы/клиническая картина БЕЗ готового диагноза, нужно предположить, что это может быть (дифференциальный диагноз).
+- MULTI — несколько заболеваний/состояний сразу, их сочетание или последовательность, нужен совместный разбор/тактика.
+- CHITCHAT — приветствие, благодарность, «что ты умеешь», не медицинский вопрос.
+
+Выведи только одно: SINGLE, DIFFERENTIAL, MULTI или CHITCHAT."""
+
+
+async def detect_intent(question: str) -> str:
+    """Классифицирует запрос (роутер использует обычную/дешёвую модель).
+    При сбое — безопасный дефолт SINGLE."""
+    try:
+        out = await _complete(INTENT_SYSTEM_PROMPT, question, 0.0, settings.OPENAI_MODEL)
+    except RuntimeError:
+        return "SINGLE"
+    up = out.strip().upper()
+    for key in ("DIFFERENTIAL", "MULTI", "CHITCHAT", "SINGLE"):
+        if key in up:
+            return key
+    return "SINGLE"
+
+
+# --- Дифференциальный диагноз по симптомам (много рекомендаций, строго по контексту) ---
+DIFFERENTIAL_SYSTEM_PROMPT = """Ты — клинический ассистент MedAP для врача. Тебе даны фрагменты официальных клинических рекомендаций (КОНТЕКСТ) и описание симптомов/картины пациента.
+Проведи дифференциально-диагностический разбор СТРОГО на основе контекста.
+
+КРИТИЧНО (медицина, ошибки опасны, галлюцинации недопустимы):
+- Рассматривай ТОЛЬКО те заболевания/состояния, которые есть в контексте и к которым подходят описанные признаки. НЕ придумывай болезни, которых нет в контексте.
+- «За»/«против» для каждой версии — ТОЛЬКО по признакам/критериям из контекста. Чего нет в контексте — не утверждай.
+- Не ставь диагноз. Формулируй как «стоит рассмотреть / требует исключения».
+- Если симптомы не сопоставляются ни с чем в контексте — честно скажи об этом, не выдумывай.
+
+ФОРМАТ:
+1. Кратко: картина пациента (1–2 строки, из слов пользователя).
+2. **Вероятные версии** — по убыванию вероятности по данным контекста. По каждой: «за» / «против» (из рекомендаций) и источник [Название, стр. N].
+3. **Что уточнить / обследовать** — какие данные помогут различить (если есть в контексте).
+4. **🚩 Красные флаги** — что срочно исключить (если есть в контексте).
+5. Короткий дисклеймер: это ориентир по загруженным рекомендациям, не диагноз; нужен очный осмотр, решение — за врачом.
+
+Русский, Telegram-Markdown (**жирный**, списки «-», без «#")."""
+
+# --- Разбор сочетания/последовательности заболеваний (много рекомендаций) ---
+MULTI_SYSTEM_PROMPT = """Ты — клинический ассистент MedAP для врача. В КОНТЕКСТЕ — фрагменты официальных клинических рекомендаций по нескольким состояниям. Запрос касается их сочетания или последовательности.
+
+СТРОГО по контексту, без выдумок (галлюцинации недопустимы):
+- Разбери каждое состояние и как их вести ВМЕСТЕ: приоритеты, противоречия в терапии, лекарственные взаимодействия, взаимное влияние — но только если это есть в контексте.
+- Чего нет в контексте — не утверждай, честно отметь пробел.
+- Не назначение, а информация из рекомендаций; решение — за врачом.
+
+ФОРМАТ: связный разбор по состояниям и их сочетанию, что контролировать, источники [Название, стр. N] по блокам, короткий дисклеймер. Русский, Telegram-Markdown."""
+
+REASONING_USER_TEMPLATE = """Контекст из клинических рекомендаций:
+{context}
+
+Запрос врача: {question}"""
+
 MODE_INSTRUCTIONS = {
     "question": (
         "Дай максимально подробный и исчерпывающий ответ — на уровне подготовки к экзамену. "
@@ -317,11 +376,21 @@ def _get_client() -> openai.AsyncOpenAI:
     return openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-async def _complete(system_prompt: str, user_prompt: str, temperature: float) -> str:
+def _model_for(source_type: str) -> str:
+    """Клинреки — более сильная модель (врачебные ответы, меньше галлюцинаций);
+    учебники и служебные задачи — обычная (можно дешёвую mini)."""
+    if source_type == SOURCE_CLINREK and settings.CLINREK_OPENAI_MODEL:
+        return settings.CLINREK_OPENAI_MODEL
+    return settings.OPENAI_MODEL
+
+
+async def _complete(
+    system_prompt: str, user_prompt: str, temperature: float, model: str | None = None
+) -> str:
     client = _get_client()
     try:
         response = await client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
+            model=model or settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -396,7 +465,8 @@ async def generate_answer(
         no_context_answer=NO_CONTEXT_ANSWER,
     )
 
-    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE)
+    model = _model_for(source_type)
+    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model)
 
     if not settings.VERIFY_GROUNDING:
         return answer
@@ -414,4 +484,57 @@ async def generate_answer(
         issues=issues,
         no_context_answer=NO_CONTEXT_ANSWER,
     )
-    return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE)
+    return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, model)
+
+
+async def _reasoning_answer(
+    system_prompt: str, question: str, chunks: list[ChunkResult], source_type: str
+) -> str | None:
+    """Заземлённый клинический разбор (дифдиагноз/сочетание). Возвращает None, если
+    релевантных материалов нет — тогда вызывающий спросит согласие на общие знания."""
+    context = build_context(chunks)
+    if context == NO_CONTEXT_PLACEHOLDER:
+        return None
+
+    model = _model_for(source_type)
+    user_prompt = REASONING_USER_TEMPLATE.format(context=context, question=question)
+    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model)
+
+    if not settings.VERIFY_GROUNDING:
+        return answer
+
+    grounded, issues = await _verify_grounded(context, answer)
+    if grounded:
+        return answer
+
+    logger.info("Клинический разбор не прошёл проверку заземления, правлю. Проблемы: %s", issues)
+    correction = user_prompt + (
+        "\n\nВАЖНО: убери из ответа ВСЕ утверждения, которых нет в контексте выше "
+        "(медицина — выдумки недопустимы). Проблемные места:\n" + issues
+    )
+    return await _complete(system_prompt, correction, GENERATION_TEMPERATURE, model)
+
+
+async def generate_differential(
+    question: str, chunks: list[ChunkResult], source_type: str = SOURCE_CLINREK
+) -> str | None:
+    """Дифференциальный диагноз по симптомам (строго по многим рекомендациям)."""
+    return await _reasoning_answer(DIFFERENTIAL_SYSTEM_PROMPT, question, chunks, source_type)
+
+
+async def generate_multi(
+    question: str, chunks: list[ChunkResult], source_type: str = SOURCE_CLINREK
+) -> str | None:
+    """Разбор сочетания/последовательности заболеваний (по многим рекомендациям)."""
+    return await _reasoning_answer(MULTI_SYSTEM_PROMPT, question, chunks, source_type)
+
+
+async def generate_fallback(question: str) -> str:
+    """Ответ из общих знаний ИИ с обязательной пометкой (по согласию пользователя),
+    либо приветствие/small talk. Модель обычная — общие знания, экономим."""
+    return await _complete(
+        FALLBACK_SYSTEM_PROMPT,
+        FALLBACK_USER_TEMPLATE.format(question=question),
+        GENERATION_TEMPERATURE,
+        settings.OPENAI_MODEL,
+    )
