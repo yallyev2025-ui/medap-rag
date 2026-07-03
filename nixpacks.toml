@@ -1,0 +1,5 @@
+# Системные пакеты для OCR сканированных PDF:
+# - tesseract-ocr + языковые данные rus/eng — распознавание текста с картинок
+# - poppler-utils — pdf2image конвертирует страницы PDF в картинки (pdftoppm)
+[phases.setup]
+aptPkgs = ["tesseract-ocr", "tesseract-ocr-rus", "tesseract-ocr-eng", "poppler-utils"]
