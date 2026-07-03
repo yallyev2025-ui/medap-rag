@@ -255,10 +255,11 @@ async def cmd_addbook(message: Message, state: FSMContext) -> None:
     await state.set_state(AddBookStates.waiting_pdf)
     await state.update_data(files=[])
     await message.answer(
-        "Отправь файл(ы) учебника: PDF (в т.ч. сканированный — распознаю текст сам), "
+        "Отправь файл(ы): PDF (в т.ч. сканированный — распознаю текст сам), "
         "Word (.docx) или текстовый (.txt).\n\n"
-        "Можно прислать сразу несколько файлов — это будут части одной книги "
-        "(пронумерую их «Часть 1, 2, …»). Когда закончишь — нажми «Готово»."
+        "Несколько файлов: для учебника — это части одной книги; для клин. рекомендаций — "
+        "каждый файл отдельная рекомендация (название возьму из имени файла). "
+        "Когда закончишь — нажми «Готово»."
     )
 
 
@@ -293,7 +294,8 @@ async def addbook_receive_pdf(message: Message, state: FSMContext) -> None:
     async with lock:
         data = await state.get_data()
         files = data.get("files", [])
-        files.append(file_path)
+        # Храним и путь, и исходное имя файла: для клинреков имя станет названием.
+        files.append([file_path, document.file_name or "file.pdf"])
         await state.update_data(files=files)
         count = len(files)
 
@@ -335,10 +337,40 @@ async def addbook_choose_category(callback: CallbackQuery, state: FSMContext) ->
     code = callback.data.split(":", 1)[1]
     subject = next((v for c, _l, v in CLINREK_CATEGORIES if c == code), None)
     await callback.answer()
-    # У клинрека нет автора — источником будет название файла. Автора не спрашиваем.
-    await state.update_data(subject=subject, author="")
-    await state.set_state(AddBookStates.waiting_title)
-    await callback.message.edit_text("Введи название рекомендации (или отправь как есть):")
+
+    data = await state.get_data()
+    files = data.get("files", [])
+    await state.clear()
+    _addbook_locks.pop(callback.from_user.id, None)
+
+    if not files:
+        await callback.message.edit_text("Файлы не найдены, начни заново через /addbook.")
+        return
+
+    # Клинреки: каждый файл — отдельная рекомендация, название = имя файла, автора нет.
+    await callback.message.edit_text(
+        f"Загружаю клин. рекомендации ({len(files)} шт.) в категорию «{clinrek_label(subject)}»…"
+    )
+
+    ok = 0
+    for i, (file_path, name) in enumerate(files, start=1):
+        title = os.path.splitext(name)[0]
+        progress = f"({i}/{len(files)}) " if len(files) > 1 else ""
+        try:
+            chunks_count = await load_book(file_path, subject, "", title, SOURCE_CLINREK)
+            ok += 1
+            await callback.message.answer(f"✅ {progress}«{title}» — {chunks_count} чанков")
+        except Exception:
+            logger.exception("Ошибка при загрузке клинрека: %s", title)
+            await callback.message.answer(
+                f"❌ {progress}«{title}»: не удалось (повреждён файл или не найден текст)"
+            )
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+    if len(files) > 1:
+        await callback.message.answer(f"Готово: успешно {ok} из {len(files)}.")
 
 
 @router.message(AddBookStates.waiting_pdf)
@@ -399,7 +431,7 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
     )
 
     ok = 0
-    for i, file_path in enumerate(files, start=1):
+    for i, (file_path, _name) in enumerate(files, start=1):
         title = f"{base_title} — Часть {i}" if multiple else base_title
         progress = f"({i}/{len(files)}) " if multiple else ""
         try:
