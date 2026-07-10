@@ -18,11 +18,23 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from config import settings
-from rag.retriever import retrieve
+from constants import SOURCE_TEXTBOOK
+from rag.generator import NO_CONTEXT_ANSWER, generate_answer, relevant_chunks
+from rag.retriever import ChunkResult, retrieve
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="medap-rag search API")
+
+
+def _source_str(c: ChunkResult) -> str:
+    """[Автор, Название, стр. N] — тот же формат, что бот показывает пользователю."""
+    head = f"{c.author}, {c.title}" if c.author else c.title
+    if c.page_from is None:
+        return head
+    if c.page_from == c.page_to:
+        return f"{head}, стр. {c.page_from}"
+    return f"{head}, стр. {c.page_from}-{c.page_to}"
 
 
 class SearchRequest(BaseModel):
@@ -85,3 +97,49 @@ async def search(req: SearchRequest, _: None = Depends(_check_api_key)) -> list[
         )
         for c in chunks
     ]
+
+
+class AnswerRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="Тема/вопрос для ответа по материалам")
+    source_type: str = Field(SOURCE_TEXTBOOK, description="'учебник' (по умолчанию) или 'клинрек'")
+    subject: str | None = Field(
+        None, description="Предмет учебника (pathanatomy/pathphys/physiology/...) или категория клинрека"
+    )
+    top_k: int | None = Field(None, ge=1, le=50)
+
+
+class AnswerResponse(BaseModel):
+    found: bool  # False = по теме в материалах ничего релевантного не нашлось
+    answer: str  # готовый, заземлённый и проверенный ответ по учебникам (или "" если found=false)
+    sources: list[str]  # ["Автор, Название, стр. N", ...]
+
+
+@app.post("/answer", response_model=AnswerResponse)
+async def answer(req: AnswerRequest, _: None = Depends(_check_api_key)) -> AnswerResponse:
+    """Готовый ОТВЕТ бота по материалам (retrieve → generate_answer с проверкой
+    заземления), а не сырые фрагменты. Это то, что потребитель (сценарист рилсов
+    в medap) должен «переделывать под видео»: факты уже собраны, сверены с учебником
+    и снабжены источниками.
+
+    ВАЖНО: в отличие от бота, здесь при отсутствии материалов НЕ включается фолбэк
+    на общие знания ИИ — возвращаем `found=false, answer=""`. Для генерации видео
+    факты обязаны быть из учебников, поэтому «нет материала» = честный отказ, а
+    решение (стоп/повтор) принимает вызывающая сторона.
+    """
+    kwargs = dict(source_type=req.source_type, subject=req.subject)
+    if req.top_k is not None:
+        kwargs["top_k"] = req.top_k
+
+    chunks = await retrieve(req.question, **kwargs)
+    relevant = relevant_chunks(chunks)
+    if not relevant:
+        return AnswerResponse(found=False, answer="", sources=[])
+
+    text = await generate_answer(req.question, chunks, source_type=req.source_type)
+    # generate_answer может всё равно отказать, если контекст лишь упоминает тему
+    # без раскрытия (см. его системный промпт) — тогда возвращаем то же "не найдено".
+    if text.strip() == NO_CONTEXT_ANSWER.strip():
+        return AnswerResponse(found=False, answer="", sources=[])
+
+    sources = [_source_str(c) for c in relevant]
+    return AnswerResponse(found=True, answer=text, sources=sources)
