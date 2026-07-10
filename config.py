@@ -17,6 +17,11 @@ class Settings(BaseSettings):
 
     ADMIN_IDS_RAW: str = ""
 
+    # Ключ для внешнего HTTP /search (api/main.py) — сервис-сервис вызов от
+    # сценариста рилсов (репозиторий medap), не от людей. Пусто = /search отключён
+    # (503), пока ключ не задан явно на Railway.
+    RAG_API_KEY: str = ""
+
     EMBEDDING_MODEL_NAME: str = "intfloat/multilingual-e5-large"
     EMBEDDING_DIM: int = 1024
 

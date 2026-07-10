@@ -59,6 +59,57 @@ Telegram-бот MedAP — RAG-ассистент для студентов-ме�
 Замер качества и калибровка порога — `scripts/eval_rag.py` на наборе
 `eval/dataset.jsonl` (см. комментарии в файлах).
 
+## HTTP API для внешних сервисов
+
+Кроме Telegram-бота, есть HTTP `/search` (`api/main.py`) — тонкая обёртка над
+`rag.retriever.retrieve()`, для вызова из других сервисов (например, сценарист
+рилсов в репозитории `medap`). Запускается в том же процессе, что и бот (см.
+`bot/main.py`), чтобы не грузить эмбеддер/реранкер в память дважды.
+
+**`GET /health`** — без авторизации, `{"status": "ok"}`.
+
+**`POST /search`** — требует заголовок `X-API-Key` (сверяется с `RAG_API_KEY`
+из окружения; пусто на сервере = эндпоинт отключён, 503).
+
+Тело запроса (JSON):
+```json
+{
+  "question": "патогенез дифтерии",
+  "source_type": "учебник",
+  "subject": "pathphys",
+  "top_k": 12,
+  "focus_document": false
+}
+```
+- `question` — обязательное, поисковый запрос.
+- `source_type` — `"учебник"` или `"клинрек"`; без фильтра (`null`) не рекомендуется —
+  базы разной природы, результат будет мешаниной.
+- `subject` — для `"учебник"`: код предмета (см. `constants.SUBJECT_LABELS`:
+  `pathanatomy`, `pathphys`, `physiology`, `anatomy`, `biochemistry`, `pharmacology`,
+  `other`, либо кастомный код, если предмет грузили не из этого списка); для
+  `"клинрек"`: категория (`взрослые`/`дети`/`взрослые_и_дети`), `null` — все категории.
+- `top_k` — необязательно, сколько фрагментов вернуть после реранка (по умолчанию
+  `RERANK_TOP_K` из конфига).
+- `focus_document` — только для клинреков, см. `rag/retriever.py::retrieve()`.
+
+Ответ — массив фрагментов, отсортированных по релевантности (`rerank_score`, где
+выше = релевантнее; `null`, если реранкер был недоступен и сработала деградация
+до косинусной дистанции):
+```json
+[
+  {
+    "content": "...текст фрагмента...",
+    "subject": "pathphys",
+    "author": "Иванов И.И.",
+    "title": "Патофизиология",
+    "page_from": 101,
+    "page_to": 102,
+    "distance": 0.12,
+    "rerank_score": 0.87
+  }
+]
+```
+
 ## Локальный запуск
 
 1. Установить зависимости:
@@ -94,7 +145,7 @@ Telegram-бот MedAP — RAG-ассистент для студентов-ме�
 
 1. **PostgreSQL** — создать через Railway (плагин/шаблон Postgres), убедиться, что
    расширение `pgvector` доступно (Railway-образ Postgres его поддерживает).
-2. **Бот** — отдельный сервис из этого репозитория, билдер `NIXPACKS` (см. `railway.toml`):
+2. **Бот + HTTP API** — отдельный сервис из этого репозитория, билдер `NIXPACKS` (см. `railway.toml`):
    ```toml
    [build]
    builder = "NIXPACKS"
@@ -104,7 +155,11 @@ Telegram-бот MedAP — RAG-ассистент для студентов-ме�
    restartPolicyType = "ON_FAILURE"
    restartPolicyMaxRetries = 5
    ```
-   Это polling-бот, HTTP-порт не нужен.
+   `python -m bot.main` теперь запускает ОДНОВРЕМЕННО long-polling бота и HTTP-сервер
+   (`/search`, `/health`) в одном процессе — см. «HTTP API для внешних сервисов» ниже.
+   Из-за HTTP-сервера сервис теперь **web**, а не чистый worker: нужен публичный домен
+   в Railway (Settings → Networking → Generate Domain) и слушать `$PORT` (Railway
+   проставляет сам, код это уже делает).
 
 ### Переменные окружения сервиса бота
 
@@ -117,6 +172,7 @@ Telegram-бот MedAP — RAG-ассистент для студентов-ме�
 | `ADMIN_IDS_RAW` | Telegram ID админов через запятую |
 | `EMBEDDING_MODEL_NAME` | `intfloat/multilingual-e5-large` |
 | `EMBEDDING_DIM` | `1024` |
+| `RAG_API_KEY` | случайная строка (`openssl rand -hex 32`) — секрет для HTTP `/search`, см. ниже |
 | `FREE_DAILY_LIMIT` | например, `5` |
 
 `DATABASE_URL` от Railway приходит со схемой `postgres://`/`postgresql://` —
