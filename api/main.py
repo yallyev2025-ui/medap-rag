@@ -16,9 +16,12 @@ import logging
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from config import settings
-from constants import SOURCE_TEXTBOOK
+from constants import SOURCE_TEXTBOOK, clinrek_label, subject_label
+from db.models import Book
+from db.session import async_session
 from rag.generator import NO_CONTEXT_ANSWER, generate_answer, relevant_chunks
 from rag.retriever import ChunkResult, retrieve
 
@@ -75,6 +78,30 @@ def _check_api_key(x_api_key: str = Header(default="")) -> None:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+class SubjectItem(BaseModel):
+    code: str  # значение subject как в БД — передавай обратно в /answer и /search
+    label: str  # человекочитаемое название
+
+
+@app.get("/subjects", response_model=list[SubjectItem])
+async def subjects(source_type: str = SOURCE_TEXTBOOK, _: None = Depends(_check_api_key)) -> list[SubjectItem]:
+    """Реально загруженные предметы (для учебников — динамически, что фактически
+    есть в базе, а не статичный список; так внешний потребитель — сценарист рилсов
+    в medap — не привязан к жёсткому набору дисциплин и подхватывает новые предметы
+    без изменений кода). Для клинреков категории — фиксированная таксономия
+    (взрослые/дети/взрослые_и_дети), это не то, что "загружено", а всегда одни и те
+    же 3 значения — их проще жёстко задать на стороне потребителя (см. constants.CLINREK_CATEGORIES),
+    но эндпоинт всё равно отвечает и на них для единообразия API.
+    """
+    stmt = select(Book.subject).where(Book.source_type == source_type).distinct().order_by(Book.subject)
+    async with async_session() as session:
+        result = await session.execute(stmt)
+        codes = [row[0] for row in result.all()]
+
+    label_fn = subject_label if source_type == SOURCE_TEXTBOOK else clinrek_label
+    return [SubjectItem(code=c, label=label_fn(c)) for c in codes]
 
 
 @app.post("/search", response_model=list[SearchResultItem])
