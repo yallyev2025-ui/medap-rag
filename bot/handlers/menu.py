@@ -10,6 +10,7 @@ import logging
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from config import settings
 from constants import (
     CLINREK_CATEGORIES,
     SOURCE_CLINREK,
@@ -23,6 +24,16 @@ from db.session import async_session
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+# Доступ к клинрекам — только премиум и админы (учебники доступны всем).
+CLINREK_PREMIUM_TEXT = (
+    "📋 Клинические рекомендации доступны только по премиум-доступу.\n\n"
+    "Напишите администратору, чтобы получить его. Учебники доступны без ограничений."
+)
+
+
+def has_clinrek_access(user) -> bool:
+    return bool(user.is_premium) or user.id in settings.ADMIN_IDS
 
 MAIN_MENU_TEXT = (
     "Привет! Я медицинский ассистент MedAP.\n\n"
@@ -125,6 +136,17 @@ async def cb_pick_subject(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "menu:clinrek")
 async def cb_clinrek_menu(callback: CallbackQuery) -> None:
     await callback.answer()
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await session.commit()
+
+    if not has_clinrek_access(user):
+        await callback.message.edit_text(
+            CLINREK_PREMIUM_TEXT,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[_CHANGE_MODE_ROW]),
+        )
+        return
+
     await callback.message.edit_text(
         "Выберите категорию клинических рекомендаций:",
         reply_markup=_categories_keyboard(),
@@ -135,6 +157,17 @@ async def cb_clinrek_menu(callback: CallbackQuery) -> None:
 async def cb_pick_category(callback: CallbackQuery) -> None:
     await callback.answer()
     code = callback.data.split(":", 1)[1]
+
+    # Клинреки — только для премиум/админов (защита и на этом шаге).
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await session.commit()
+    if not has_clinrek_access(user):
+        await callback.message.edit_text(
+            CLINREK_PREMIUM_TEXT,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[_CHANGE_MODE_ROW]),
+        )
+        return
 
     # Режим «Разбор по симптомам»: поиск по всем категориям, каждый вопрос — дифдиагноз.
     if code == "symptom":

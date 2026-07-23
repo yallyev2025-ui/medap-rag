@@ -16,7 +16,7 @@ from aiogram.types import (
 )
 
 from bot.formatting import split_for_telegram, to_telegram_html
-from bot.handlers.menu import send_main_menu
+from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
 from config import settings
 from constants import SOURCE_CLINREK
 from db.crud import (
@@ -113,6 +113,13 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
     source_type = db_user.current_source_type
     subject = db_user.current_subject
     question = message.text
+
+    # Клинреки — только премиум/админ (режим мог быть выбран до отзыва премиума).
+    if source_type == SOURCE_CLINREK and not has_clinrek_access(db_user):
+        await message.answer(CLINREK_PREMIUM_TEXT)
+        await send_main_menu(message)
+        usage_ctx["count"] = False
+        return
 
     status = await message.answer("🔎 Определяю тип вопроса…")
 
