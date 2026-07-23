@@ -41,19 +41,25 @@ MAIN_MENU_TEXT = (
     "и указывать источник:"
 )
 
-MAIN_MENU_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="📚 Учебники", callback_data="menu:textbook")],
-        [InlineKeyboardButton(text="📋 Клин. рекомендации", callback_data="menu:clinrek")],
-    ]
-)
-
 # Кнопка возврата к выбору режима, добавляется под подтверждением выбора.
 _CHANGE_MODE_ROW = [InlineKeyboardButton(text="🔄 Сменить режим", callback_data="menu:main")]
 
 
+def _main_menu_keyboard(show_clinrek: bool) -> InlineKeyboardMarkup:
+    """Кнопка клинреков видна только премиум/админам — остальным её вообще нет."""
+    rows = [[InlineKeyboardButton(text="📚 Учебники", callback_data="menu:textbook")]]
+    if show_clinrek:
+        rows.append([InlineKeyboardButton(text="📋 Клин. рекомендации", callback_data="menu:clinrek")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def send_main_menu(message: Message) -> None:
-    await message.answer(MAIN_MENU_TEXT, reply_markup=MAIN_MENU_KEYBOARD)
+    async with async_session() as session:
+        user = await get_or_create_user(session, message.from_user)
+        await session.commit()
+    await message.answer(
+        MAIN_MENU_TEXT, reply_markup=_main_menu_keyboard(has_clinrek_access(user))
+    )
 
 
 def _subjects_keyboard(subjects: list[str]) -> InlineKeyboardMarkup:
@@ -82,7 +88,12 @@ def _categories_keyboard() -> InlineKeyboardMarkup:
 @router.callback_query(F.data == "menu:main")
 async def cb_main_menu(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.edit_text(MAIN_MENU_TEXT, reply_markup=MAIN_MENU_KEYBOARD)
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await session.commit()
+    await callback.message.edit_text(
+        MAIN_MENU_TEXT, reply_markup=_main_menu_keyboard(has_clinrek_access(user))
+    )
 
 
 @router.callback_query(F.data == "menu:textbook")
