@@ -69,7 +69,7 @@ MEDAP EDUCATIONAL WEBSITE        TELEGRAM BOT
 
 | Этап | Файл | Содержание | Статус |
 |---|---|---|---|
-| 1 | [`01_foundation.md`](01_foundation.md) | Timeweb + Docker, ядро `/v1`, провайдеры, телеметрия, безопасность-база, каркас админки, аудит и baseline | в работе |
+| 1 | [`01_foundation.md`](01_foundation.md) | Timeweb + Docker, ядро `/v1`, провайдеры, телеметрия, безопасность-база, каркас админки, аудит и baseline | код готов, ждёт деплоя |
 | 2 | [`02_knowledge.md`](02_knowledge.md) | Knowledge Base, метаданные и provenance, S3, гибридный retrieval, Sources + Retrieval Inspector | не начат |
 | 3 | [`03_evidence.md`](03_evidence.md) | Evidence Pack, citations с подсветкой, Verification Layer, конфликты, Playground + Answer Inspector + Prompts + Evals | не начат |
 | 4 | [`04_workflows_prod.md`](04_workflows_prod.md) | 4A: учебные workflows, Vision, документы, web, voice. 4B: Content Studio, benchmark, gates | не начат |
