@@ -1,0 +1,36 @@
+# Локальная разработка и запасной путь развёртывания на облачном сервере.
+#
+# На Timeweb App Platform используется только Dockerfile, а Postgres берётся
+# managed (с включённым расширением vector в панели) — сервис db тогда не нужен.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: medap
+      POSTGRES_PASSWORD: medap
+      POSTGRES_DB: medap
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medap"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      # Перебиваем DATABASE_URL из .env на адрес контейнера с БД.
+      DATABASE_URL: postgresql+asyncpg://medap:medap@db:5432/medap
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,13 +1,16 @@
-"""Генерация ответов через OpenAI GPT + главный промпт + проверка заземления."""
+"""Генерация ответов: главный промпт, проверка заземления и вызов модели.
+
+Модель под задачу выбирает TaskModelMap (`app/llm/task_map.py`), а сам вызов идёт
+через общий слой провайдеров — там же считается расход по §59 ТЗ.
+"""
 
 import logging
 import re
 from collections import Counter
-from functools import lru_cache
 from typing import Literal
 
-import openai
-
+from app.llm import provider as llm
+from app.llm.task_map import Task
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
@@ -144,7 +147,7 @@ async def detect_intent(question: str) -> str:
     """Классифицирует запрос (роутер использует обычную/дешёвую модель).
     При сбое — безопасный дефолт SINGLE."""
     try:
-        out = await _complete(INTENT_SYSTEM_PROMPT, question, 0.0, settings.OPENAI_MODEL)
+        out = await _complete(INTENT_SYSTEM_PROMPT, question, 0.0, Task.INTENT_ROUTER)
     except RuntimeError:
         return "SINGLE"
     up = out.strip().upper()
@@ -173,7 +176,7 @@ async def rewrite_query(question: str, turns: list[tuple[str, str]]) -> str:
             REWRITE_SYSTEM_PROMPT,
             f"Диалог:\n{hist}\n\nПоследний вопрос: {question}",
             0.0,
-            settings.OPENAI_MODEL,
+            Task.QUERY_REWRITE,
         )
     except RuntimeError:
         return question
@@ -406,40 +409,27 @@ def detect_subject(chunks: list[ChunkResult]) -> str | None:
     return Counter(c.subject for c in relevant).most_common(1)[0][0]
 
 
-@lru_cache(maxsize=1)
-def _get_client() -> openai.AsyncOpenAI:
-    return openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-
-
-def _model_for(source_type: str) -> str:
-    """Клинреки — более сильная модель (врачебные ответы, меньше галлюцинаций);
-    учебники и служебные задачи — обычная (можно дешёвую mini)."""
-    if source_type == SOURCE_CLINREK and settings.CLINREK_OPENAI_MODEL:
-        return settings.CLINREK_OPENAI_MODEL
-    return settings.OPENAI_MODEL
-
-
 async def _complete(
     system_prompt: str,
     user_prompt: str,
     temperature: float,
-    model: str | None = None,
+    task: Task = Task.GROUNDED_QA,
     history: list[dict] | None = None,
 ) -> str:
-    client = _get_client()
+    """Вызов модели через общий слой провайдеров.
+
+    Модель не задаётся здесь: её определяет TaskModelMap по атомарной задаче
+    (§56.5 ТЗ), а слой провайдера сохраняет расход по каждому вызову (§59).
+    """
     messages = [{"role": "system", "content": system_prompt}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_prompt})
     try:
-        response = await client.chat.completions.create(
-            model=model or settings.OPENAI_MODEL,
-            messages=messages,
-            temperature=temperature,
-        )
-    except openai.APIError as e:
-        raise RuntimeError("Произошла ошибка, попробуй позже.") from e
-    return response.choices[0].message.content
+        result = await llm.complete(task, messages, temperature=temperature)
+    except llm.LLMError as e:
+        raise RuntimeError(llm.PROVIDER_ERROR_MESSAGE) from e
+    return result.text
 
 
 async def _verify_grounded(context: str, answer: str) -> tuple[bool, str]:
@@ -449,7 +439,9 @@ async def _verify_grounded(context: str, answer: str) -> tuple[bool, str]:
     """
     user_prompt = VERIFY_USER_TEMPLATE.format(context=context, answer=answer)
     try:
-        verdict = await _complete(VERIFY_SYSTEM_PROMPT, user_prompt, temperature=0.0)
+        verdict = await _complete(
+            VERIFY_SYSTEM_PROMPT, user_prompt, temperature=0.0, task=Task.CLAIM_EVIDENCE_CHECK
+        )
     except RuntimeError:
         logger.warning("Проверочный проход недоступен, пропускаю верификацию")
         return True, ""
@@ -507,8 +499,9 @@ async def generate_answer(
         no_context_answer=NO_CONTEXT_ANSWER,
     )
 
-    model = _model_for(source_type)
-    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model, history)
+    answer = await _complete(
+        system_prompt, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+    )
 
     if not settings.VERIFY_GROUNDING:
         return answer
@@ -526,7 +519,9 @@ async def generate_answer(
         issues=issues,
         no_context_answer=NO_CONTEXT_ANSWER,
     )
-    return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, model, history)
+    return await _complete(
+        system_prompt, correction_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+    )
 
 
 async def _reasoning_answer(
@@ -542,9 +537,10 @@ async def _reasoning_answer(
     if context == NO_CONTEXT_PLACEHOLDER:
         return None
 
-    model = _model_for(source_type)
     user_prompt = REASONING_USER_TEMPLATE.format(context=context, question=question)
-    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, model, history)
+    answer = await _complete(
+        system_prompt, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+    )
 
     if not settings.VERIFY_GROUNDING:
         return answer
@@ -558,7 +554,9 @@ async def _reasoning_answer(
         "\n\nВАЖНО: убери из ответа ВСЕ утверждения, которых нет в контексте выше "
         "(медицина — выдумки недопустимы). Проблемные места:\n" + issues
     )
-    return await _complete(system_prompt, correction, GENERATION_TEMPERATURE, model, history)
+    return await _complete(
+        system_prompt, correction, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+    )
 
 
 async def generate_differential(
@@ -588,5 +586,5 @@ async def generate_fallback(question: str) -> str:
         FALLBACK_SYSTEM_PROMPT,
         FALLBACK_USER_TEMPLATE.format(question=question),
         GENERATION_TEMPERATURE,
-        settings.OPENAI_MODEL,
+        Task.GROUNDED_QA,
     )

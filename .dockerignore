@@ -1,0 +1,23 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Документация и планы в образ не нужны
+*.md
+plans/
+notebooks/
+docs/
+
+# Локальные данные и результаты прогонов (eval/dataset.jsonl нужен в образе —
+# по нему гоняются регрессии на сервере, поэтому папка не исключается)
+клинреки/
+errors.log
+*.log
+.pytest_cache/
+.ruff_cache/

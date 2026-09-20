@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% set active = 'sources' %}
+{% block content %}
+<h1>Knowledge Base</h1>
+<p class="sub">
+  Загрузка медицинских источников без правок кода. Лимит Telegram в 20 МБ здесь не действует:
+  учебник заливается целиком, до {{ max_upload_mb }} МБ за файл.
+</p>
+
+<section>
+  <h1 style="font-size:18px">Добавить источник</h1>
+  <form method="post" action="/admin/sources/upload" enctype="multipart/form-data" class="card">
+    <div class="fields">
+      <div>
+        <label for="file">Файл (PDF, DOCX, TXT)</label>
+        <input id="file" name="file" type="file" accept=".pdf,.docx,.txt" required>
+      </div>
+      <div>
+        <label for="source_type">Тип источника</label>
+        <select id="source_type" name="source_type">
+          <option value="{{ source_textbook }}">Учебник</option>
+          <option value="{{ source_clinrek }}">Клиническая рекомендация</option>
+        </select>
+      </div>
+      <div>
+        <label for="subject">Предмет или категория</label>
+        <input id="subject" name="subject" list="subject-options" required placeholder="pathphys">
+        <datalist id="subject-options">
+          {% for code, label in subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          <option value="взрослые">Клинреки: взрослые</option>
+          <option value="дети">Клинреки: дети</option>
+          <option value="взрослые_и_дети">Клинреки: взрослые и дети</option>
+        </datalist>
+      </div>
+      <div>
+        <label for="author">Автор (для учебника)</label>
+        <input id="author" name="author" placeholder="Новицкий">
+      </div>
+      <div>
+        <label for="title">Название</label>
+        <input id="title" name="title" placeholder="Патофизиология">
+      </div>
+    </div>
+    <button style="margin-top:12px">Загрузить и обработать</button>
+    <p class="note" style="margin-bottom:0">
+      Обработка идёт в фоне: извлечение текста (со сканов — через OCR), чанкинг, эмбеддинги,
+      индексация. Большой учебник занимает минуты; статус виден ниже.
+    </p>
+  </form>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Обработка</h1>
+  <table>
+    <tr><th>Файл</th><th>Название</th><th>Предмет</th><th>Статус</th><th>Стадия</th><th>Чанков</th><th>Ошибка</th></tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.filename }}</td>
+      <td>{{ job.title }}</td>
+      <td>{{ job.subject }}</td>
+      <td class="status-{{ job.status }}">{{ job.status }}</td>
+      <td>{{ job.stage }}</td>
+      <td>{{ job.chunks_count or '—' }}</td>
+      <td class="note">{{ job.error or '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="note">Загрузок пока не было</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">Страница обновляется по перезагрузке — автообновление и полный конвейер статусов приходят на этапе 2.</p>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Источники в базе</h1>
+  <table>
+    <tr><th>Название</th><th>Автор</th><th>Предмет</th><th>Тип</th><th>Чанков</th><th></th></tr>
+    {% for book in books %}
+    <tr>
+      <td>{{ book.title }}</td>
+      <td>{{ book.author }}</td>
+      <td>{{ book.subject }}</td>
+      <td>{{ book.source_type }}</td>
+      <td>{{ book.chunks_count }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/sources/{{ book.id }}/delete"
+              onsubmit="return confirm('Удалить «{{ book.title }}» и все его фрагменты?')">
+          <button class="ghost">Удалить</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="note">База пуста — загрузите первый учебник</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

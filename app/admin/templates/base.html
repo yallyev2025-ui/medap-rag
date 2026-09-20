@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}MedAP AI Admin{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --ink: #14171a; --muted: #5b6570;
+      --line: #e3e7eb; --accent: #1f6feb; --ok: #1a7f37; --warn: #9a6700; --err: #b42318;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1216; --panel: #161b22; --ink: #e6edf3; --muted: #9198a1;
+        --line: #272e36; --accent: #4493f8; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      padding: 14px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+    }
+    header .brand { font-weight: 700; letter-spacing: .2px; }
+    nav { display: flex; gap: 14px; flex-wrap: wrap; }
+    nav a { color: var(--muted); text-decoration: none; }
+    nav a.active, nav a:hover { color: var(--accent); }
+    nav span { color: var(--line); cursor: not-allowed; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    }
+    .card .label { color: var(--muted); font-size: 13px; }
+    .card .value { font-size: 24px; font-weight: 650; margin-top: 4px; }
+    .card .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    section { margin-top: 32px; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    form.inline { display: inline; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+    input, select, button {
+      font: inherit; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    }
+    button { background: var(--accent); color: #fff; border: none; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--err); border: 1px solid var(--line); }
+    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .status-done { color: var(--ok); }
+    .status-error { color: var(--err); }
+    .status-running, .status-pending { color: var(--warn); }
+    .note { color: var(--muted); font-size: 13px; }
+    @media (max-width: 640px) { main { padding: 16px; } .value { font-size: 20px; } }
+  </style>
+</head>
+<body>
+  {% if show_nav | default(true) %}
+  <header>
+    <span class="brand">MEDAP AI ADMIN</span>
+    <nav>
+      <a href="/admin" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
+      <a href="/admin/sources" class="{{ 'active' if active == 'sources' }}">Knowledge Base</a>
+      <a href="/admin/models" class="{{ 'active' if active == 'models' }}">Models</a>
+      <span title="Этап 2">Retrieval Inspector</span>
+      <span title="Этап 3">AI Playground</span>
+      <span title="Этап 3">Answer Inspector</span>
+      <span title="Этап 3">Prompts &amp; Policies</span>
+      <span title="Этап 3">Evals</span>
+      <span title="Этап 4">Content Studio</span>
+      <span title="Этап 4">System Health</span>
+    </nav>
+    <form class="inline" method="post" action="/admin/logout" style="margin-left:auto">
+      <button class="ghost">Выйти</button>
+    </form>
+  </header>
+  {% endif %}
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

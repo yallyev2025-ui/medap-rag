@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% set show_nav = false %}
+{% block title %}Вход — MedAP AI Admin{% endblock %}
+{% block content %}
+<h1>MedAP AI Admin</h1>
+<p class="sub">Закрытая панель управления AI-системой. Студенты сюда не заходят.</p>
+<form method="post" action="/admin/login" class="card" style="max-width:360px">
+  <label for="password">Пароль</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required style="width:100%">
+  {% if error %}<p class="status-error" style="margin:10px 0 0">{{ error }}</p>{% endif %}
+  <button style="margin-top:12px">Войти</button>
+</form>
+{% endblock %}

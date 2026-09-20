@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set active = 'models' %}
+{% block content %}
+<h1>Models</h1>
+<p class="sub">
+  За каждой атомарной задачей закреплён провайдер (TaskModelMap, §56.5 ТЗ). Модель не выбирается
+  заново на каждый запрос. Маппинг меняется переменной TASK_MODEL_MAP_OVERRIDES, код не трогается;
+  production-смена проходит benchmark на этапе 4.
+</p>
+
+<section>
+  <h1 style="font-size:18px">TaskModelMap</h1>
+  <table>
+    <tr><th>Задача</th><th>Провайдер</th></tr>
+    {% for task, provider in task_map.items() %}
+    <tr><td>{{ task }}</td><td>{{ provider }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Профили моделей и цены</h1>
+  <p class="sub">Цены версионируются ({{ registry.values()|list|first.pricing_version }}), в бизнес-логике не хранятся.</p>
+  <table>
+    <tr>
+      <th>Провайдер</th><th>Модель</th><th>Статус</th><th>Контекст</th>
+      <th>Вход $/1M</th><th>Кэш $/1M</th><th>Выход $/1M</th><th>Vision</th>
+    </tr>
+    {% for key, profile in registry.items() %}
+    <tr>
+      <td>{{ key }}</td>
+      <td>{{ profile.model_id }}</td>
+      <td class="{{ 'status-done' if profile.enabled else 'status-error' }}">{{ profile.status }}</td>
+      <td>{{ '{:,}'.format(profile.context_window).replace(',', ' ') }}</td>
+      <td>{{ profile.input_price_usd }}</td>
+      <td>{{ profile.cached_input_price_usd }}</td>
+      <td>{{ profile.output_price_usd }}</td>
+      <td>{{ 'да' if profile.supports_vision else 'нет' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="margin-top:12px">
+    Статус no_api_key означает, что ключ провайдера не задан в переменных окружения — задачи этого
+    провайдера временно уходят на доступный, и каждый такой вызов помечается полем fallbackFrom.
+  </p>
+</section>
+{% endblock %}

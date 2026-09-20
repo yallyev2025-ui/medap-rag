@@ -18,6 +18,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.admin.routes import router as admin_router
+from app.api.v1 import router as v1_router
+
 from config import settings
 from constants import SOURCE_TEXTBOOK, clinrek_label, subject_label
 from db.models import Book
@@ -27,7 +30,14 @@ from rag.retriever import ChunkResult, retrieve
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="medap-rag search API")
+app = FastAPI(title="MedAP Student AI")
+
+# /v1 — стабильный контракт для образовательного сайта MedAP (§27 ТЗ),
+# /admin — закрытая панель управления (дополнение к ТЗ, раздел 2).
+# Оба подключаются к ЭТОМУ приложению, а не поднимают свой процесс: эмбеддер и
+# реранкер занимают ~4.5 ГБ и должны жить в памяти в единственном экземпляре.
+app.include_router(v1_router)
+app.include_router(admin_router)
 
 
 def _source_str(c: ChunkResult) -> str:

@@ -15,9 +15,10 @@ from aiogram.types import (
     Message,
 )
 
+from app.observability.context import request_context
+from app.workflows.ask import ask
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
-from config import settings
 from constants import SOURCE_CLINREK
 from db.crud import (
     get_or_create_user,
@@ -28,18 +29,7 @@ from db.crud import (
 )
 from db.models import User
 from db.session import async_session
-from rag.generator import (
-    build_history_messages,
-    detect_intent,
-    detect_subject,
-    generate_answer,
-    generate_differential,
-    generate_fallback,
-    generate_multi,
-    relevant_chunks,
-    rewrite_query,
-)
-from rag.retriever import retrieve
+from rag.generator import generate_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -132,56 +122,35 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
                 session, db_user.id, db_user.chat_started_at, HISTORY_TURNS
             )
 
-        # Уточняющий вопрос («а дозы?») превращаем в самостоятельный запрос для поиска.
-        search_query = await rewrite_query(question, turns)
-        intent = await detect_intent(search_query)
+        await _set_status(status, "📚 Ищу в материалах и готовлю ответ…")
+        # Весь конвейер (роутинг интента, переписывание запроса, поиск, генерация)
+        # живёт в общем workflow — том же, что обслуживает образовательный сайт
+        # через /v1. Здесь остаётся только телеграмный UI.
+        with request_context(user_id=f"telegram:{db_user.id}", channel="telegram"):
+            result = await ask(
+                question,
+                source_type=source_type,
+                subject=subject,
+                turns=turns,
+                symptom_mode=db_user.clinrek_symptom_mode,
+            )
 
         # Приветствие / small talk — дружелюбный ответ, лимит не тратим.
-        if intent == "CHITCHAT":
-            await _set_status(status, "💬 Отвечаю…")
-            answer = await generate_fallback(question)
+        if result.intent == "CHITCHAT":
             await _clear_status(status)
-            await _send_answer(message, answer)
+            await _send_answer(message, result.answer)
             usage_ctx["count"] = False
             return
 
-        # Явный режим «Разбор по симптомам» (кнопкой) — всегда дифдиагноз.
-        if source_type == SOURCE_CLINREK and db_user.clinrek_symptom_mode:
-            intent = "DIFFERENTIAL"
-
-        reasoning = source_type == SOURCE_CLINREK and intent in ("DIFFERENTIAL", "MULTI")
-
-        await _set_status(status, "📚 Ищу в материалах…")
-        chunks = await retrieve(
-            search_query,
-            source_type=source_type,
-            subject=subject,
-            focus_document=(source_type == SOURCE_CLINREK and not reasoning),
-            top_k=settings.DIFFERENTIAL_TOP_K if reasoning else settings.RERANK_TOP_K,
-        )
-
         # В материалах ничего релевантного — спрашиваем согласие на общие знания.
-        if not relevant_chunks(chunks):
+        if result.answer is None:
             await _clear_status(status)
             _pending_general[db_user.id] = question
             await message.answer(NOT_FOUND_ASK, reply_markup=CONSENT_KEYBOARD)
             usage_ctx["count"] = False
             return
 
-        history = build_history_messages(turns)
-
-        if reasoning:
-            await _set_status(status, "🩺 Провожу клинический разбор…")
-        else:
-            await _set_status(status, "🧠 Готовлю ответ…")
-
-        if intent == "DIFFERENTIAL":
-            answer = await generate_differential(question, chunks, source_type, history)
-        elif intent == "MULTI":
-            answer = await generate_multi(question, chunks, source_type, history)
-        else:
-            answer = await generate_answer(question, chunks, source_type, history)
-
+        answer = result.answer
         response_time_ms = int((time.monotonic() - start_time) * 1000)
     except Exception:
         logger.exception("Ошибка при обработке вопроса")
@@ -192,9 +161,10 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
     await _clear_status(status)
     await _send_answer(message, answer)
 
-    subject_used = detect_subject(chunks)
     async with async_session() as session:
-        await log_query(session, db_user.id, question, answer, subject_used, response_time_ms)
+        await log_query(
+            session, db_user.id, question, answer, result.subject_used, response_time_ms
+        )
         await session.commit()
 
 
@@ -213,7 +183,8 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
 
     status = await callback.message.answer("🧠 Готовлю ответ из общих знаний…")
     try:
-        answer = await generate_fallback(question)
+        with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram"):
+            answer = await generate_fallback(question)
     except Exception:
         logger.exception("Ошибка при ответе из общих знаний")
         await _set_status(status, ERROR_TEXT)

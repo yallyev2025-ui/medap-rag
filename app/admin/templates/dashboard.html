@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% set active = 'dashboard' %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="sub">Нагрузка и расход на AI. Источник данных — таблица ai_usage_events, пишется на каждый вызов модели.</p>
+
+<div class="grid">
+  <div class="card"><div class="label">Запросов за сутки</div><div class="value">{{ stats.requests_today }}</div></div>
+  <div class="card"><div class="label">Активных пользователей</div><div class="value">{{ stats.active_users_today }}</div></div>
+  <div class="card"><div class="label">Ошибок за сутки</div><div class="value">{{ stats.errors_today }}</div></div>
+  <div class="card"><div class="label">Расход за сутки</div><div class="value">{{ '%.2f'|format(stats.cost_today_rub) }} ₽</div></div>
+  <div class="card"><div class="label">Расход за месяц</div><div class="value">{{ '%.2f'|format(stats.cost_month_rub) }} ₽</div></div>
+  <div class="card">
+    <div class="label">Прогноз на месяц</div>
+    <div class="value">{{ '%.0f'|format(stats.projected_month_rub) }} ₽</div>
+    <div class="hint">линейная экстраполяция по прошедшим дням</div>
+  </div>
+  <div class="card">
+    <div class="label">Стоимость на активного пользователя</div>
+    <div class="value">{{ '%.2f'|format(stats.cost_per_active_user_rub) }} ₽</div>
+    <div class="hint">ориентир ТЗ — 50–100 ₽/мес</div>
+  </div>
+  <div class="card">
+    <div class="label">Доля фолбэков провайдера</div>
+    <div class="value">{{ '%.1f'|format(stats.fallback_share * 100) }}%</div>
+    <div class="hint">задача ушла не на ту модель, что в TaskModelMap</div>
+  </div>
+</div>
+
+<section>
+  <h1 style="font-size:18px">Стоимость одного вызова</h1>
+  <p class="sub">Средний запрос ничего не говорит о тяжёлых пользователях — ТЗ требует смотреть перцентили.</p>
+  <div class="grid">
+    <div class="card"><div class="label">P50</div><div class="value">{{ '%.3f'|format(stats.p50_rub) }} ₽</div></div>
+    <div class="card"><div class="label">P90</div><div class="value">{{ '%.3f'|format(stats.p90_rub) }} ₽</div></div>
+    <div class="card"><div class="label">P99</div><div class="value">{{ '%.3f'|format(stats.p99_rub) }} ₽</div></div>
+  </div>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Расход по провайдерам за месяц</h1>
+  <table>
+    <tr><th>Провайдер</th><th>Стоимость</th></tr>
+    {% for provider, cost in stats.cost_by_provider_rub.items() %}
+    <tr><td>{{ provider }}</td><td>{{ '%.2f'|format(cost) }} ₽</td></tr>
+    {% else %}
+    <tr><td colspan="2" class="note">Вызовов пока не было</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Самые дорогие workflow</h1>
+  <table>
+    <tr><th>Workflow</th><th>Вызовов</th><th>Стоимость</th></tr>
+    {% for row in stats.top_workflows %}
+    <tr><td>{{ row.workflow }}</td><td>{{ row.calls }}</td><td>{{ '%.2f'|format(row.costRub) }} ₽</td></tr>
+    {% else %}
+    <tr><td colspan="3" class="note">Данных пока нет</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Самые дорогие пользователи</h1>
+  <p class="sub">Аномальный расход виден здесь раньше, чем в счёте провайдера.</p>
+  <table>
+    <tr><th>User</th><th>Вызовов</th><th>Стоимость</th></tr>
+    {% for row in stats.top_users %}
+    <tr><td>{{ row.userId }}</td><td>{{ row.calls }}</td><td>{{ '%.2f'|format(row.costRub) }} ₽</td></tr>
+    {% else %}
+    <tr><td colspan="3" class="note">Данных пока нет</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<p class="note" style="margin-top:28px">
+  Vision, Voice и оценка ответов появятся на этапе 4 — их расход будет считаться теми же
+  записями (поля imageUnits и audioSeconds уже есть в таблице).
+</p>
+{% endblock %}
