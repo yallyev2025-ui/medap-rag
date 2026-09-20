@@ -1,3 +1,5 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,6 +44,14 @@ class Settings(BaseSettings):
     USD_RUB_RATE: float = 84.1975
 
     DATABASE_URL: str = ""
+    # SSL для подключения к БД: "require" — шифровать соединение, но не проверять
+    # сертификат сервера (безопасно по умолчанию для managed-БД без своего CA-бандла
+    # в образе); "verify-full" — проверять сертификат по системному хранилищу
+    # доверенных центров (включайте, если провайдер использует публично доверенный
+    # сертификат); "disable" — без SSL. Драйвер asyncpg не понимает параметр
+    # "sslmode" в самом DATABASE_URL (это особенность psycopg2/libpq, не asyncpg),
+    # поэтому SSL настраивается этой отдельной переменной, а не в URL.
+    DATABASE_SSL_MODE: str = "require"
 
     ADMIN_IDS_RAW: str = ""
 
@@ -117,7 +127,24 @@ class Settings(BaseSettings):
         # postgres(ql)://, а нам нужен asyncpg-драйвер для SQLAlchemy.
         for prefix in ("postgresql://", "postgres://"):
             if v.startswith(prefix):
-                return "postgresql+asyncpg://" + v[len(prefix):]
+                v = "postgresql+asyncpg://" + v[len(prefix):]
+                break
+
+        # Панели управления (в т.ч. Timeweb) часто дают строку подключения с
+        # "?sslmode=require"/"verify-full" — это параметр libpq/psycopg2, а
+        # asyncpg передаёт query-параметры URL как есть в свой connect(), у
+        # которого нет аргумента sslmode → TypeError и падение при старте.
+        # SSL для asyncpg настраивается отдельно (DATABASE_SSL_MODE, см. выше и
+        # db/session.py), поэтому здесь просто убираем несовместимые параметры,
+        # если они пришли в URL, — а не заставляем вручную чистить строку в панели.
+        parts = urlsplit(v)
+        if parts.query:
+            filtered = [
+                (key, value)
+                for key, value in parse_qsl(parts.query, keep_blank_values=True)
+                if key not in ("sslmode", "channel_binding")
+            ]
+            v = urlunsplit(parts._replace(query=urlencode(filtered)))
         return v
 
     @property

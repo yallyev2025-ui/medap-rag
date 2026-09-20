@@ -3,14 +3,15 @@
 import asyncio
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
-from config import settings
 from db.models import Base
+# Общий engine с уже настроенным SSL для asyncpg (см. db/session.py) — свой
+# отдельный create_async_engine() здесь не заводим, чтобы не дублировать и не
+# рассинхронизировать настройку SSL с остальным приложением.
+from db.session import engine
 
 
 async def init_db() -> None:
-    engine = create_async_engine(settings.DATABASE_URL)
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         await conn.run_sync(Base.metadata.create_all)
