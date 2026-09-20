@@ -1,0 +1,175 @@
+# Этап 4 — Workflows, мультимодальность и выход в production
+
+Самый объёмный этап, внутри два блока. **4B начинается после зелёного чек-листа 4A.**
+
+Предусловие: закрыт чек-лист этапа 3 (есть Evidence Pack, citations, Verification Layer).
+
+---
+
+# 4A. Учебные workflows и мультимодальность
+
+Покрывает §16–§24, §53, §18, §19, §20 ТЗ. Все workflow доступны и образовательному сайту, и Telegram —
+это один и тот же код за `/v1`.
+
+## 4A.1. Tutor и быстрый режим (§24, §53.1)
+
+- `EXPLAIN/LEARN`: причинно-следственно, с учётом уровня студента, начиная со структуры, без
+  «AI-воды», примеры только когда помогают, переход к retrieval при необходимости.
+- `CLASS_QUICK`: режим «на паре» — минимальное время, короткий выходной бюджет. Скорость не отменяет
+  Evidence/Verification для медицински значимых утверждений.
+
+## 4A.2. Оценка ответов студента (§21, §22)
+
+- `RECALL_EVALUATION`, `FREE_RECALL_EVALUATION`, `ORAL_EVALUATION`.
+- Сравнение не пословно с эталоном, а с обязательными Knowledge Units, связями и evidence.
+- Типы ошибок: omission, factual error, causal/mechanism error, terminology error, contradiction,
+  partially correct, irrelevant content.
+- Контракт `OralEvaluation` (§21): `coveredKnowledgeUnits`, `missingKnowledgeUnits`,
+  `incorrectKnowledgeUnits`, `partiallyCorrectKnowledgeUnits`, `causalErrors`, `terminologyErrors`,
+  `unsupportedStatements`, `repairTargets`, `evidenceReferences`.
+- **AI не возвращает authoritative mastery score** — Knowledge State обновляет продуктовый backend
+  по детерминированным правилам (§21, §25).
+
+## 4A.3. Диагностика ошибок и repair (§23)
+
+```
+Student Answer → Evaluation → Error Extraction → Error Classification →
+Root KnowledgeUnit → Targeted Repair → Retry Task
+```
+
+Repair короткий и адресный: при локальной ошибке не отвечать повторной длинной лекцией.
+Повторяющиеся ошибки передаются продуктовому backend'у.
+
+## 4A.4. Vision и Test Solver (§16, §17, §53.2)
+
+```
+Photo/Screenshot → VISION_EXTRACT (GPT-5.4 Mini) → question + options + diagram →
+confidence check → trusted retrieval → solving → evidence verification → answer
+```
+
+- Vision интерпретирует вход, но **не является источником медицинской истины**.
+- Для single/multiple-choice определить формат и полный набор вариантов; при низкой уверенности
+  распознавания не угадывать текст, а просить переснять.
+- Результат: выбранный ответ, короткое объяснение, почему дистракторы неверны (если evidence
+  позволяет), citations, предупреждение при недостаточном evidence или плохом качестве изображения.
+- V1 не позиционируется как диагностическая система чтения рентгена/КТ/МРТ.
+
+## 4A.5. Документы пользователя (§18)
+
+```
+upload → malware/type/size validation → parse → structure extraction → chunk →
+embed → private collection/namespace → retrieval
+```
+
+Изоляция: `user_id + document_id + optional exam_id`. Документ одного пользователя никогда не
+попадает в retrieval другого и не становится MedAP Verified автоматически. Удаление документа
+удаляет или деактивирует связанные чанки и эмбеддинги.
+
+## 4A.6. Web Research (§19, §34)
+
+Отдельный workflow: включить поиск, дать конкретный URL, изучить страницу. Web-контент всегда
+получает отдельный provenance и не становится verified автоматически; предпочтение authoritative
+источникам. SSRF-защита при ingestion URL. Текст страницы — данные, а не инструкции: «ignore
+previous instructions» внутри контента не меняет system policy.
+
+## 4A.7. Voice / Oral V1 (§20)
+
+```
+Recorded Voice → STT → transcript → reference Knowledge Units / Evidence →
+Oral Evaluator → Verification → structured evaluation
+```
+
+Realtime-диалог в V1 не требуется. Transcript и оценка хранятся по политике приватности и retention.
+
+## 4A.8. API
+
+`/v1/evaluate/recall`, `/v1/evaluate/free-answer`, `/v1/evaluate/oral`, `/v1/errors/diagnose`,
+`/v1/repair`, `/v1/vision/analyze`, `/v1/documents`, `/v1/web/research` — типизированные и
+версионированные контракты (§27, §29).
+
+## Чек-лист 4A
+
+- [ ] Ответ студента → structured evaluation с покрытыми/пропущенными/неверными пунктами.
+- [ ] Невалидный structured output не может обновить состояние на стороне продукта.
+- [ ] `CLASS_QUICK` заметно быстрее и короче, проверки те же.
+- [ ] Фото теста → правильный вариант + объяснение + citations; размытое фото → просьба переснять.
+- [ ] Пользователь A не получает ни одного чанка документа пользователя B (автотест).
+- [ ] Удаление документа немедленно убирает его из выдачи.
+- [ ] Веб-ответ отделён от ответа по учебникам; запрос к приватной подсети блокируется.
+- [ ] Страница с «ignore previous instructions» не меняет поведение системы.
+- [ ] Голосовое → транскрипт → оценка с ссылками на evidence; сбой STT → просьба перезаписать.
+- [ ] Vision, Voice и recall видны в телеметрии стоимости отдельными строками.
+
+---
+
+# 4B. Content Studio, benchmark и production gates
+
+Покрывает §31, §32, §38, §40, §49, §50, §61, §62 ТЗ + разделы 11, 12, 14 дополнения.
+
+## 4B.1. Content Studio (§31, §32)
+
+```
+Verified Note / Source → Knowledge Extraction → Draft Cards / Tests / Cases →
+Evidence Verification → Admin Review/Edit → Approve → Publish
+```
+
+- Публикация требует подтверждения человеком; AI только помогает генерировать.
+- Прогрессивная сложность кейсов (§32): recognize → explain → connect findings → reason about
+  additional data → integrate multiple topics. Каждый кейс трассируется к Knowledge Units и evidence.
+- Динамическая персональная генерация для адресного recall/repair разрешена, но глобальным
+  verified-контентом не становится.
+
+## 4B.2. Benchmark и смена моделей (§38, §60, §62)
+
+- Прогон DeepSeek V4.1 Flash и GPT-5.4 Mini по **каждой атомарной задаче** на одинаковом датасете,
+  одинаковом Evidence Pack, одинаковой source policy, с versioned prompts.
+- Метрики: factual correctness, evidence support rate, citation correctness, unsupported claim rate,
+  согласие оценок с человеческой рубрикой, зависимость от retrieval, latency, throughput, токены,
+  стоимость на workflow, прогноз стоимости на активного пользователя в месяц.
+- Фиксация production-маппинга: побеждает самая дешёвая конфигурация, проходящая quality/safety
+  gates на конкретном workflow. Смена — через конфигурацию, canary и rollback; код сайта не меняется.
+- Три рычага экономии перед запуском (§64.4): можно ли перенести `VISION_EXTRACT` на DeepSeek;
+  можно ли перенести часть Recall/Error evaluation на DeepSeek без потери согласия с рубрикой;
+  сокращение Evidence Pack и выходных бюджетов плюс кэширование.
+
+## 4B.3. Regression suite (§40)
+
+Каждая найденная серьёзная ошибка превращается в regression-тест. Категории: hallucination, wrong
+citation, retrieval miss, wrong source priority, conflict suppression, numeric error, oral grading
+error, private data leak, vision extraction error, prompt injection failure.
+Нельзя выпускать новую версию модели/промпта/retrieval, если она ломает critical gates.
+
+## 4B.4. Production gates (§49) и Definition of Done (§50)
+
+Пороги устанавливаются после baseline, а не выдумываются заранее. Обязательные gates: критичные
+медицинские фактические ошибки; доля неподтверждённых утверждений; корректность цитат; успешность
+retrieval; обработка конфликтов; числовая безопасность; изоляция приватных данных; устойчивость к
+prompt injection; согласие оценщика с рубрикой; стабильность задержки и пропускной способности.
+Критичная регрессия по безопасности или изоляции данных — блокер релиза.
+
+Definition of Done v1 (§50): один API обслуживает сайт и Telegram; medical QA идёт через Evidence
+pipeline; citations трассируются до реальных источников; неподтверждённые утверждения
+repair/abstain; Recall/Free/Oral возвращают typed outputs; Vision решает учебные фото через
+Evidence; приватные документы изолированы; Web Research отделён provenance; Content Studio требует
+human approval; benchmark выполнен; regression/eval suite работает автоматически; мониторинг
+позволяет найти причину ошибки; Knowledge State остаётся вне AI-сервиса; замена модели не ломает
+Learning/Exam Mode.
+
+## 4B.5. System Health и аналитика (раздел 14 дополнения)
+
+Админка показывает: состояние БД, моделей, провайдеров, очередей, долю fallback; AI requests today;
+active users; errors; verification failures; расход DeepSeek и OpenAI; total AI cost; cost/user;
+P50/P90/P99; Vision/Voice/Recall usage; самые дорогие workflows; аномальные пользователи; прогноз
+месячного расхода. Budget alerts настраиваются, но подтверждённый медицинский ответ не обрывается
+на середине (§59).
+
+## Чек-лист 4B
+
+- [ ] Опубликовать материал Content Studio без подтверждения человеком невозможно.
+- [ ] Каждый сгенерированный кейс трассируется к Knowledge Units и evidence.
+- [ ] `evals/` запускается одной командой, отчёт по всем категориям с ценой и задержкой.
+- [ ] Production-маппинг моделей зафиксирован по результатам прогона, а не «на глаз»; откат проверен.
+- [ ] Каждая исправленная ошибка имеет regression-тест, и он проходит.
+- [ ] Critical gates определены числами и проверяются автоматически.
+- [ ] System Health показывает реальное состояние подсистем.
+- [ ] Все пункты Definition of Done v1 (§50) отмечены и проверены вручную.
