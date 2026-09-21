@@ -1,6 +1,6 @@
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -146,6 +146,23 @@ class Settings(BaseSettings):
             ]
             v = urlunsplit(parts._replace(query=urlencode(filtered)))
         return v
+
+    @model_validator(mode="after")
+    def _strip_all_string_settings(self) -> "Settings":
+        # Пароли, токены и ключи задаются через панели хостинга (Timeweb и
+        # похожие), где при копипасте с телефона/планшета легко зацепить лишний
+        # пробел или перевод строки по краям значения — глазами его не видно, а
+        # сравнение "введённый пароль == ADMIN_WEB_PASSWORD" из-за него не
+        # совпадёт ни при каком реально верном пароле (та же ловушка, что была
+        # с DATABASE_URL). Подчищаем ВСЕ строковые настройки одним местом, чтобы
+        # больше не гадать, в каком конкретно поле затесался пробел.
+        for name in self.__class__.model_fields:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped != value:
+                    setattr(self, name, stripped)
+        return self
 
     @property
     def ADMIN_IDS(self) -> list[int]:
