@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# Ссылки на фоновые задачи обработки источников. Без этого asyncio может
+# собрать fire-and-forget задачу сборщиком мусора до её завершения — задача
+# просто исчезает без единой строки в логе (это документированная ловушка
+# asyncio.create_task, а не гипотетическая: "Task was destroyed but it is
+# pending!"). Загрузка учебника занимает минуты — самое подходящее окно для
+# такого молчаливого обрыва, особенно при нагрузке на память от ML-моделей.
+_ingest_tasks: set[asyncio.Task] = set()
+
 # Расширения, которые умеет разбирать rag/processor.py.
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
@@ -187,7 +195,14 @@ async def upload_source(
 
     await audit("source_upload", target=effective_title, details=f"{size} bytes, subject={subject}")
     # Обработка учебника занимает минуты — отвечаем сразу, прогресс виден в списке.
-    asyncio.create_task(_run_ingest(job_id, tmp_path, effective_title, author.strip(), subject, source_type))
+    # Ссылку на задачу сохраняем в _ingest_tasks (см. комментарий там) и убираем
+    # из множества по завершении — иначе накопленные ссылки на завершённые
+    # задачи держались бы в памяти вечно.
+    task = asyncio.create_task(
+        _run_ingest(job_id, tmp_path, effective_title, author.strip(), subject, source_type)
+    )
+    _ingest_tasks.add(task)
+    task.add_done_callback(_ingest_tasks.discard)
     return RedirectResponse(url="/admin/sources", status_code=303)
 
 
@@ -207,8 +222,11 @@ async def _run_ingest(
     from scripts.load_books import load_book
 
     with request_context(channel="admin", workflow="INGEST"):
-        await _set_job(job_id, status="running", stage="parsing")
+        # Весь путь целиком в try/except: если упадёт даже самая первая отметка
+        # статуса (например, БД моргнула на секунду), задача не должна тихо
+        # исчезнуть, оставив запись висеть в "pending" без объяснений.
         try:
+            await _set_job(job_id, status="running", stage="parsing")
             chunks = await load_book(file_path, subject, author, title, source_type=source_type)
             await _set_job(
                 job_id,
