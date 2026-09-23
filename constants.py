@@ -41,3 +41,63 @@ def clinrek_label(subject: str | None) -> str:
         if value == subject:
             return label
     return subject or "Все категории"
+
+
+# --- Иерархия источников и provenance (§9 ТЗ, этап 2) ---------------------------
+# По убыванию приоритета. Кафедральный материал может иметь приоритет в
+# exam-контексте, но не переписывает глобальную медицинскую истину MedAP —
+# приоритет применяется при отборе evidence (этап 3), а не подменяет фильтры
+# источника здесь. Порядок в списке = порядок в выпадающем списке админки.
+AUTHORITY_LEVELS: list[tuple[str, str]] = [
+    ("department_exam", "Кафедральный / экзаменационный материал"),
+    ("medap_verified", "MedAP Verified Content"),
+    ("primary_textbook", "Основной учебник предмета"),
+    ("secondary_textbook", "Дополнительный учебник"),
+    ("clinical_guideline", "Официальная клиническая рекомендация"),
+    ("user_material", "Пользовательский материал"),
+    ("web", "Веб-источник"),
+]
+AUTHORITY_LEVEL_CODES = [code for code, _ in AUTHORITY_LEVELS]
+DEFAULT_AUTHORITY_LEVEL = "primary_textbook"
+
+# Статус проверки содержимого источника человеком.
+VERIFICATION_STATUSES: list[tuple[str, str]] = [
+    ("unverified", "Не проверено"),
+    ("verified", "Проверено"),
+    ("disputed", "Оспаривается"),
+]
+DEFAULT_VERIFICATION_STATUS = "unverified"
+
+# Жизненный цикл источника в Knowledge Base. "disabled" и "archived" исключают
+# источник из retrieval, не удаляя чанки/эмбеддинги — можно вернуть без
+# повторной загрузки и пересчёта.
+SOURCE_STATUSES: list[tuple[str, str]] = [
+    ("draft", "Черновик"),
+    ("production", "В работе (используется поиском)"),
+    ("disabled", "Отключён"),
+    ("archived", "В архиве"),
+]
+DEFAULT_SOURCE_STATUS = "production"
+# Статусы, при которых источник участвует в поиске.
+ACTIVE_SOURCE_STATUSES = ("production",)
+
+
+def authority_label(code: str) -> str:
+    for value, label in AUTHORITY_LEVELS:
+        if value == code:
+            return label
+    return code
+
+
+def verification_label(code: str) -> str:
+    for value, label in VERIFICATION_STATUSES:
+        if value == code:
+            return label
+    return code
+
+
+def source_status_label(code: str) -> str:
+    for value, label in SOURCE_STATUSES:
+        if value == code:
+            return label
+    return code
