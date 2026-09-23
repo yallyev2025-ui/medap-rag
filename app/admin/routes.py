@@ -33,7 +33,7 @@ from app.security.auth import (
 )
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK, SUBJECT_LABELS
-from db.crud import delete_book, list_books
+from db.crud import delete_book, list_books, update_book
 from db.models import IngestJob
 from db.session import async_session
 
@@ -268,5 +268,33 @@ async def delete_source(request: Request, book_id: int):
         return _login_redirect()
     async with async_session() as session:
         title = await delete_book(session, book_id)
+        # Без commit() удаление откатывается при закрытии сессии — книга
+        # и её чанки оставались бы в БД, хотя из списка пропадали до перезагрузки
+        # страницы (пока лежат в identity map этой же сессии).
+        await session.commit()
     await audit("source_delete", target=title or str(book_id))
+    return RedirectResponse(url="/admin/sources", status_code=303)
+
+
+@router.post("/sources/{book_id}/edit")
+async def edit_source(
+    request: Request,
+    book_id: int,
+    title: str = Form(""),
+    author: str = Form(""),
+    subject: str = Form(""),
+):
+    """Правка названия/автора/предмета без переиндексации: чанки и эмбеддинги
+    не трогаем, только метаданные (и их денормализованные копии в BookChunk,
+    см. db.crud.update_book)."""
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        book = await update_book(session, book_id, title=title, author=author, subject=subject)
+        if book is None:
+            await session.commit()
+            return RedirectResponse(url="/admin/sources?error=not_found", status_code=303)
+        new_title = book.title
+        await session.commit()
+    await audit("source_edit", target=new_title, details=f"book_id={book_id}")
     return RedirectResponse(url="/admin/sources", status_code=303)

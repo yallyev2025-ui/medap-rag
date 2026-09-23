@@ -3,7 +3,7 @@
 from datetime import date, datetime, timezone
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -160,6 +160,42 @@ async def delete_book(session: AsyncSession, book_id: int) -> str | None:
     await session.execute(delete(BookChunk).where(BookChunk.book_id == book_id))
     await session.delete(book)
     return title
+
+
+async def update_book(
+    session: AsyncSession,
+    book_id: int,
+    *,
+    title: str | None = None,
+    author: str | None = None,
+    subject: str | None = None,
+) -> Book | None:
+    """Переименовывает источник (название/автор/предмет). Возвращает обновлённую
+    книгу или None, если такой книги нет.
+
+    BookChunk хранит собственные копии title/author/subject (денормализация для
+    фильтрации поиска одним WHERE без JOIN — см. db/models.py), поэтому при
+    переименовании синхронизируем их той же операцией: иначе поиск и citations
+    ещё долго показывали бы старое название, хотя в списке книг уже новое.
+    """
+    book = await session.get(Book, book_id)
+    if book is None:
+        return None
+
+    fields: dict[str, str] = {}
+    if title is not None and title.strip():
+        fields["title"] = title.strip()
+    if author is not None:
+        fields["author"] = author.strip()
+    if subject is not None and subject.strip():
+        fields["subject"] = subject.strip()
+    if not fields:
+        return book
+
+    for key, value in fields.items():
+        setattr(book, key, value)
+    await session.execute(update(BookChunk).where(BookChunk.book_id == book_id).values(**fields))
+    return book
 
 
 async def get_active_user_ids(session: AsyncSession) -> list[int]:

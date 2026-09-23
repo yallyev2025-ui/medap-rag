@@ -72,16 +72,21 @@
 
 <section>
   <h1 style="font-size:18px">Источники в базе</h1>
+  <p class="sub">
+    Название, автор и предмет можно править прямо здесь — переиндексация не требуется,
+    правка обновит и сам источник, и подписи у уже загруженных фрагментов.
+  </p>
   <table>
     <tr><th>Название</th><th>Автор</th><th>Предмет</th><th>Тип</th><th>Чанков</th><th></th></tr>
     {% for book in books %}
     <tr>
-      <td>{{ book.title }}</td>
-      <td>{{ book.author }}</td>
-      <td>{{ book.subject }}</td>
+      <td><input name="title" value="{{ book.title }}" form="edit-{{ book.id }}" style="width:100%"></td>
+      <td><input name="author" value="{{ book.author }}" form="edit-{{ book.id }}" style="width:100%"></td>
+      <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" style="width:100%"></td>
       <td>{{ book.source_type }}</td>
       <td>{{ book.chunks_count }}</td>
-      <td>
+      <td style="white-space:nowrap">
+        <button form="edit-{{ book.id }}">Сохранить</button>
         <form class="inline" method="post" action="/admin/sources/{{ book.id }}/delete"
               onsubmit="return confirm('Удалить «{{ book.title }}» и все его фрагменты?')">
           <button class="ghost">Удалить</button>
@@ -92,5 +97,11 @@
     <tr><td colspan="6" class="note">База пуста — загрузите первый учебник</td></tr>
     {% endfor %}
   </table>
+  {# Формы редактирования — отдельно от table: <form> не может быть прямым
+     потомком <table>/<tr> по спецификации HTML, поля связаны с ней атрибутом
+     form="edit-N" прямо из ячеек таблицы выше. #}
+  {% for book in books %}
+  <form id="edit-{{ book.id }}" method="post" action="/admin/sources/{{ book.id }}/edit" style="display:none"></form>
+  {% endfor %}
 </section>
 {% endblock %}
