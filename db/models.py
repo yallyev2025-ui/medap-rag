@@ -7,6 +7,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Computed,
     Date,
     DateTime,
     Float,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config import settings
@@ -119,6 +121,14 @@ class BookChunk(Base):
     # места в учебнике на этапе 3 (Source Viewer).
     char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # BM25 (§7 ТЗ): GENERATED ALWAYS AS ... STORED-колонка. Computed() здесь
+    # даёт то же выражение, что и идемпотентный ALTER в db/init_db.py (нужный
+    # для уже существующих в проде таблиц) — на чистой БД create_all создаёт
+    # колонку сразу генерируемой, а не обычной, которую потом никто не заполнит.
+    content_tsv: Mapped[str | None] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('russian', content)", persisted=True), nullable=True
+    )
 
 
 class User(Base):

@@ -32,10 +32,20 @@ from app.security.auth import (
     issue_admin_session,
 )
 from config import settings
-from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK, SUBJECT_LABELS
+from constants import (
+    AUTHORITY_LEVELS,
+    DEFAULT_AUTHORITY_LEVEL,
+    DEFAULT_VERIFICATION_STATUS,
+    SOURCE_CLINREK,
+    SOURCE_STATUSES,
+    SOURCE_TEXTBOOK,
+    SUBJECT_LABELS,
+    VERIFICATION_STATUSES,
+)
 from db.crud import delete_book, list_books, update_book
 from db.models import IngestJob
 from db.session import async_session
+from rag.retriever import retrieve_with_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +127,43 @@ async def models(request: Request):
     )
 
 
+@router.get("/retrieval", response_class=HTMLResponse)
+async def retrieval_inspector(
+    request: Request,
+    q: str = "",
+    source_type: str = "",
+    subject: str = "",
+):
+    """Минимальный Retrieval Inspector (раздел 5 дополнения к ТЗ): произвольный
+    тестовый запрос → итоговые чанки после fusion+reranking со скорами. Без
+    раздельного показа промежуточных стадий (BM25/вектор отдельно) — расширяется
+    позже, если понадобится глубже диагностировать конкретный плохой ответ."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    result = None
+    if q.strip():
+        _, result = await retrieve_with_diagnostics(
+            q.strip(),
+            source_type=source_type.strip() or None,
+            subject=subject.strip().lower() or None,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "retrieval.html",
+        {
+            "q": q,
+            "source_type": source_type,
+            "subject": subject,
+            "result": result,
+            "subjects": SUBJECT_LABELS,
+            "source_textbook": SOURCE_TEXTBOOK,
+            "source_clinrek": SOURCE_CLINREK,
+        },
+    )
+
+
 @router.get("/sources", response_class=HTMLResponse)
 async def sources(request: Request):
     if not is_admin(request):
@@ -138,6 +185,11 @@ async def sources(request: Request):
             "source_textbook": SOURCE_TEXTBOOK,
             "source_clinrek": SOURCE_CLINREK,
             "max_upload_mb": settings.MAX_UPLOAD_MB,
+            "authority_levels": AUTHORITY_LEVELS,
+            "default_authority_level": DEFAULT_AUTHORITY_LEVEL,
+            "verification_statuses": VERIFICATION_STATUSES,
+            "default_verification_status": DEFAULT_VERIFICATION_STATUS,
+            "source_statuses": SOURCE_STATUSES,
         },
     )
 
@@ -150,6 +202,13 @@ async def upload_source(
     subject: str = Form(...),
     author: str = Form(""),
     title: str = Form(""),
+    section: str = Form(""),
+    topic: str = Form(""),
+    edition: str = Form(""),
+    year: str = Form(""),
+    authority_level: str = Form(DEFAULT_AUTHORITY_LEVEL),
+    verification_status: str = Form(DEFAULT_VERIFICATION_STATUS),
+    language: str = Form("ru"),
 ):
     """Приём файла источника и запуск обработки в фоне.
 
@@ -185,6 +244,7 @@ async def upload_source(
             out.write(chunk)
 
     effective_title = title.strip() or Path(file.filename or "источник").stem
+    year_value = int(year) if year.strip().isdigit() else None
 
     async with async_session() as session:
         job = IngestJob(
@@ -207,7 +267,21 @@ async def upload_source(
     # из множества по завершении — иначе накопленные ссылки на завершённые
     # задачи держались бы в памяти вечно.
     task = asyncio.create_task(
-        _run_ingest(job_id, tmp_path, effective_title, author.strip(), subject, source_type)
+        _run_ingest(
+            job_id,
+            tmp_path,
+            effective_title,
+            author.strip(),
+            subject,
+            source_type,
+            section.strip() or None,
+            topic.strip() or None,
+            edition.strip() or None,
+            year_value,
+            authority_level,
+            verification_status,
+            language.strip() or "ru",
+        )
     )
     _ingest_tasks.add(task)
     task.add_done_callback(_ingest_tasks.discard)
@@ -221,6 +295,13 @@ async def _run_ingest(
     author: str,
     subject: str,
     source_type: str,
+    section: str | None = None,
+    topic: str | None = None,
+    edition: str | None = None,
+    year: int | None = None,
+    authority_level: str = DEFAULT_AUTHORITY_LEVEL,
+    verification_status: str = DEFAULT_VERIFICATION_STATUS,
+    language: str = "ru",
 ) -> None:
     """Фоновая обработка источника через существующий конвейер загрузки.
 
@@ -235,7 +316,20 @@ async def _run_ingest(
         # исчезнуть, оставив запись висеть в "pending" без объяснений.
         try:
             await _set_job(job_id, status="running", stage="parsing")
-            chunks = await load_book(file_path, subject, author, title, source_type=source_type)
+            chunks = await load_book(
+                file_path,
+                subject,
+                author,
+                title,
+                source_type=source_type,
+                section=section,
+                topic=topic,
+                edition=edition,
+                year=year,
+                authority_level=authority_level,
+                verification_status=verification_status,
+                language=language,
+            )
             await _set_job(
                 job_id,
                 status="done",
@@ -291,18 +385,59 @@ async def edit_source(
     title: str = Form(""),
     author: str = Form(""),
     subject: str = Form(""),
+    section: str = Form(""),
+    topic: str = Form(""),
+    edition: str = Form(""),
+    year: str = Form(""),
+    authority_level: str = Form(""),
+    verification_status: str = Form(""),
+    language: str = Form(""),
 ):
-    """Правка названия/автора/предмета без переиндексации: чанки и эмбеддинги
+    """Правка метаданных источника без переиндексации: чанки и эмбеддинги
     не трогаем, только метаданные (и их денормализованные копии в BookChunk,
     см. db.crud.update_book)."""
     if not is_admin(request):
         return _login_redirect()
+    year_value = int(year) if year.strip().isdigit() else None
     async with async_session() as session:
-        book = await update_book(session, book_id, title=title, author=author, subject=subject)
+        book = await update_book(
+            session,
+            book_id,
+            title=title,
+            author=author,
+            subject=subject,
+            section=section,
+            topic=topic,
+            edition=edition,
+            year=year_value,
+            authority_level=authority_level,
+            verification_status=verification_status,
+            language=language,
+        )
         if book is None:
             await session.commit()
             return RedirectResponse(url="/admin/sources?error=not_found", status_code=303)
         new_title = book.title
         await session.commit()
     await audit("source_edit", target=new_title, details=f"book_id={book_id}")
+    return RedirectResponse(url="/admin/sources", status_code=303)
+
+
+@router.post("/sources/{book_id}/status")
+async def set_source_status(request: Request, book_id: int, status: str = Form(...)):
+    """Включение/отключение/архивация источника без удаления чанков и эмбеддингов
+    (§8 ТЗ, раздел 3 дополнения): retrieval фильтрует по этому статусу через JOIN
+    на books (rag/retriever.py), переиндексация при возврате не нужна."""
+    if not is_admin(request):
+        return _login_redirect()
+    if status not in dict(SOURCE_STATUSES):
+        return RedirectResponse(url="/admin/sources?error=bad_status", status_code=303)
+    async with async_session() as session:
+        book = await update_book(session, book_id, status=status)
+        if book is None:
+            await session.commit()
+            return RedirectResponse(url="/admin/sources?error=not_found", status_code=303)
+        title = book.title
+        await session.commit()
+    await audit("source_status", target=title, details=f"book_id={book_id}, status={status}")
     return RedirectResponse(url="/admin/sources", status_code=303)

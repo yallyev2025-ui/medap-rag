@@ -7,8 +7,11 @@
 
 import argparse
 import asyncio
+import json
+import os
 
-from constants import SOURCE_TEXTBOOK
+from app.storage import s3
+from constants import DEFAULT_AUTHORITY_LEVEL, DEFAULT_VERIFICATION_STATUS, SOURCE_TEXTBOOK
 from db.models import Book, BookChunk
 from db.session import async_session
 from rag.embedder import embed_passages
@@ -23,6 +26,13 @@ async def load_book(
     author: str,
     title: str,
     source_type: str = SOURCE_TEXTBOOK,
+    section: str | None = None,
+    topic: str | None = None,
+    edition: str | None = None,
+    year: int | None = None,
+    authority_level: str = DEFAULT_AUTHORITY_LEVEL,
+    verification_status: str = DEFAULT_VERIFICATION_STATUS,
+    language: str = "ru",
 ) -> int:
     # Извлечение текста (включая OCR сканов) и чанкинг — тяжёлая синхронная работа,
     # уводим в поток, чтобы не блокировать event loop бота во время /addbook.
@@ -32,6 +42,9 @@ async def load_book(
     if not chunks:
         raise ValueError("Не удалось извлечь текст из файла")
 
+    checksum = await asyncio.to_thread(s3.file_checksum, file_path)
+    extension = os.path.splitext(file_path)[1].lower()
+
     async with async_session() as session:
         book = Book(
             title=title,
@@ -39,10 +52,28 @@ async def load_book(
             subject=subject,
             source_type=source_type,
             chunks_count=len(chunks),
+            section=section,
+            topic=topic,
+            edition=edition,
+            year=year,
+            authority_level=authority_level,
+            verification_status=verification_status,
+            language=language,
+            checksum=checksum,
         )
         session.add(book)
         await session.flush()
         book_id = book.id
+
+        # Оригинал и постраничный текст в S3 — best-effort, ключи из book_id
+        # известны только после flush(). Без S3 остаются None (мягкая деградация,
+        # см. app/storage/s3.py).
+        book.file_path = await asyncio.to_thread(
+            s3.upload_original, file_path, book_id, checksum, extension
+        )
+        book.pages_path = await asyncio.to_thread(
+            s3.upload_text, json.dumps(pages, ensure_ascii=False), book_id, "pages.json"
+        )
 
         try:
             for batch_start in range(0, len(chunks), BATCH_SIZE):
@@ -64,6 +95,15 @@ async def load_book(
                             embedding=embedding,
                             page_from=chunk.page_from,
                             page_to=chunk.page_to,
+                            section=chunk.section,
+                            topic=topic,
+                            edition=edition,
+                            year=year,
+                            authority_level=authority_level,
+                            verification_status=verification_status,
+                            language=language,
+                            char_start=chunk.char_start,
+                            char_end=chunk.char_end,
                         )
                     )
 

@@ -169,35 +169,68 @@ async def update_book(
     title: str | None = None,
     author: str | None = None,
     subject: str | None = None,
+    section: str | None = None,
+    topic: str | None = None,
+    edition: str | None = None,
+    year: int | None = None,
+    authority_level: str | None = None,
+    verification_status: str | None = None,
+    language: str | None = None,
+    status: str | None = None,
 ) -> Book | None:
-    """Переименовывает источник (название/автор/предмет). Возвращает обновлённую
-    книгу или None, если такой книги нет.
+    """Правит метаданные источника. Возвращает обновлённую книгу или None,
+    если такой книги нет.
 
-    BookChunk хранит собственные копии title/author/subject (денормализация для
-    фильтрации поиска одним WHERE без JOIN — см. db/models.py), поэтому при
-    переименовании синхронизируем их той же операцией: иначе поиск и citations
-    ещё долго показывали бы старое название, хотя в списке книг уже новое.
+    BookChunk хранит собственные копии большинства этих полей (денормализация
+    для фильтрации поиска одним WHERE без JOIN — см. db/models.py), поэтому при
+    правке синхронизируем их той же операцией: иначе поиск и citations ещё
+    долго показывали бы старые значения, хотя в списке книг уже новые.
+    status — исключение: это состояние жизненного цикла самого источника
+    (draft/production/disabled/archived), retrieval фильтрует по нему через
+    JOIN на books, а не по копии в каждом чанке.
     """
     book = await session.get(Book, book_id)
     if book is None:
         return None
 
-    fields: dict[str, str] = {}
+    chunk_fields: dict[str, str | int] = {}
     if title is not None and title.strip():
-        fields["title"] = title.strip()
+        chunk_fields["title"] = title.strip()
     if author is not None:
-        fields["author"] = author.strip()
+        chunk_fields["author"] = author.strip()
     if subject is not None and subject.strip():
         # Нижний регистр по тем же причинам, что и при загрузке (см.
         # app/admin/routes.py upload_source): коды предметов в системе строго
         # lowercase, иначе поиск считает это другим предметом.
-        fields["subject"] = subject.strip().lower()
-    if not fields:
+        chunk_fields["subject"] = subject.strip().lower()
+    if section is not None:
+        chunk_fields["section"] = section.strip() or None
+    if topic is not None:
+        chunk_fields["topic"] = topic.strip() or None
+    if edition is not None:
+        chunk_fields["edition"] = edition.strip() or None
+    if year is not None:
+        chunk_fields["year"] = year
+    if authority_level is not None and authority_level.strip():
+        chunk_fields["authority_level"] = authority_level.strip()
+    if verification_status is not None and verification_status.strip():
+        chunk_fields["verification_status"] = verification_status.strip()
+    if language is not None and language.strip():
+        chunk_fields["language"] = language.strip()
+
+    book_fields: dict[str, str | int] = dict(chunk_fields)
+    if status is not None and status.strip():
+        book_fields["status"] = status.strip()
+
+    if not book_fields:
         return book
 
-    for key, value in fields.items():
+    for key, value in book_fields.items():
         setattr(book, key, value)
-    await session.execute(update(BookChunk).where(BookChunk.book_id == book_id).values(**fields))
+    if chunk_fields:
+        await session.execute(
+            update(BookChunk).where(BookChunk.book_id == book_id).values(**chunk_fields)
+        )
     return book
 
 

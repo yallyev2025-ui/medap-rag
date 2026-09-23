@@ -40,6 +40,42 @@
         <label for="title">Название</label>
         <input id="title" name="title" placeholder="Патофизиология">
       </div>
+      <div>
+        <label for="section">Раздел/глава</label>
+        <input id="section" name="section" placeholder="необязательно">
+      </div>
+      <div>
+        <label for="topic">Тема</label>
+        <input id="topic" name="topic" placeholder="необязательно">
+      </div>
+      <div>
+        <label for="edition">Издание</label>
+        <input id="edition" name="edition" placeholder="необязательно">
+      </div>
+      <div>
+        <label for="year">Год</label>
+        <input id="year" name="year" type="number" min="1900" max="2100" placeholder="необязательно">
+      </div>
+      <div>
+        <label for="authority_level">Уровень достоверности</label>
+        <select id="authority_level" name="authority_level">
+          {% for code, label in authority_levels %}
+          <option value="{{ code }}" {% if code == default_authority_level %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="verification_status">Статус проверки</label>
+        <select id="verification_status" name="verification_status">
+          {% for code, label in verification_statuses %}
+          <option value="{{ code }}" {% if code == default_verification_status %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="language">Язык</label>
+        <input id="language" name="language" value="ru" style="width:4em">
+      </div>
     </div>
     <button style="margin-top:12px">Загрузить и обработать</button>
     <p class="note" style="margin-bottom:0">
@@ -77,16 +113,51 @@
     правка обновит и сам источник, и подписи у уже загруженных фрагментов.
   </p>
   <table>
-    <tr><th>Название</th><th>Автор</th><th>Предмет</th><th>Тип</th><th>Чанков</th><th></th></tr>
+    <tr>
+      <th>Название</th><th>Автор</th><th>Предмет</th><th>Тип</th>
+      <th>Достоверность</th><th>Проверка</th><th>Статус</th><th>Чанков</th><th></th>
+    </tr>
     {% for book in books %}
     <tr>
       <td><input name="title" value="{{ book.title }}" form="edit-{{ book.id }}" style="width:100%"></td>
       <td><input name="author" value="{{ book.author }}" form="edit-{{ book.id }}" style="width:100%"></td>
       <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" style="width:100%" autocapitalize="off"></td>
       <td>{{ book.source_type }}</td>
+      <td>
+        <select name="authority_level" form="edit-{{ book.id }}">
+          {% for code, label in authority_levels %}
+          <option value="{{ code }}" {% if code == book.authority_level %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td>
+        <select name="verification_status" form="edit-{{ book.id }}">
+          {% for code, label in verification_statuses %}
+          <option value="{{ code }}" {% if code == book.verification_status %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td class="status-{{ book.status }}">{{ book.status }}</td>
       <td>{{ book.chunks_count }}</td>
       <td style="white-space:nowrap">
         <button form="edit-{{ book.id }}">Сохранить</button>
+        {% if book.status == 'production' %}
+        <form class="inline" method="post" action="/admin/sources/{{ book.id }}/status">
+          <input type="hidden" name="status" value="disabled">
+          <button class="ghost">Отключить</button>
+        </form>
+        {% else %}
+        <form class="inline" method="post" action="/admin/sources/{{ book.id }}/status">
+          <input type="hidden" name="status" value="production">
+          <button class="ghost">Включить</button>
+        </form>
+        {% endif %}
+        {% if book.status != 'archived' %}
+        <form class="inline" method="post" action="/admin/sources/{{ book.id }}/status">
+          <input type="hidden" name="status" value="archived">
+          <button class="ghost">В архив</button>
+        </form>
+        {% endif %}
         <form class="inline" method="post" action="/admin/sources/{{ book.id }}/delete"
               onsubmit="return confirm('Удалить «{{ book.title }}» и все его фрагменты?')">
           <button class="ghost">Удалить</button>
@@ -94,9 +165,13 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="note">База пуста — загрузите первый учебник</td></tr>
+    <tr><td colspan="9" class="note">База пуста — загрузите первый учебник</td></tr>
     {% endfor %}
   </table>
+  <p class="note">
+    Отключённый и архивный источник исчезает из поиска бота и /v1, но чанки и эмбеддинги не
+    удаляются — включение обратно не требует повторной загрузки и переиндексации.
+  </p>
   {# Формы редактирования — отдельно от table: <form> не может быть прямым
      потомком <table>/<tr> по спецификации HTML, поля связаны с ней атрибутом
      form="edit-N" прямо из ячеек таблицы выше. #}

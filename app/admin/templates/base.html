@@ -57,6 +57,8 @@
     .status-done { color: var(--ok); }
     .status-error { color: var(--err); }
     .status-running, .status-pending { color: var(--warn); }
+    .status-production { color: var(--ok); }
+    .status-disabled, .status-archived, .status-draft { color: var(--muted); }
     .note { color: var(--muted); font-size: 13px; }
     @media (max-width: 640px) { main { padding: 16px; } .value { font-size: 20px; } }
   </style>
@@ -69,7 +71,7 @@
       <a href="/admin" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
       <a href="/admin/sources" class="{{ 'active' if active == 'sources' }}">Knowledge Base</a>
       <a href="/admin/models" class="{{ 'active' if active == 'models' }}">Models</a>
-      <span title="Этап 2">Retrieval Inspector</span>
+      <a href="/admin/retrieval" class="{{ 'active' if active == 'retrieval' }}">Retrieval Inspector</a>
       <span title="Этап 3">AI Playground</span>
       <span title="Этап 3">Answer Inspector</span>
       <span title="Этап 3">Prompts &amp; Policies</span>

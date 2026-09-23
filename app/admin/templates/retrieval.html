@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% set active = 'retrieval' %}
+{% block content %}
+<h1>Retrieval Inspector</h1>
+<p class="sub">
+  Минимальная версия (§7 ТЗ, раздел 5 дополнения): произвольный тестовый запрос → итоговые фрагменты
+  после гибридного поиска (BM25 + вектор → RRF) и реранка, со скорами. Раздельный показ BM25/вектора —
+  расширение на будущее, если понадобится глубже разобрать конкретный плохой ответ.
+</p>
+
+<form method="get" action="/admin/retrieval" class="card">
+  <div class="fields">
+    <div>
+      <label for="q">Тестовый запрос</label>
+      <input id="q" name="q" value="{{ q }}" placeholder="Что такое гломерулонефрит?" style="width:100%">
+    </div>
+    <div>
+      <label for="source_type">Тип источника (пусто = все)</label>
+      <select id="source_type" name="source_type">
+        <option value="" {% if not source_type %}selected{% endif %}>Все</option>
+        <option value="{{ source_textbook }}" {% if source_type == source_textbook %}selected{% endif %}>Учебник</option>
+        <option value="{{ source_clinrek }}" {% if source_type == source_clinrek %}selected{% endif %}>Клинрек</option>
+      </select>
+    </div>
+    <div>
+      <label for="subject">Предмет/категория (пусто = все)</label>
+      <input id="subject" name="subject" value="{{ subject }}" list="subject-options" autocapitalize="off">
+      <datalist id="subject-options">
+        {% for code, label in subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </datalist>
+    </div>
+  </div>
+  <button style="margin-top:12px">Найти</button>
+</form>
+
+{% if result %}
+<section>
+  <h1 style="font-size:18px">Диагностика</h1>
+  <p class="note">
+    Кандидатов вектором: {{ result.dense_count }} · кандидатов BM25: {{ result.bm25_count }} ·
+    после RRF-фьюжна: {{ result.fused_count }} · показано после реранка: {{ result.final|length }}
+  </p>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Итоговые фрагменты</h1>
+  <table>
+    <tr>
+      <th>#</th><th>Источник</th><th>Стр.</th><th>Раздел</th><th>Найден</th>
+      <th>Rerank</th><th>Дистанция</th><th>BM25</th><th>Релевантен</th>
+    </tr>
+    {% for c in result.final %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ c.title }}</td>
+      <td>{{ c.page_from }}{% if c.page_to and c.page_to != c.page_from %}–{{ c.page_to }}{% endif %}</td>
+      <td>{{ c.section or '—' }}</td>
+      <td>{{ c.found_by|join(', ') }}</td>
+      <td>{{ '%.3f'|format(c.rerank_score) if c.rerank_score is not none else '—' }}</td>
+      <td>{{ '%.3f'|format(c.distance) if c.distance is not none else '—' }}</td>
+      <td>{{ '%.3f'|format(c.bm25_score) if c.bm25_score is not none else '—' }}</td>
+      <td class="{{ 'status-done' if c.relevant else 'status-error' }}">{{ 'да' if c.relevant else 'нет' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Текст фрагментов</h1>
+  {% for c in result.final %}
+  <div class="card" style="margin-bottom:8px">
+    <div class="label">#{{ loop.index }} — {{ c.title }}{% if c.section %} · {{ c.section }}{% endif %}</div>
+    <p style="margin:8px 0 0; white-space:pre-wrap">{{ c.content }}</p>
+  </div>
+  {% endfor %}
+</section>
+{% elif q %}
+<p class="note">Ничего не найдено.</p>
+{% endif %}
+{% endblock %}
