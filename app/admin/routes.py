@@ -60,6 +60,11 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # такого молчаливого обрыва, особенно при нагрузке на память от ML-моделей.
 _ingest_tasks: set[asyncio.Task] = set()
 
+# job_id → задача, чтобы можно было отменить конкретную зависшую/долгую
+# загрузку из админки (см. cancel_job) — обычного множества выше для этого
+# недостаточно, там задачи не связаны с id.
+_ingest_tasks_by_job: dict[int, asyncio.Task] = {}
+
 # Расширения, которые умеет разбирать rag/processor.py.
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
@@ -284,7 +289,9 @@ async def upload_source(
         )
     )
     _ingest_tasks.add(task)
+    _ingest_tasks_by_job[job_id] = task
     task.add_done_callback(_ingest_tasks.discard)
+    task.add_done_callback(lambda _t, jid=job_id: _ingest_tasks_by_job.pop(jid, None))
     return RedirectResponse(url="/admin/sources", status_code=303)
 
 
@@ -362,6 +369,33 @@ async def _set_job(job_id: int, **fields) -> None:
         for key, value in fields.items():
             setattr(job, key, value)
         await session.commit()
+
+
+@router.post("/jobs/{job_id}/delete")
+async def cancel_job(request: Request, job_id: int):
+    """Отменяет зависшую/долгую фоновую загрузку и убирает её из списка.
+
+    Пока задача висит в pending/running/error, у неё ещё нет строки в таблице
+    Book (при ошибке load_book делает rollback ДО commit — книга и чанки не
+    создаются вовсе), поэтому обычное удаление источника здесь не применимо —
+    нужен отдельный путь именно для записи в IngestJob.
+    """
+    if not is_admin(request):
+        return _login_redirect()
+
+    task = _ingest_tasks_by_job.get(job_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    async with async_session() as session:
+        job = await session.get(IngestJob, job_id)
+        title = job.title if job is not None else str(job_id)
+        if job is not None:
+            await session.delete(job)
+            await session.commit()
+
+    await audit("source_ingest_cancelled", target=title, details=f"job_id={job_id}")
+    return RedirectResponse(url="/admin/sources", status_code=303)
 
 
 @router.post("/sources/{book_id}/delete")

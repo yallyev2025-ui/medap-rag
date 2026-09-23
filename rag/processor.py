@@ -88,12 +88,41 @@ class Chunk:
     char_end: int | None = None
 
 
-def _ocr_pdf_page(pdf_path: str, page_number: int) -> str:
-    """Распознаёт одну страницу PDF как картинку (1-based номер). '' при ошибке."""
-    images = convert_from_path(pdf_path, dpi=OCR_DPI, first_page=page_number, last_page=page_number)
-    if not images:
-        return ""
-    return pytesseract.image_to_string(images[0], lang=OCR_LANG)
+# Сколько подряд идущих страниц рендерим одним вызовом convert_from_path. Батч
+# нужен, чтобы poppler не перепарсивал весь PDF с нуля на каждую страницу (см.
+# _ocr_pdf_pages) — но не рендерим весь документ разом, чтобы не раздувать пик
+# памяти на сотнях страниц, когда в процессе уже живут эмбеддер и реранкер.
+OCR_BATCH_SIZE = 20
+
+
+def _contiguous_runs(numbers: list[int]) -> list[list[int]]:
+    """Группирует отсортированный список номеров страниц в подряд идущие серии."""
+    runs: list[list[int]] = []
+    for n in numbers:
+        if runs and n == runs[-1][-1] + 1:
+            runs[-1].append(n)
+        else:
+            runs.append([n])
+    return runs
+
+
+def _ocr_pdf_pages(pdf_path: str, page_numbers: list[int]) -> dict[int, str]:
+    """Распознаёт страницы PDF (1-based номера), батчами по OCR_BATCH_SIZE подряд
+    идущих страниц за один вызов convert_from_path.
+
+    Раньше вызов был один на КАЖДУЮ страницу отдельно (first_page=last_page=N) —
+    poppler при этом заново открывает и парсит весь PDF на каждый вызов, так что
+    стоимость растёт ~O(n²) от числа страниц-сканов: на учебнике в сотни страниц
+    это выливается в минуты (иногда фактическое зависание) вместо секунд.
+    """
+    results: dict[int, str] = {}
+    for run in _contiguous_runs(page_numbers):
+        for start in range(0, len(run), OCR_BATCH_SIZE):
+            batch = run[start : start + OCR_BATCH_SIZE]
+            images = convert_from_path(pdf_path, dpi=OCR_DPI, first_page=batch[0], last_page=batch[-1])
+            for page_number, image in zip(batch, images):
+                results[page_number] = pytesseract.image_to_string(image, lang=OCR_LANG)
+    return results
 
 
 def extract_pages(pdf_path: str) -> list[str]:
@@ -104,18 +133,22 @@ def extract_pages(pdf_path: str) -> list[str]:
     if not _OCR_AVAILABLE:
         return pages
 
-    for i, text in enumerate(pages):
-        if len(text.strip()) >= OCR_MIN_CHARS:
-            continue
-        try:
-            recognized = _ocr_pdf_page(pdf_path, i + 1)
-        except Exception:
-            # Системный OCR (tesseract/poppler) недоступен — тихо деградируем без
-            # спама трейсбеков и больше не пробуем OCR для этого файла (текстовые
-            # PDF от этого не страдают, а сканы просто не распознаются).
-            logger.warning("Системный OCR недоступен — страницы-сканы этого PDF пропущены")
-            break
-        if len(recognized.strip()) > len(text.strip()):
+    needs_ocr = [i + 1 for i, text in enumerate(pages) if len(text.strip()) < OCR_MIN_CHARS]
+    if not needs_ocr:
+        return pages
+
+    try:
+        recognized_by_page = _ocr_pdf_pages(pdf_path, needs_ocr)
+    except Exception:
+        # Системный OCR (tesseract/poppler) недоступен — тихо деградируем без
+        # спама трейсбеков (текстовые PDF от этого не страдают, а сканы просто
+        # не распознаются).
+        logger.warning("Системный OCR недоступен — страницы-сканы этого PDF пропущены")
+        return pages
+
+    for page_number, recognized in recognized_by_page.items():
+        i = page_number - 1
+        if len(recognized.strip()) > len(pages[i].strip()):
             pages[i] = recognized
 
     return pages

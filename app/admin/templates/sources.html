@@ -88,7 +88,7 @@
 <section>
   <h1 style="font-size:18px">Обработка</h1>
   <table>
-    <tr><th>Файл</th><th>Название</th><th>Предмет</th><th>Статус</th><th>Стадия</th><th>Чанков</th><th>Ошибка</th></tr>
+    <tr><th>Файл</th><th>Название</th><th>Предмет</th><th>Статус</th><th>Стадия</th><th>Чанков</th><th>Ошибка</th><th></th></tr>
     {% for job in jobs %}
     <tr>
       <td>{{ job.filename }}</td>
@@ -98,9 +98,17 @@
       <td>{{ job.stage }}</td>
       <td>{{ job.chunks_count or '—' }}</td>
       <td class="note">{{ job.error or '' }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/jobs/{{ job.id }}/delete"
+              {% if job.status in ('pending', 'running') %}
+              onsubmit="return confirm('Отменить загрузку «{{ job.title }}»?')"
+              {% endif %}>
+          <button class="ghost">{{ 'Отменить' if job.status in ('pending', 'running') else 'Убрать' }}</button>
+        </form>
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="note">Загрузок пока не было</td></tr>
+    <tr><td colspan="8" class="note">Загрузок пока не было</td></tr>
     {% endfor %}
   </table>
   <p class="note">Страница обновляется по перезагрузке — автообновление и полный конвейер статусов приходят на этапе 2.</p>
