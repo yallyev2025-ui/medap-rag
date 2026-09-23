@@ -61,6 +61,15 @@ _LINE_ENDS_WITH_PAGENO = re.compile(r"\S\s+\d{1,4}\s*$")
 # Разбивка на предложения: после .!?… и пробела.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 
+# Эвристики заголовка раздела (структурный чанкинг, §8 ТЗ): нумерованный
+# заголовок вида "12.3 Тема" или "Глава 5 ...", либо короткая строка целиком
+# заглавными буквами — частые паттерны в учебниках. Настоящий текст почти
+# всегда заканчивается пунктуацией, заголовок — почти никогда.
+_HEADING_NUMBERED = re.compile(r"^\s*\d{1,2}(\.\d{1,2}){0,3}\.?\s+\S")
+_HEADING_CHAPTER = re.compile(r"^\s*(глава|раздел|тема|часть)\s+\d", re.IGNORECASE)
+_HEADING_MAX_WORDS = 12
+_HEADING_MAX_CHARS = 90
+
 
 @dataclass
 class Chunk:
@@ -68,6 +77,15 @@ class Chunk:
     # None — если у формата нет осмысленных номеров страниц (docx, txt без разметки).
     page_from: int | None
     page_to: int | None
+    # Заголовок раздела, под которым лежит начало чанка (эвристика, см.
+    # _is_heading_line) — структурный чанкинг по §8 ТЗ, этап 2. None, если
+    # эвристика ничего не нашла до этого места в документе.
+    section: str | None = None
+    # Смещения фрагмента в исходном (не нормализованном) тексте страницы
+    # page_from — best-effort, только для чанков целиком на одной странице
+    # (см. _add_char_offsets). Нужны для подсветки места ответа на этапе 3.
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 def _ocr_pdf_page(pdf_path: str, page_number: int) -> str:
@@ -162,15 +180,59 @@ def is_service_page(page_text: str) -> bool:
     return False
 
 
-def _page_sentences(page_text: str) -> list[str]:
-    """Склеивает визуальные переносы строк PDF в связный текст и режет на предложения."""
-    normalized = re.sub(r"\s+", " ", page_text).strip()
-    if not normalized:
-        return []
-    return [s.strip() for s in _SENTENCE_SPLIT.split(normalized) if s.strip()]
+def _is_heading_line(line: str) -> bool:
+    """Эвристика заголовка раздела — короткая строка без пунктуации на конце,
+    совпадающая с типичным паттерном заголовка учебника."""
+    if not line or len(line) > _HEADING_MAX_CHARS:
+        return False
+    if line[-1] in ".!?…,:;":
+        return False
+    if _HEADING_CHAPTER.match(line):
+        return True
+    words = line.split()
+    if not words or len(words) > _HEADING_MAX_WORDS:
+        return False
+    if _HEADING_NUMBERED.match(line):
+        return True
+    letters = [ch for ch in line if ch.isalpha()]
+    # Строка целиком заглавными буквами (без учёта цифр/пунктуации) — второй
+    # частый паттерн заголовка раздела.
+    return bool(letters) and all(ch.isupper() for ch in letters)
 
 
-def _hard_split(text: str, page: int | None, chunk_size: int, tokenizer) -> list[Chunk]:
+def _page_sentences(page_text: str) -> list[tuple[str, str | None]]:
+    """Склеивает визуальные переносы строк PDF в связный текст, режет на
+    предложения и параллельно отслеживает текущий раздел по эвристике
+    заголовка — возвращает (предложение, заголовок_раздела_или_None)."""
+    lines = page_text.splitlines()
+    current_section: str | None = None
+    paragraph: list[str] = []
+    out: list[tuple[str, str | None]] = []
+
+    def flush() -> None:
+        nonlocal paragraph
+        if paragraph:
+            normalized = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
+            for sentence in _SENTENCE_SPLIT.split(normalized):
+                sentence = sentence.strip()
+                if sentence:
+                    out.append((sentence, current_section))
+        paragraph = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_heading_line(line):
+            flush()
+            current_section = line
+            continue
+        paragraph.append(line)
+    flush()
+    return out
+
+
+def _hard_split(text: str, page: int | None, section: str | None, chunk_size: int, tokenizer) -> list[Chunk]:
     """Дробит сверхдлинное предложение (таблица, формула без пунктуации) по токенам."""
     token_ids = tokenizer.encode(text, add_special_tokens=False)
     out = []
@@ -178,8 +240,25 @@ def _hard_split(text: str, page: int | None, chunk_size: int, tokenizer) -> list
         piece = token_ids[start : start + chunk_size]
         if len(piece) < MIN_CHUNK_TOKENS:
             break
-        out.append(Chunk(content=tokenizer.decode(piece), page_from=page, page_to=page))
+        out.append(Chunk(content=tokenizer.decode(piece), page_from=page, page_to=page, section=section))
     return out
+
+
+def _add_char_offsets(chunks: list[Chunk], pages: list[str]) -> None:
+    """Best-effort смещения фрагмента в исходном тексте страницы (§8 ТЗ, нужны
+    для подсветки на этапе 3) — только для чанков целиком на одной странице:
+    более широкий (кросс-страничный) чанк не имеет единого "исходного текста",
+    в котором его искать, и остаётся с char_start/char_end = None."""
+    normalized_pages = [re.sub(r"\s+", " ", p) for p in pages]
+    for chunk in chunks:
+        if chunk.page_from is None or chunk.page_from != chunk.page_to:
+            continue
+        if not (1 <= chunk.page_from <= len(normalized_pages)):
+            continue
+        idx = normalized_pages[chunk.page_from - 1].find(chunk.content)
+        if idx >= 0:
+            chunk.char_start = idx
+            chunk.char_end = idx + len(chunk.content)
 
 
 def chunk_text(
@@ -194,36 +273,41 @@ def chunk_text(
 
     tokenizer = _get_model().tokenizer
 
-    # (предложение, номер страницы, число токенов) по всем НЕслужебным страницам.
-    sentences: list[tuple[str, int, int]] = []
+    # (предложение, номер страницы, число токенов, раздел) по всем НЕслужебным
+    # страницам. Раздел — эвристика по заголовкам (_page_sentences), пробрасывается
+    # в Chunk.section для структурного чанкинга (§8 ТЗ).
+    sentences: list[tuple[str, int, int, str | None]] = []
     for page_number, page_text in enumerate(pages, start=1):
         # Фильтр служебных страниц (оглавление и т.п.) уместен только для постраничных
         # форматов; для единого текстового блока (docx/txt) пропустить его, чтобы
         # случайно не отбросить весь учебник.
         if paged and is_service_page(page_text):
             continue
-        for sentence in _page_sentences(page_text):
+        for sentence, section in _page_sentences(page_text):
             token_len = len(tokenizer.encode(sentence, add_special_tokens=False))
-            sentences.append((sentence, page_number, token_len))
+            sentences.append((sentence, page_number, token_len, section))
 
     chunks: list[Chunk] = []
-    current: list[tuple[str, int, int]] = []
+    current: list[tuple[str, int, int, str | None]] = []
 
     def emit() -> None:
         if not current or sum(s[2] for s in current) < MIN_CHUNK_TOKENS:
             return
         pages_in = [s[1] for s in current]
+        # Раздел чанка — по первому предложению: ближе к тому, "о чём" начинается
+        # фрагмент, чем усреднение по всем разделам, которые он может захватывать.
         chunks.append(
             Chunk(
                 content=" ".join(s[0] for s in current),
                 page_from=min(pages_in) if paged else None,
                 page_to=max(pages_in) if paged else None,
+                section=current[0][3],
             )
         )
 
-    def overlap_tail() -> list[tuple[str, int, int]]:
+    def overlap_tail() -> list[tuple[str, int, int, str | None]]:
         """Последние предложения текущего чанка в пределах overlap токенов — для переноса."""
-        tail: list[tuple[str, int, int]] = []
+        tail: list[tuple[str, int, int, str | None]] = []
         tail_tokens = 0
         for sentence in reversed(current):
             if tail_tokens + sentence[2] > overlap:
@@ -232,13 +316,15 @@ def chunk_text(
             tail_tokens += sentence[2]
         return tail
 
-    for sentence, page_number, token_len in sentences:
-        item = (sentence, page_number, token_len)
+    for sentence, page_number, token_len, section in sentences:
+        item = (sentence, page_number, token_len, section)
 
         if token_len > chunk_size:
             emit()
             current = []
-            chunks.extend(_hard_split(sentence, page_number if paged else None, chunk_size, tokenizer))
+            chunks.extend(
+                _hard_split(sentence, page_number if paged else None, section, chunk_size, tokenizer)
+            )
             continue
 
         current_tokens = sum(s[2] for s in current)
@@ -249,7 +335,9 @@ def chunk_text(
         current.append(item)
 
     emit()
-    return _enforce_model_window(chunks, tokenizer)
+    result = _enforce_model_window(chunks, tokenizer)
+    _add_char_offsets(result, pages)
+    return result
 
 
 def _enforce_model_window(chunks: list[Chunk], tokenizer) -> list[Chunk]:
@@ -283,6 +371,7 @@ def _enforce_model_window(chunks: list[Chunk], tokenizer) -> list[Chunk]:
                     content=tokenizer.decode(piece),
                     page_from=chunk.page_from,
                     page_to=chunk.page_to,
+                    section=chunk.section,
                 )
             )
     return safe

@@ -37,6 +37,63 @@ async def init_db() -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_book_chunks_source_subject ON book_chunks (source_type, subject);")
         )
+
+        # Этап 2: метаданные и provenance источника (§8–§9 ТЗ).
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS section VARCHAR(255);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS topic VARCHAR(255);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS edition VARCHAR(100);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS year INTEGER;"))
+        await conn.execute(
+            text("ALTER TABLE books ADD COLUMN IF NOT EXISTS authority_level VARCHAR(32) NOT NULL DEFAULT 'primary_textbook';")
+        )
+        await conn.execute(
+            text("ALTER TABLE books ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) NOT NULL DEFAULT 'unverified';")
+        )
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS language VARCHAR(8) NOT NULL DEFAULT 'ru';"))
+        await conn.execute(
+            text("ALTER TABLE books ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'production';")
+        )
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS file_path VARCHAR(512);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS pages_path VARCHAR(512);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS checksum VARCHAR(64);"))
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS reindexed_at TIMESTAMPTZ;"))
+
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS section VARCHAR(255);"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS topic VARCHAR(255);"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS knowledge_unit_ids TEXT;"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS edition VARCHAR(100);"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS year INTEGER;"))
+        await conn.execute(
+            text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS authority_level VARCHAR(32) NOT NULL DEFAULT 'primary_textbook';")
+        )
+        await conn.execute(
+            text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS verification_status VARCHAR(20) NOT NULL DEFAULT 'unverified';")
+        )
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS language VARCHAR(8) NOT NULL DEFAULT 'ru';"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS user_id VARCHAR(64);"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS exam_id VARCHAR(64);"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS char_start INTEGER;"))
+        await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS char_end INTEGER;"))
+
+        # Гибридный retrieval (§7 ТЗ): лексический поиск через встроенный
+        # полнотекстовый индекс Postgres — отдельный поисковый движок не нужен.
+        # GENERATED ALWAYS AS ... STORED сам пересчитывает колонку для уже
+        # существующих строк при первом ALTER и на каждой вставке дальше.
+        await conn.execute(
+            text(
+                "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector "
+                "GENERATED ALWAYS AS (to_tsvector('russian', content)) STORED;"
+            )
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_book_chunks_content_tsv ON book_chunks USING GIN (content_tsv);")
+        )
+
+        # Отключённые/архивные источники не должны участвовать в retrieval —
+        # индекс под фильтр по статусу вместе с режимом/предметом.
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_books_status ON books (status);")
+        )
     await engine.dispose()
 
 

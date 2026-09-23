@@ -20,7 +20,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config import settings
-from constants import SOURCE_TEXTBOOK
+from constants import (
+    DEFAULT_AUTHORITY_LEVEL,
+    DEFAULT_SOURCE_STATUS,
+    DEFAULT_VERIFICATION_STATUS,
+    SOURCE_TEXTBOOK,
+)
 
 
 class Base(DeclarativeBase):
@@ -28,6 +33,9 @@ class Base(DeclarativeBase):
 
 
 class Book(Base):
+    """Источник (учебник/методичка/клинрек). Он же "Source" из §8/§9 ТЗ — имя
+    таблицы не переименовываем, чтобы не ломать существующие FK/данные."""
+
     __tablename__ = "books"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -39,6 +47,32 @@ class Book(Base):
     source_type: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_TEXTBOOK)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0)
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # --- Метаданные и provenance (§8–§9 ТЗ, этап 2) -----------------------------
+    section: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    edition: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # См. constants.AUTHORITY_LEVELS — приоритет источника при отборе evidence
+    # (этап 3), не подменяет фильтры retrieval здесь.
+    authority_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DEFAULT_AUTHORITY_LEVEL
+    )
+    verification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=DEFAULT_VERIFICATION_STATUS
+    )
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="ru")
+    # draft/production/disabled/archived — см. constants.SOURCE_STATUSES.
+    # "disabled"/"archived" исключают источник из retrieval без удаления чанков.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=DEFAULT_SOURCE_STATUS)
+    # Ключ оригинала в S3 (sources/{book_id}/{checksum}.{ext}); None — S3 не
+    # сконфигурирован или загрузка оригинала не удалась (мягкая деградация —
+    # чанки и эмбеддинги от этого не страдают).
+    file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Ключ постраничного текста в S3 (для Source Viewer/переиндексации без OCR).
+    pages_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reindexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BookChunk(Base):
@@ -56,6 +90,35 @@ class BookChunk(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.EMBEDDING_DIM), nullable=False)
     page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- Денормализованные копии метаданных источника (§8 ТЗ, этап 2) ----------
+    # Как и author/title/subject выше — копии для фильтрации/показа одним WHERE
+    # без JOIN на books; синхронизируются в db.crud.update_book при переименовании
+    # и при загрузке в scripts.load_books.load_book.
+    section: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Список Knowledge Unit id (продуктовый backend, вне этого репозитория) —
+    # JSON-массив строк в Text; поле зарезервировано по §8, не заполняется пока
+    # ничем в V1 текущего репозитория.
+    knowledge_unit_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edition: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    authority_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DEFAULT_AUTHORITY_LEVEL
+    )
+    verification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=DEFAULT_VERIFICATION_STATUS
+    )
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="ru")
+    # Приватные материалы (этап 4, §18) — зарезервировано по §8, пока не используется.
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    exam_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Смещения фрагмента внутри raw-текста страницы page_from — best-effort
+    # (заполняется, когда чанк целиком лежит на одной странице; None для
+    # чанков, растянутых на несколько страниц). Нужны для подсветки конкретного
+    # места в учебнике на этапе 3 (Source Viewer).
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class User(Base):
