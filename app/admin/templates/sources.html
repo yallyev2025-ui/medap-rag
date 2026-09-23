@@ -24,7 +24,7 @@
       </div>
       <div>
         <label for="subject">Предмет или категория</label>
-        <input id="subject" name="subject" list="subject-options" required placeholder="pathphys">
+        <input id="subject" name="subject" list="subject-options" required placeholder="pathphys" autocapitalize="off">
         <datalist id="subject-options">
           {% for code, label in subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
           <option value="взрослые">Клинреки: взрослые</option>
@@ -82,7 +82,7 @@
     <tr>
       <td><input name="title" value="{{ book.title }}" form="edit-{{ book.id }}" style="width:100%"></td>
       <td><input name="author" value="{{ book.author }}" form="edit-{{ book.id }}" style="width:100%"></td>
-      <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" style="width:100%"></td>
+      <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" style="width:100%" autocapitalize="off"></td>
       <td>{{ book.source_type }}</td>
       <td>{{ book.chunks_count }}</td>
       <td style="white-space:nowrap">

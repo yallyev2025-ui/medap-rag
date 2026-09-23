@@ -160,6 +160,14 @@ async def upload_source(
     if not is_admin(request):
         return _login_redirect()
 
+    # Мобильная клавиатура автоматически делает первую букву обычного текстового
+    # поля заглавной ("pathphys" → "Pathphys") — глазами на планшете легко не
+    # заметить. Коды предметов везде в системе (меню бота, фильтры поиска)
+    # строго нижним регистром: несовпадение регистра значит "разные предметы",
+    # и учебник молча выпадает из поиска. Нормализуем здесь, а не полагаемся на
+    # то, что каждый администратор аккуратно вводит текст с любого устройства.
+    subject = subject.strip().lower()
+
     extension = os.path.splitext(file.filename or "")[1].lower()
     if extension not in ALLOWED_EXTENSIONS:
         return RedirectResponse(url="/admin/sources?error=extension", status_code=303)

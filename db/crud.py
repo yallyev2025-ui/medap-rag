@@ -188,7 +188,10 @@ async def update_book(
     if author is not None:
         fields["author"] = author.strip()
     if subject is not None and subject.strip():
-        fields["subject"] = subject.strip()
+        # Нижний регистр по тем же причинам, что и при загрузке (см.
+        # app/admin/routes.py upload_source): коды предметов в системе строго
+        # lowercase, иначе поиск считает это другим предметом.
+        fields["subject"] = subject.strip().lower()
     if not fields:
         return book
 
