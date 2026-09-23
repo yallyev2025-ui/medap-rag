@@ -11,13 +11,16 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.observability.context import request_context
 from app.security.auth import rate_limiter, require_service_token
+from app.storage import s3
 from app.workflows.ask import ask_grounded
 from constants import SOURCE_TEXTBOOK
+from db.models import Book, BookChunk
+from db.session import async_session
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +54,33 @@ class ChatRequest(BaseModel):
 
 class Citation(BaseModel):
     citationId: str
+    # evidenceId/sourceId — реальные id из БД (BookChunk.id / Book.id): по ним
+    # /v1/evidence/{evidenceId} отдаёт точную страницу и координаты фрагмента
+    # для подсветки на образовательном сайте (§13 ТЗ, Source Viewer).
+    evidenceId: str
+    sourceId: str
     sourceTitle: str
     author: str
     subject: str
     page: int | None = None
     pageTo: int | None = None
+    section: str | None = None
     exactSupportingText: str
+    authorityLevel: str | None = None
+    verificationStatus: str | None = None
     relevance: float | None = None
+
+
+class Conflict(BaseModel):
+    """Содержательное расхождение между двумя процитированными источниками (§10 ТЗ)."""
+
+    claim: str
+    sourceATitle: str
+    sourceBTitle: str
+    sourceAEvidenceId: str
+    sourceBEvidenceId: str
+    difference: str
+    contextRecommendation: str
 
 
 class ChatResponse(BaseModel):
@@ -66,10 +89,37 @@ class ChatResponse(BaseModel):
     # False — в материалах MedAP подтверждения не нашлось; ответ честно говорит об
     # этом, а не выдумывает медицинский текст (§15).
     grounded: bool
+    # Verification Layer (§12, §36): True — прошёл проверку; False — не прошёл
+    # даже после перегенерации (answer уже честный отказ); None — верификация не
+    # проводилась или сам верификатор был недоступен.
+    verified: bool | None = None
     citations: list[Citation]
+    conflicts: list[Conflict] = Field(default_factory=list)
     requestId: str | None
     versions: dict[str, str]
     diagnostics: dict
+
+
+class EvidenceDetail(BaseModel):
+    """Source Viewer (§13 ТЗ, раздел 7 дополнения): по evidenceId — точная
+    страница/раздел/координаты фрагмента, чтобы сайт подсветил его в источнике."""
+
+    evidenceId: str
+    sourceId: str
+    sourceTitle: str
+    author: str
+    subject: str
+    page: int | None
+    pageTo: int | None
+    section: str | None
+    exactSupportingText: str
+    charStart: int | None
+    charEnd: int | None
+    authorityLevel: str
+    verificationStatus: str
+    # Presigned-ссылка на оригинал в S3 — None, если S3 не настроен (мягкая
+    # деградация, см. app/storage/s3.py) или у источника ещё нет file_path.
+    url: str | None = None
 
 
 async def _answer(payload: ChatRequest, request: Request, forced_workflow: str | None = None) -> ChatResponse:
@@ -101,7 +151,9 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
         answer=result.answer or "",
         workflow=result.workflow,
         grounded=result.has_relevant,
+        verified=result.verified,
         citations=[Citation(**c) for c in result.citations],
+        conflicts=[Conflict(**c) for c in result.conflicts],
         requestId=result.request_id,
         versions=result.versions,
         diagnostics=result.diagnostics,
@@ -118,3 +170,36 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 async def explain(payload: ChatRequest, request: Request) -> ChatResponse:
     """Объяснение темы или механизма (§2, workflow EXPLAIN/LEARN)."""
     return await _answer(payload, request, forced_workflow="EXPLAIN")
+
+
+@router.get("/evidence/{evidence_id}", response_model=EvidenceDetail)
+async def get_evidence(evidence_id: int, request: Request) -> EvidenceDetail:
+    """Source Viewer backend (§13 ТЗ, раздел 7 дополнения): по evidenceId из
+    citation — точная страница/раздел/координаты, чтобы сайт открыл источник и
+    подсветил именно этот фрагмент."""
+    async with async_session() as session:
+        chunk = await session.get(BookChunk, evidence_id)
+        if chunk is None:
+            raise HTTPException(status_code=404, detail="evidence not found")
+        book = await session.get(Book, chunk.book_id)
+
+    url = None
+    if book is not None and book.file_path:
+        url = s3.presigned_url(book.file_path)
+
+    return EvidenceDetail(
+        evidenceId=str(chunk.id),
+        sourceId=str(chunk.book_id),
+        sourceTitle=chunk.title,
+        author=chunk.author,
+        subject=chunk.subject,
+        page=chunk.page_from,
+        pageTo=chunk.page_to,
+        section=chunk.section,
+        exactSupportingText=chunk.content,
+        charStart=chunk.char_start,
+        charEnd=chunk.char_end,
+        authorityLevel=chunk.authority_level,
+        verificationStatus=chunk.verification_status,
+        url=url,
+    )

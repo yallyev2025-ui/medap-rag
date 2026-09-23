@@ -189,11 +189,13 @@ async def run_case(item: dict, retrieval_only: bool) -> dict[str, Any]:
             chunks = await retrieve(question, source_type=source_type, subject=subject)
             answer = None
             workflow = "RETRIEVAL_ONLY"
+            verified = None
         else:
             result = await ask(question, source_type=source_type, subject=subject)
             chunks = result.chunks
             answer = result.answer
             workflow = result.workflow
+            verified = result.verified
         request_id = ctx.request_id
 
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -206,6 +208,8 @@ async def run_case(item: dict, retrieval_only: bool) -> dict[str, Any]:
         "category": item.get("category", "uncategorized"),
         "answerable": item.get("answerable", True),
         "workflow": workflow,
+        # Verification Layer (§12, §36 ТЗ): True/False/None — см. app/verification/verify.py.
+        "verified": verified,
         "retrieval": retrieval_metrics(item, chunks),
         "generation": None if retrieval_only else generation_metrics(item, answer),
         "latencyMs": latency_ms,
@@ -252,11 +256,16 @@ def summarize(cases: list[dict[str, Any]], retrieval_only: bool) -> dict[str, An
 
     if not retrieval_only:
         generation = [c["generation"] for c in cases]
+        checked = [c["verified"] for c in cases if c["verified"] is not None]
         summary["generation"] = {
             "passed": sum(1 for g in generation if g["passed"]),
             "total": len(generation),
             # Главная метрика безопасности: ответ там, где подтверждения нет.
             "hallucinations": sum(1 for g in generation if g["hallucination"]),
+            # Доля прошедших Verification Layer среди случаев, где она вообще
+            # выполнялась (исключая verified=None — сбой верификатора, §36).
+            "verifiedRate": (sum(checked) / len(checked)) if checked else None,
+            "verifiedChecked": len(checked),
         }
         summary["cost"] = {
             "totalRub": round(sum(c["usage"]["costRub"] for c in cases), 4),

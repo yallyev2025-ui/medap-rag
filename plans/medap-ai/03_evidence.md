@@ -5,6 +5,19 @@
 
 Предусловие: закрыт чек-лист этапа 2 (есть метаданные, оригиналы в S3, гибридный поиск и диагностика).
 
+**Статус (3A закрыт, 3B — Playground/Answer Inspector/Prompts&Policies/Evals-UI — отдельным заходом):**
+citations строятся только из чанков, реально процитированных моделью в тексте ответа (парсинг
+`[Автор, Название, стр. N]` — `app/evidence/citations.py`), с проверяемыми по базе `evidenceId`
+(BookChunk.id) и `sourceId` (Book.id) — `app/evidence/pack.py`. Verification Layer
+(`app/verification/verify.py`) заменил одиночный fail-open `_verify_grounded`: семантическая проверка
++ числовая (`app/verification/numeric.py`, §14) → при проблеме один корректирующий проход → повторная
+проверка → честный отказ, если не помогло (§15); недоступность верификатора помечается `verified=None`,
+а не тихо проглатывается (§36). Conflict Engine (`app/verification/conflicts.py`, §10) запускается,
+только когда среди процитированных источников ≥2 разных названий. Source Viewer —
+`GET /v1/evidence/{evidenceId}` в `app/api/v1.py`. Не реализовано сознательно ради объёма: разбор
+атомарных claim'ов отдельными вызовами LLM (оставлен один семантический проход, как раньше, но по
+цитируемым источникам), `exactSupportingText` — весь чанк, а не одно предложение.
+
 ## 3.1. Evidence Pack (§11)
 
 ```

@@ -44,6 +44,12 @@ class ChunkResult:
     # Есть ли фрагмент в дальнейшем в результатах BM25/dense — для диагностики
     # Retrieval Inspector (что именно нашло этот чанк).
     found_by: set[str] = field(default_factory=set)
+    # book_id и уровень достоверности/проверки — нужны для честных citations
+    # (§13 ТЗ, этап 3): evidenceId=id чанка, sourceId=book_id, оба — реальные id
+    # из базы, а не порядковый номер, который нельзя проверить.
+    book_id: int | None = None
+    authority_level: str | None = None
+    verification_status: str | None = None
 
 
 def _base_filters(stmt, source_type: str | None, subject: str | None, title: str | None):
@@ -71,6 +77,7 @@ async def _fetch_dense(
     distance = BookChunk.embedding.cosine_distance(query_embedding).label("distance")
     stmt = select(
         BookChunk.id,
+        BookChunk.book_id,
         BookChunk.content,
         BookChunk.subject,
         BookChunk.author,
@@ -78,6 +85,8 @@ async def _fetch_dense(
         BookChunk.page_from,
         BookChunk.page_to,
         BookChunk.section,
+        BookChunk.authority_level,
+        BookChunk.verification_status,
         distance,
     ).order_by(distance).limit(limit)
     stmt = _base_filters(stmt, source_type, subject, title)
@@ -88,6 +97,7 @@ async def _fetch_dense(
     return [
         ChunkResult(
             id=row.id,
+            book_id=row.book_id,
             content=row.content,
             subject=row.subject,
             author=row.author,
@@ -96,6 +106,8 @@ async def _fetch_dense(
             page_from=row.page_from,
             page_to=row.page_to,
             section=row.section,
+            authority_level=row.authority_level,
+            verification_status=row.verification_status,
             found_by={"dense"},
         )
         for row in rows
@@ -116,6 +128,7 @@ async def _fetch_bm25(
     stmt = (
         select(
             BookChunk.id,
+            BookChunk.book_id,
             BookChunk.content,
             BookChunk.subject,
             BookChunk.author,
@@ -123,6 +136,8 @@ async def _fetch_bm25(
             BookChunk.page_from,
             BookChunk.page_to,
             BookChunk.section,
+            BookChunk.authority_level,
+            BookChunk.verification_status,
             rank,
         )
         .where(BookChunk.content_tsv.op("@@")(tsquery))
@@ -143,6 +158,7 @@ async def _fetch_bm25(
     return [
         ChunkResult(
             id=row.id,
+            book_id=row.book_id,
             content=row.content,
             subject=row.subject,
             author=row.author,
@@ -150,6 +166,8 @@ async def _fetch_bm25(
             page_from=row.page_from,
             page_to=row.page_to,
             section=row.section,
+            authority_level=row.authority_level,
+            verification_status=row.verification_status,
             bm25_score=row.bm25_score,
             found_by={"bm25"},
         )

@@ -77,7 +77,7 @@ async def main() -> None:
     for i, item in enumerate(items, start=1):
         question = item["question"]
         chunks = await retrieve(question)
-        answer = await generate_answer(question, chunks)
+        answer = (await generate_answer(question, chunks)).text
         ok, reason = _evaluate(item, answer)
 
         passed += ok

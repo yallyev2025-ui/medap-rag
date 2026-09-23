@@ -172,9 +172,11 @@ async def answer(req: AnswerRequest, _: None = Depends(_check_api_key)) -> Answe
     if not relevant:
         return AnswerResponse(found=False, answer="", sources=[])
 
-    text = await generate_answer(req.question, chunks, source_type=req.source_type)
+    generated = await generate_answer(req.question, chunks, source_type=req.source_type)
+    text = generated.text
     # generate_answer может всё равно отказать, если контекст лишь упоминает тему
-    # без раскрытия (см. его системный промпт) — тогда возвращаем то же "не найдено".
+    # без раскрытия (см. его системный промпт), либо Verification Layer не смогла
+    # подтвердить ответ даже после перегенерации — тогда возвращаем "не найдено".
     if text.strip() == NO_CONTEXT_ANSWER.strip():
         return AnswerResponse(found=False, answer="", sources=[])
 

@@ -70,19 +70,19 @@ def test_pure_functions() -> None:
 async def test_generate_answer() -> None:
     print("\n=== generate_answer: прямой вопрос ===")
     answer = await generate_answer("Что такое инфаркт миокарда?", MOCK_CHUNKS)
-    print(answer)
+    print(answer.text, "| verified=", answer.verified)
 
     print("\n=== generate_answer: конспект ===")
     answer = await generate_answer("Сделай конспект по теме инфаркт миокарда", MOCK_CHUNKS)
-    print(answer)
+    print(answer.text, "| verified=", answer.verified)
 
     print("\n=== generate_answer: нерелевантные чанки (порог distance) ===")
     answer = await generate_answer("Что такое инфаркт миокарда?", IRRELEVANT_CHUNKS)
-    print(answer)
+    print(answer.text, "| verified=", answer.verified)
 
     print("\n=== generate_answer: пустой список чанков ===")
     answer = await generate_answer("Что такое инфаркт миокарда?", [])
-    print(answer)
+    print(answer.text, "| verified=", answer.verified)
 
 
 async def main() -> None:

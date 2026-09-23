@@ -14,9 +14,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.evidence.citations import extract_cited_chunks
+from app.evidence.pack import build_citations
 from app.observability.context import current_request_id, set_workflow
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
+from app.verification.conflicts import detect_conflicts
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.generator import (
@@ -43,6 +46,10 @@ class AskResult:
     `answer is None` означает, что в материалах нет ничего релевантного и решение
     за клиентом: Telegram спрашивает согласие на ответ из общих знаний, а API по
     §15 отдаёт честный отказ, не выдумывая медицинский ответ.
+
+    `verified` (Verification Layer, §12/§36): True — прошёл проверку; False —
+    не прошёл даже после перегенерации, `answer` уже заменён на честный отказ;
+    None — верификация не проводилась или сам верификатор был недоступен.
     """
 
     answer: str | None
@@ -55,22 +62,25 @@ class AskResult:
     subject_used: str | None = None
     versions: dict[str, str] = field(default_factory=dict)
     chunks: list[ChunkResult] = field(default_factory=list)
+    verified: bool | None = None
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _citation(index: int, chunk: ChunkResult) -> dict[str, Any]:
-    """Цитата в контракте для образовательного сайта (раздел 7 дополнения к ТЗ)."""
-    return {
-        "citationId": str(index),
-        "sourceTitle": chunk.title,
-        "author": chunk.author,
-        "subject": chunk.subject,
-        "page": chunk.page_from,
-        "pageTo": chunk.page_to,
-        # На этапе 1 это фрагмент целиком; на этапе 3 сузится до конкретного
-        # подтверждающего предложения и станет проверяемым по базе.
-        "exactSupportingText": chunk.content,
-        "relevance": chunk.rerank_score,
-    }
+async def _build_evidence(
+    question: str, answer: str, relevant: list[ChunkResult]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Citations реально процитированных в ответе источников (§13 ТЗ) + при ≥2
+    разных источниках среди них — проверка на содержательное расхождение (§10)."""
+    cited_chunks = extract_cited_chunks(answer, relevant)
+    citation_objs = build_citations(cited_chunks)
+    citations = [c.to_dict() for c in citation_objs]
+
+    conflicts: list[dict[str, Any]] = []
+    if len({c.source_title for c in citation_objs}) >= 2:
+        conflict_objs = await detect_conflicts(question, answer, citation_objs)
+        conflicts = [c.to_dict() for c in conflict_objs]
+
+    return citations, conflicts
 
 
 def _versions() -> dict[str, str]:
@@ -174,24 +184,55 @@ async def ask(
     history = build_history_messages(turns)
     with stages.measure("generation") as details:
         if intent == "DIFFERENTIAL":
-            answer = await generate_differential(question, chunks, source_type, history)
+            generated = await generate_differential(question, chunks, source_type, history)
         elif intent == "MULTI":
-            answer = await generate_multi(question, chunks, source_type, history)
+            generated = await generate_multi(question, chunks, source_type, history)
         else:
-            answer = await generate_answer(question, chunks, source_type, history)
-        details["chars"] = len(answer or "")
+            generated = await generate_answer(question, chunks, source_type, history)
+        details["chars"] = len(generated.text if generated else "")
+        details["verified"] = generated.verified if generated else None
+
+    # generate_differential/generate_multi могут вернуть None, если внутри
+    # обнаружили отсутствие материала (защитная проверка — на практике сюда не
+    # попадаем, т.к. relevant уже непустой). Ведём себя как «нет доказательств».
+    if generated is None:
+        stages.note("no_evidence", policy="решение о фолбэке принимает клиент")
+        return AskResult(
+            answer=None,
+            workflow=decision.workflow.value,
+            intent=intent,
+            has_relevant=False,
+            citations=[],
+            diagnostics=stages.as_dict(),
+            request_id=current_request_id(),
+            versions=_versions(),
+            chunks=chunks,
+        )
+
+    # Честный отказ после неудачной верификации (§15) — цитировать нечего, ответ
+    # уже заменён на NO_CONTEXT_ANSWER внутри generate_answer/_reasoning_answer.
+    if generated.verified is False:
+        citations: list[dict[str, Any]] = []
+        conflicts: list[dict[str, Any]] = []
+    else:
+        with stages.measure("evidence") as details:
+            citations, conflicts = await _build_evidence(question, generated.text, relevant)
+            details["cited"] = len(citations)
+            details["conflicts"] = len(conflicts)
 
     return AskResult(
-        answer=answer,
+        answer=generated.text,
         workflow=decision.workflow.value,
         intent=intent,
         has_relevant=True,
-        citations=[_citation(i + 1, chunk) for i, chunk in enumerate(relevant)],
+        citations=citations,
         diagnostics=stages.as_dict(),
         request_id=current_request_id(),
         subject_used=detect_subject(chunks),
         versions=_versions(),
         chunks=chunks,
+        verified=generated.verified,
+        conflicts=conflicts,
     )
 
 

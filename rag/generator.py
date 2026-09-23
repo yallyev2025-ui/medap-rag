@@ -7,10 +7,12 @@
 import logging
 import re
 from collections import Counter
-from typing import Literal
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Literal
 
 from app.llm import provider as llm
 from app.llm.task_map import Task
+from app.verification.verify import verify_answer
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
@@ -338,23 +340,7 @@ USER_PROMPT_TEMPLATE = """{mode_instruction}
 
 Напоминание: используй ТОЛЬКО контекст выше. Если ответа в контексте нет — ответь ровно "{no_context_answer}", без пояснений и догадок."""
 
-# --- Проверочный проход (groundedness) ---
-
-VERIFY_SYSTEM_PROMPT = """Ты — строгий фактчекер. Тебе дают КОНТЕКСТ (фрагменты учебников) и ОТВЕТ ассистента.
-Проверь, что КАЖДОЕ фактическое утверждение в ОТВЕТЕ прямо подтверждается КОНТЕКСТОМ.
-Строку источника в конце ([Автор, Название, стр. N]) и вежливые/служебные фразы проверять не нужно.
-
-Если все фактические утверждения подтверждены контекстом — первой строкой выведи ровно:
-GROUNDED
-Если есть хотя бы одно утверждение, которого нет в контексте или которое ему противоречит — первой строкой выведи ровно:
-NOT_GROUNDED
-а ниже коротко перечисли проблемные утверждения."""
-
-VERIFY_USER_TEMPLATE = """КОНТЕКСТ:
-{context}
-
-ОТВЕТ:
-{answer}"""
+# --- Проверочный проход (groundedness) — см. app/verification/verify.py -----
 
 CORRECTION_TEMPLATE = """{mode_instruction}
 
@@ -432,26 +418,46 @@ async def _complete(
     return result.text
 
 
-async def _verify_grounded(context: str, answer: str) -> tuple[bool, str]:
-    """Возвращает (подтверждён ли ответ контекстом, перечень проблемных утверждений).
+@dataclass
+class GeneratedAnswer:
+    text: str
+    # True — прошёл проверку (Verification Layer). False — не прошёл даже после
+    # корректирующей перегенерации, текст уже заменён на честный отказ (§15).
+    # None — верификация не выполнялась (VERIFY_GROUNDING=False) или сам
+    # верификатор был недоступен (§36) — ответ не помечается verified.
+    verified: bool | None
 
-    Fail-open: при ошибке проверки считаем ответ валидным, чтобы не терять ответы.
+
+async def _verify_and_repair(
+    context: str,
+    answer: str,
+    correct: Callable[[str], Awaitable[str]],
+) -> GeneratedAnswer:
+    """Общий цикл Verification Layer для generate_answer/_reasoning_answer
+    (app/verification/verify.py): PASS сразу; при проблеме — один корректирующий
+    проход (`correct(issues)`) и повторная проверка; если проблема осталась —
+    честный отказ вместо недостоверного ответа, а не молчаливая выдача как есть.
     """
-    user_prompt = VERIFY_USER_TEMPLATE.format(context=context, answer=answer)
-    try:
-        verdict = await _complete(
-            VERIFY_SYSTEM_PROMPT, user_prompt, temperature=0.0, task=Task.CLAIM_EVIDENCE_CHECK
-        )
-    except RuntimeError:
-        logger.warning("Проверочный проход недоступен, пропускаю верификацию")
-        return True, ""
+    if not settings.VERIFY_GROUNDING:
+        return GeneratedAnswer(answer, verified=None)
 
-    lines = verdict.strip().splitlines()
-    first = lines[0].strip().upper() if lines else ""
-    if first.startswith("GROUNDED"):
-        return True, ""
-    issues = "\n".join(lines[1:]).strip() or "(не указаны)"
-    return False, issues
+    result = await verify_answer(context, answer)
+    if result.grounded is True:
+        return GeneratedAnswer(answer, verified=True)
+    if result.grounded is None:
+        return GeneratedAnswer(answer, verified=None)
+
+    logger.info("Ответ не прошёл проверку, перегенерирую. Проблемы: %s", result.issues)
+    corrected = await correct(result.issues)
+
+    result2 = await verify_answer(context, corrected)
+    if result2.grounded is True:
+        return GeneratedAnswer(corrected, verified=True)
+    if result2.grounded is None:
+        return GeneratedAnswer(corrected, verified=None)
+
+    logger.info("Исправленный ответ снова не прошёл проверку — честный отказ вместо недостоверного ответа")
+    return GeneratedAnswer(NO_CONTEXT_ANSWER, verified=False)
 
 
 async def generate_answer(
@@ -459,7 +465,7 @@ async def generate_answer(
     chunks: list[ChunkResult],
     source_type: str = SOURCE_TEXTBOOK,
     history: list[dict] | None = None,
-) -> str:
+) -> GeneratedAnswer:
     """Генерирует ответ с учётом режима.
 
     - source_type='клинрек' — врачебный клинический промпт (глубоко, из одной рекомендации).
@@ -474,12 +480,13 @@ async def generate_answer(
     # Материалов по вопросу нет: либо приветствие/small talk, либо общий вопрос —
     # уводим в гибкий фолбэк (общие знания с честной пометкой). Верификация не нужна.
     if context == NO_CONTEXT_PLACEHOLDER:
-        return await _complete(
+        answer = await _complete(
             FALLBACK_SYSTEM_PROMPT,
             FALLBACK_USER_TEMPLATE.format(question=question),
             GENERATION_TEMPERATURE,
             history=history,
         )
+        return GeneratedAnswer(answer, verified=None)
 
     system_prompt = CLINREK_SYSTEM_PROMPT if is_clinrek else SYSTEM_PROMPT
     mode = detect_mode(question)
@@ -503,25 +510,20 @@ async def generate_answer(
         system_prompt, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
     )
 
-    if not settings.VERIFY_GROUNDING:
-        return answer
+    async def correct(issues: str) -> str:
+        correction_prompt = CORRECTION_TEMPLATE.format(
+            mode_instruction=mode_instruction,
+            source_label=source_label,
+            context=context,
+            question=question,
+            issues=issues,
+            no_context_answer=NO_CONTEXT_ANSWER,
+        )
+        return await _complete(
+            system_prompt, correction_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+        )
 
-    grounded, issues = await _verify_grounded(context, answer)
-    if grounded:
-        return answer
-
-    logger.info("Ответ не прошёл проверку на заземление, перегенерирую. Проблемы: %s", issues)
-    correction_prompt = CORRECTION_TEMPLATE.format(
-        mode_instruction=mode_instruction,
-        source_label=source_label,
-        context=context,
-        question=question,
-        issues=issues,
-        no_context_answer=NO_CONTEXT_ANSWER,
-    )
-    return await _complete(
-        system_prompt, correction_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
-    )
+    return await _verify_and_repair(context, answer, correct)
 
 
 async def _reasoning_answer(
@@ -530,7 +532,7 @@ async def _reasoning_answer(
     chunks: list[ChunkResult],
     source_type: str,
     history: list[dict] | None = None,
-) -> str | None:
+) -> GeneratedAnswer | None:
     """Заземлённый клинический разбор (дифдиагноз/сочетание). Возвращает None, если
     релевантных материалов нет — тогда вызывающий спросит согласие на общие знания."""
     context = build_context(chunks)
@@ -542,21 +544,16 @@ async def _reasoning_answer(
         system_prompt, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
     )
 
-    if not settings.VERIFY_GROUNDING:
-        return answer
+    async def correct(issues: str) -> str:
+        correction = user_prompt + (
+            "\n\nВАЖНО: убери из ответа ВСЕ утверждения, которых нет в контексте выше "
+            "(медицина — выдумки недопустимы). Проблемные места:\n" + issues
+        )
+        return await _complete(
+            system_prompt, correction, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
+        )
 
-    grounded, issues = await _verify_grounded(context, answer)
-    if grounded:
-        return answer
-
-    logger.info("Клинический разбор не прошёл проверку заземления, правлю. Проблемы: %s", issues)
-    correction = user_prompt + (
-        "\n\nВАЖНО: убери из ответа ВСЕ утверждения, которых нет в контексте выше "
-        "(медицина — выдумки недопустимы). Проблемные места:\n" + issues
-    )
-    return await _complete(
-        system_prompt, correction, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
-    )
+    return await _verify_and_repair(context, answer, correct)
 
 
 async def generate_differential(
@@ -564,7 +561,7 @@ async def generate_differential(
     chunks: list[ChunkResult],
     source_type: str = SOURCE_CLINREK,
     history: list[dict] | None = None,
-) -> str | None:
+) -> GeneratedAnswer | None:
     """Дифференциальный диагноз по симптомам (строго по многим рекомендациям)."""
     return await _reasoning_answer(DIFFERENTIAL_SYSTEM_PROMPT, question, chunks, source_type, history)
 
@@ -574,7 +571,7 @@ async def generate_multi(
     chunks: list[ChunkResult],
     source_type: str = SOURCE_CLINREK,
     history: list[dict] | None = None,
-) -> str | None:
+) -> GeneratedAnswer | None:
     """Разбор сочетания/последовательности заболеваний (по многим рекомендациям)."""
     return await _reasoning_answer(MULTI_SYSTEM_PROMPT, question, chunks, source_type, history)
 
