@@ -4,6 +4,7 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import pdfplumber
@@ -114,14 +115,29 @@ def _ocr_pdf_pages(pdf_path: str, page_numbers: list[int]) -> dict[int, str]:
     poppler при этом заново открывает и парсит весь PDF на каждый вызов, так что
     стоимость растёт ~O(n²) от числа страниц-сканов: на учебнике в сотни страниц
     это выливается в минуты (иногда фактическое зависание) вместо секунд.
+
+    Внутри батча рендер и распознавание идут параллельно (settings.OCR_WORKERS):
+    рендер — через встроенный `thread_count` pdf2image/poppler, распознавание —
+    через ThreadPoolExecutor, т.к. pytesseract каждый вызов шеллит внешний процесс
+    tesseract и реально ждёт на I/O, а не держит GIL, поэтому потоки дают
+    настоящий параллелизм по ядрам CPU. DPI не трогаем — качество то же самое,
+    ускоряется только то, сколько страниц обрабатывается одновременно.
     """
     results: dict[int, str] = {}
     for run in _contiguous_runs(page_numbers):
         for start in range(0, len(run), OCR_BATCH_SIZE):
             batch = run[start : start + OCR_BATCH_SIZE]
-            images = convert_from_path(pdf_path, dpi=OCR_DPI, first_page=batch[0], last_page=batch[-1])
-            for page_number, image in zip(batch, images):
-                results[page_number] = pytesseract.image_to_string(image, lang=OCR_LANG)
+            images = convert_from_path(
+                pdf_path,
+                dpi=OCR_DPI,
+                first_page=batch[0],
+                last_page=batch[-1],
+                thread_count=settings.OCR_WORKERS,
+            )
+            with ThreadPoolExecutor(max_workers=settings.OCR_WORKERS) as pool:
+                recognized = pool.map(lambda img: pytesseract.image_to_string(img, lang=OCR_LANG), images)
+                for page_number, text in zip(batch, recognized):
+                    results[page_number] = text
     return results
 
 

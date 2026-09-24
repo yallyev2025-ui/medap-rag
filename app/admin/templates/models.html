@@ -20,7 +20,7 @@
 
 <section>
   <h1 style="font-size:18px">Профили моделей и цены</h1>
-  <p class="sub">Цены версионируются ({{ registry.values()|list|first.pricing_version }}), в бизнес-логике не хранятся.</p>
+  <p class="sub">Цены версионируются ({{ (registry.values()|list|first).pricing_version }}), в бизнес-логике не хранятся.</p>
   <table>
     <tr>
       <th>Провайдер</th><th>Модель</th><th>Статус</th><th>Контекст</th>
