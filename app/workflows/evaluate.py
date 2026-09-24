@@ -13,9 +13,8 @@ app/evidence/pack.py), не выдумываются моделью.
 студента, принимает продуктовый backend (§21, §25), которого в этом
 репозитории нет; EvaluationResult отдаёт только сырую структурированную оценку.
 
-ORAL_EVALUATE (голосовой ответ) сюда сознательно не входит — оральная оценка
-требует транскрипта из STT, а голосовой workflow (§20) ещё не реализован
-(отдельный батч этапа 4A).
+ORAL_EVALUATE (голосовой ответ) реализован в evaluate_oral() ниже — та же оценка,
+что и Recall, только вход — распознанный Whisper транскрипт, а не готовый текст.
 """
 
 import logging
@@ -90,6 +89,9 @@ class EvaluationResult:
     # Короткая адресная коррекция (§23), только если найдены ошибки — см. generate_repair.
     repair: str | None = None
     request_id: str | None = None
+    # Заполнено только для устного ответа (§20, этап 4A.7) — что распознал Whisper,
+    # чтобы студент/сайт видели, по какому именно тексту была сделана оценка.
+    transcript: str | None = None
 
 
 def _empty_result(feedback: str) -> EvaluationResult:
@@ -183,3 +185,32 @@ async def evaluate_free_recall(
     """Студент свободно вспоминает всё по ТЕМЕ (не отвечает на точечный вопрос) —
     FREE_RECALL_EVALUATE. Механизм оценки тот же, что и evaluate_recall."""
     return await _evaluate(topic, student_answer, Task.FREE_RECALL_EVALUATE, source_type, subject)
+
+
+async def evaluate_oral(
+    question: str,
+    audio_bytes: bytes,
+    source_type: str = SOURCE_TEXTBOOK,
+    subject: str | None = None,
+    filename: str = "voice.ogg",
+) -> EvaluationResult:
+    """Устный ответ (§20 ТЗ, этап 4A.7): аудио → транскрипт (Whisper) → та же
+    оценка, что и текстовый Recall (ORAL_EVALUATE, GPT-5.4 Mini). Сбой STT или
+    неразборчивая запись — честная просьба перезаписать, а не угадывание
+    содержания по обрывкам."""
+    try:
+        transcript = await llm.transcribe(audio_bytes, filename=filename)
+    except llm.LLMError:
+        logger.exception("Oral evaluation: STT недоступен")
+        result = _empty_result("Не удалось распознать голосовой ответ — перезапиши, пожалуйста.")
+        result.transcript = None
+        return result
+
+    if not transcript:
+        result = _empty_result("В записи не удалось разобрать речь — перезапиши ответ чётче.")
+        result.transcript = None
+        return result
+
+    result = await _evaluate(question, transcript, Task.ORAL_EVALUATE, source_type, subject)
+    result.transcript = transcript
+    return result

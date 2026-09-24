@@ -137,8 +137,32 @@
     <button style="margin-top:12px">Оценить</button>
   </form>
 
+  <form method="post" action="/admin/playground/oral" enctype="multipart/form-data" class="card" style="margin-top:12px">
+    <p class="sub" style="margin-top:0">Устный ответ (§20, этап 4A.7) — аудио → Whisper-транскрипт → та же оценка.</p>
+    <div class="fields">
+      <div>
+        <label for="oral_question">Вопрос</label>
+        <input id="oral_question" name="eval_question" style="width:100%" required>
+      </div>
+      <div>
+        <label for="oral_subject">Предмет (необязательно)</label>
+        <input id="oral_subject" name="eval_subject" list="subject-options" autocapitalize="off">
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <label for="audio_file">Аудиофайл</label>
+      <input id="audio_file" name="audio_file" type="file" accept="audio/*" required>
+    </div>
+    <button style="margin-top:12px">Оценить устный ответ</button>
+  </form>
+
   {% if eval_result %}
   <div class="card" style="margin-top:12px">
+    {% if eval_result.transcript %}
+    <p class="note" style="margin:0 0 10px; padding:8px; background:var(--bg); border-radius:6px">
+      🎤 <b>Распознано (Whisper):</b> {{ eval_result.transcript }}
+    </p>
+    {% endif %}
     <p style="margin:0 0 10px"><b>{{ eval_result.overall_feedback }}</b></p>
     <div class="grid">
       <div>

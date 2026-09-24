@@ -21,7 +21,7 @@ from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
 from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
-from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_recall
+from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_oral, evaluate_recall
 from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outline
 from app.workflows.user_documents import (
     UserDocument,
@@ -32,6 +32,7 @@ from app.workflows.user_documents import (
 )
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.web_research import WebResearchResult, research_url
+from config import settings
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
 from rag.retriever import retrieve
@@ -163,6 +164,8 @@ class EvaluationResponse(BaseModel):
     # Короткая адресная коррекция (§23) — только если найдены ошибки, иначе None.
     repair: str | None = None
     requestId: str | None = None
+    # Заполнено только для устного ответа (§20, этап 4A.7) — что распознал Whisper.
+    transcript: str | None = None
 
 
 def _evaluation_response(result: EvaluationResult) -> EvaluationResponse:
@@ -179,6 +182,7 @@ def _evaluation_response(result: EvaluationResult) -> EvaluationResponse:
         evidenceReferences=[Citation(**c) for c in result.evidence_references],
         repair=result.repair,
         requestId=result.request_id,
+        transcript=result.transcript,
     )
 
 
@@ -374,6 +378,38 @@ async def evaluate_free_answer_endpoint(payload: EvaluateRequest, request: Reque
         result = await evaluate_free_recall(
             payload.question,
             payload.studentAnswer,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return _evaluation_response(result)
+
+
+class EvaluateOralRequest(BaseModel):
+    """Устный ответ (§20 ТЗ, этап 4A.7). Base64, тот же JSON-контракт, что у Vision."""
+
+    question: str = Field(..., min_length=1)
+    audioBase64: str = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+@router.post("/evaluate/oral", response_model=EvaluationResponse)
+async def evaluate_oral_endpoint(payload: EvaluateOralRequest, request: Request) -> EvaluationResponse:
+    """Голосовой ответ студента: Whisper-транскрипт → та же оценка, что и Recall
+    (§20, §21 ТЗ, этап 4A.7). Сбой STT — честная просьба перезаписать в overallFeedback,
+    не выдуманная оценка по обрывкам."""
+    rate_limiter.check(payload.context.userId)
+    try:
+        audio_bytes = base64.b64decode(payload.audioBase64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="audioBase64 is not valid base64")
+
+    if len(audio_bytes) > settings.ORAL_MAX_AUDIO_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Аудио больше {settings.ORAL_MAX_AUDIO_MB} МБ")
+
+    with request_context(user_id=payload.context.userId, channel="api", workflow="ORAL_EVALUATE"):
+        result = await evaluate_oral(
+            payload.question,
+            audio_bytes,
             source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
             subject=payload.context.subjectId,
         )

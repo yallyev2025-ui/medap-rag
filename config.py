@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # {"GROUNDED_QA": "openai", "VISION_EXTRACT": "deepseek"}.
     TASK_MODEL_MAP_OVERRIDES: str = ""
 
+    # --- Speech-to-Text (§20 ТЗ, этап 4A.7) — только OpenAI Whisper, у DeepSeek
+    # нет STT API, поэтому TaskModelMap здесь не применяется, провайдер жёстко OpenAI.
+    WHISPER_MODEL: str = "whisper-1"
+    # МБ — устный ответ короткий, в отличие от Vision-изображений это реальная
+    # тарификация по минутам аудио, поэтому лимит на размер файла обязателен.
+    ORAL_MAX_AUDIO_MB: int = 15
+
     # --- Цены провайдеров (§59, §64). Доллары за 1M токенов, с версией и датой -----
     PRICING_VERSION: str = "2026-09-19"
     DEEPSEEK_INPUT_PRICE_USD: float = 0.30
@@ -40,6 +47,8 @@ class Settings(BaseSettings):
     OPENAI_EVAL_INPUT_PRICE_USD: float = 0.75
     OPENAI_EVAL_CACHED_INPUT_PRICE_USD: float = 0.075
     OPENAI_EVAL_OUTPUT_PRICE_USD: float = 4.50
+    # Whisper API тарифицируется по минутам аудио, не по токенам ($ за минуту).
+    OPENAI_WHISPER_PRICE_USD_PER_MINUTE: float = 0.006
     # Курс для перевода стоимости в рубли на дашборде (курс ЦБ на дату baseline).
     USD_RUB_RATE: float = 84.1975
 

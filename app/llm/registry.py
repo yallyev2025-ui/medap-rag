@@ -32,6 +32,8 @@ class ModelProfile:
     output_price_usd: float
     # Ключ задан в окружении — модель можно использовать.
     enabled: bool
+    # $ за минуту аудио (Whisper) — 0.0 у провайдеров без STT (только у OpenAI).
+    audio_price_usd_per_minute: float = 0.0
 
     @property
     def status(self) -> str:
@@ -69,6 +71,7 @@ def _openai() -> ModelProfile:
         cached_input_price_usd=settings.OPENAI_EVAL_CACHED_INPUT_PRICE_USD,
         output_price_usd=settings.OPENAI_EVAL_OUTPUT_PRICE_USD,
         enabled=bool(settings.OPENAI_API_KEY),
+        audio_price_usd_per_minute=settings.OPENAI_WHISPER_PRICE_USD_PER_MINUTE,
     )
 
 
@@ -85,18 +88,27 @@ def profile(provider_key: str) -> ModelProfile:
     return registry[provider_key]
 
 
-def cost_usd(prof: ModelProfile, input_tokens: int, cached_input_tokens: int, output_tokens: int) -> float:
+def cost_usd(
+    prof: ModelProfile,
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+    audio_seconds: float = 0.0,
+) -> float:
     """Стоимость вызова по формуле §65: считается по фактическому usage провайдера.
 
     Кэшированные входные токены тарифицируются по отдельной, более низкой ставке,
-    поэтому из общего числа входных они вычитаются.
+    поэтому из общего числа входных они вычитаются. Whisper (STT) тарифицируется
+    по минутам аудио, а не по токенам — складывается отдельным слагаемым.
     """
     fresh_input = max(input_tokens - cached_input_tokens, 0)
-    return (
+    text_cost = (
         fresh_input * prof.input_price_usd
         + cached_input_tokens * prof.cached_input_price_usd
         + output_tokens * prof.output_price_usd
     ) / 1_000_000
+    audio_cost = (audio_seconds / 60.0) * prof.audio_price_usd_per_minute
+    return text_cost + audio_cost
 
 
 def to_rub(usd: float) -> float:

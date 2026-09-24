@@ -210,6 +210,50 @@ async def complete(
     raise LLMError(PROVIDER_ERROR_MESSAGE) from last_error
 
 
+async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+    """Speech-to-Text (§20 ТЗ, этап 4A.7) — Whisper, только OpenAI: у DeepSeek нет
+    STT API, поэтому TaskModelMap здесь не применяется и провайдер жёстко OpenAI,
+    без фолбэка (нет альтернативного провайдера, на который можно переключиться)."""
+    prof = profile(OPENAI)
+    if not prof.enabled:
+        raise LLMError("Голосовой ввод сейчас недоступен (OPENAI_API_KEY не задан)")
+    client = _client(OPENAI)
+
+    started = time.monotonic()
+    try:
+        response = await client.audio.transcriptions.create(
+            model=settings.WHISPER_MODEL,
+            file=(filename, audio_bytes),
+            response_format="verbose_json",
+        )
+    except openai.APIError as exc:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        logger.warning("Whisper вернул ошибку: %s", exc)
+        await record_usage(
+            task="SPEECH_TO_TEXT",
+            profile=prof,
+            input_tokens=0,
+            cached_input_tokens=0,
+            output_tokens=0,
+            latency_ms=latency_ms,
+            error=str(exc),
+        )
+        raise LLMError(PROVIDER_ERROR_MESSAGE) from exc
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    duration = float(getattr(response, "duration", 0.0) or 0.0)
+    await record_usage(
+        task="SPEECH_TO_TEXT",
+        profile=prof,
+        input_tokens=0,
+        cached_input_tokens=0,
+        output_tokens=0,
+        latency_ms=latency_ms,
+        audio_seconds=duration,
+    )
+    return (response.text or "").strip()
+
+
 def _parse_structured(text: str, json_schema: dict) -> dict[str, Any] | None:
     """Парсит JSON и проверяет обязательные поля верхнего уровня.
 

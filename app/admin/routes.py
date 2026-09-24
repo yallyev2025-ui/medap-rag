@@ -36,7 +36,7 @@ from app.security.auth import (
     issue_admin_session,
 )
 from app.workflows.ask import ask
-from app.workflows.evaluate import evaluate_free_recall, evaluate_recall
+from app.workflows.evaluate import evaluate_free_recall, evaluate_oral, evaluate_recall
 from app.workflows.quick_outline import generate_quick_outline
 from app.workflows.web_research import research_url
 from config import settings
@@ -619,6 +619,38 @@ async def playground_evaluate(
             eval_answer=eval_answer,
             eval_subject=eval_subject,
             eval_mode=eval_mode,
+        ),
+    )
+
+
+@router.post("/playground/oral", response_class=HTMLResponse)
+async def playground_oral(
+    request: Request,
+    eval_question: str = Form(...),
+    eval_subject: str = Form(""),
+    audio_file: UploadFile = File(...),
+):
+    """Предпросмотр устного ответа (§20 ТЗ, этап 4A.7) — тот же workflow, что и
+    POST /v1/evaluate/oral: аудио → Whisper-транскрипт → та же оценка, что Recall.
+    Результат рендерится тем же блоком, что recall/free-recall — общий формат оценки."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    subject_value = eval_subject.strip().lower() or None
+    audio_bytes = await audio_file.read()
+    with request_context(user_id="admin", channel="admin", workflow="ORAL_EVALUATE"):
+        eval_result = await evaluate_oral(
+            eval_question, audio_bytes, subject=subject_value, filename=audio_file.filename or "voice.ogg"
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(
+            eval_result=eval_result,
+            eval_question=eval_question,
+            eval_subject=eval_subject,
+            eval_mode="oral",
         ),
     )
 

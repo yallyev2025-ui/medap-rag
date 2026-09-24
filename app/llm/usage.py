@@ -37,7 +37,7 @@ async def record_usage(
     error: str | None = None,
 ) -> None:
     ctx = current()
-    usd = cost_usd(profile, input_tokens, cached_input_tokens, output_tokens)
+    usd = cost_usd(profile, input_tokens, cached_input_tokens, output_tokens, audio_seconds)
 
     event = AIUsageEvent(
         user_id=ctx.user_id if ctx else None,
