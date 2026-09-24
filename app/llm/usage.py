@@ -9,6 +9,9 @@
 """
 
 import logging
+from typing import Any
+
+from sqlalchemy import func, select
 
 from app.llm.registry import ModelProfile, cost_usd, to_rub
 from app.observability.context import current
@@ -67,3 +70,25 @@ async def record_usage(
     except Exception:
         # Телеметрия не должна стоить пользователю ответа.
         logger.exception("Не удалось сохранить AIUsageEvent (task=%s)", task)
+
+
+async def usage_for_request(request_id: str) -> dict[str, Any]:
+    """Фактические токены и стоимость одного запроса (по request_id) — для
+    Playground/Answer Inspector (§8 дополнения к ТЗ) и evals/run.py (§39)."""
+    async with async_session() as session:
+        row = (
+            await session.execute(
+                select(
+                    func.count(AIUsageEvent.id),
+                    func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
+                    func.coalesce(func.sum(AIUsageEvent.output_tokens), 0),
+                    func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0),
+                ).where(AIUsageEvent.request_id == request_id)
+            )
+        ).one()
+    return {
+        "calls": int(row[0]),
+        "inputTokens": int(row[1]),
+        "outputTokens": int(row[2]),
+        "costRub": float(row[3]),
+    }

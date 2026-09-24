@@ -10,18 +10,21 @@ Telegram-бот. По §30 ТЗ Telegram — клиент AI-сервиса, а 
 предложения и проверяемым `citationId` приходит на этапе 3.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.evidence.citations import extract_cited_chunks
 from app.evidence.pack import build_citations
-from app.observability.context import current_request_id, set_workflow
+from app.observability.context import current, current_request_id, set_workflow
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
+from db.models import AnswerLog
+from db.session import async_session
 from rag.generator import (
     NO_CONTEXT_ANSWER,
     build_history_messages,
@@ -91,6 +94,38 @@ def _versions() -> dict[str, str]:
     }
 
 
+async def _log_and_return(result: AskResult, question: str) -> AskResult:
+    """Персистит ответ для Answer Inspector (раздел 8 дополнения к ТЗ) и
+    возвращает результат как есть. Пишем ВСЕ исходы, включая small talk и
+    отсутствие доказательств — это тоже реальные ответы пользователю, а не
+    только «успешные» генерации. Сбой записи не должен стоить пользователю
+    ответа (тот же принцип, что record_usage для AIUsageEvent)."""
+    ctx = current()
+    try:
+        async with async_session() as session:
+            session.add(
+                AnswerLog(
+                    request_id=result.request_id or "no-request-context",
+                    channel=ctx.channel if ctx else "api",
+                    user_id=ctx.user_id if ctx else None,
+                    question=question,
+                    answer=result.answer or "",
+                    subject=result.subject_used,
+                    workflow=result.workflow,
+                    intent=result.intent,
+                    verified=result.verified,
+                    citations=json.dumps(result.citations, ensure_ascii=False),
+                    conflicts=json.dumps(result.conflicts, ensure_ascii=False),
+                    diagnostics=json.dumps(result.diagnostics, ensure_ascii=False),
+                    latency_ms=result.diagnostics.get("totalMs", 0),
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("Не удалось сохранить AnswerLog")
+    return result
+
+
 async def ask(
     question: str,
     *,
@@ -135,15 +170,18 @@ async def ask(
     if intent == "CHITCHAT":
         with stages.measure("small_talk"):
             answer = await generate_fallback(question)
-        return AskResult(
-            answer=answer,
-            workflow=Workflow.SMALL_TALK.value,
-            intent=intent,
-            has_relevant=False,
-            citations=[],
-            diagnostics=stages.as_dict(),
-            request_id=current_request_id(),
-            versions=_versions(),
+        return await _log_and_return(
+            AskResult(
+                answer=answer,
+                workflow=Workflow.SMALL_TALK.value,
+                intent=intent,
+                has_relevant=False,
+                citations=[],
+                diagnostics=stages.as_dict(),
+                request_id=current_request_id(),
+                versions=_versions(),
+            ),
+            question,
         )
 
     # Кнопочный режим «Разбор по симптомам» всегда означает дифдиагноз.
@@ -169,16 +207,19 @@ async def ask(
 
     if not relevant:
         stages.note("no_evidence", policy="решение о фолбэке принимает клиент")
-        return AskResult(
-            answer=None,
-            workflow=decision.workflow.value,
-            intent=intent,
-            has_relevant=False,
-            citations=[],
-            diagnostics=stages.as_dict(),
-            request_id=current_request_id(),
-            versions=_versions(),
-            chunks=chunks,
+        return await _log_and_return(
+            AskResult(
+                answer=None,
+                workflow=decision.workflow.value,
+                intent=intent,
+                has_relevant=False,
+                citations=[],
+                diagnostics=stages.as_dict(),
+                request_id=current_request_id(),
+                versions=_versions(),
+                chunks=chunks,
+            ),
+            question,
         )
 
     history = build_history_messages(turns)
@@ -197,16 +238,19 @@ async def ask(
     # попадаем, т.к. relevant уже непустой). Ведём себя как «нет доказательств».
     if generated is None:
         stages.note("no_evidence", policy="решение о фолбэке принимает клиент")
-        return AskResult(
-            answer=None,
-            workflow=decision.workflow.value,
-            intent=intent,
-            has_relevant=False,
-            citations=[],
-            diagnostics=stages.as_dict(),
-            request_id=current_request_id(),
-            versions=_versions(),
-            chunks=chunks,
+        return await _log_and_return(
+            AskResult(
+                answer=None,
+                workflow=decision.workflow.value,
+                intent=intent,
+                has_relevant=False,
+                citations=[],
+                diagnostics=stages.as_dict(),
+                request_id=current_request_id(),
+                versions=_versions(),
+                chunks=chunks,
+            ),
+            question,
         )
 
     # Честный отказ после неудачной верификации (§15) — цитировать нечего, ответ
@@ -220,19 +264,22 @@ async def ask(
             details["cited"] = len(citations)
             details["conflicts"] = len(conflicts)
 
-    return AskResult(
-        answer=generated.text,
-        workflow=decision.workflow.value,
-        intent=intent,
-        has_relevant=True,
-        citations=citations,
-        diagnostics=stages.as_dict(),
-        request_id=current_request_id(),
-        subject_used=detect_subject(chunks),
-        versions=_versions(),
-        chunks=chunks,
-        verified=generated.verified,
-        conflicts=conflicts,
+    return await _log_and_return(
+        AskResult(
+            answer=generated.text,
+            workflow=decision.workflow.value,
+            intent=intent,
+            has_relevant=True,
+            citations=citations,
+            diagnostics=stages.as_dict(),
+            request_id=current_request_id(),
+            subject_used=detect_subject(chunks),
+            versions=_versions(),
+            chunks=chunks,
+            verified=generated.verified,
+            conflicts=conflicts,
+        ),
+        question,
     )
 
 

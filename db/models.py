@@ -258,3 +258,79 @@ class Query(Base):
     subject: Mapped[str | None] = mapped_column(String, nullable=True)
     response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnswerLog(Base):
+    """Каждый ответ workflow ask() — для Answer Inspector (§8 дополнения к ТЗ).
+
+    Пишется один раз внутри app/workflows/ask.py::ask() — единственной реализации
+    конвейера, поэтому и Telegram, и /v1/chat логируются сюда одинаково, без
+    дублирования кода в каждом клиенте.
+    """
+
+    __tablename__ = "answer_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="api")
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    workflow: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent: Mapped[str] = mapped_column(String(32), nullable=False)
+    # True/False/None — см. app/verification/verify.py (Verification Layer, §12/§36).
+    verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    citations: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON
+    conflicts: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON
+    diagnostics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # JSON
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    # Разбор плохого ответа из Answer Inspector (раздел 8 дополнения к ТЗ):
+    # incorrect_answer/bad_retrieval/bad_citation/insufficient_source/
+    # explanation_problem/source_conflict/evaluation_problem/other.
+    feedback_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    feedback_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PromptVersion(Base):
+    """История версий системных промптов (§10 дополнения к ТЗ, упрощённый вариант:
+    редактирование → публикация → откат, без автоматического eval-гейта)."""
+
+    __tablename__ = "prompt_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Имя константы в rag/generator.py (SYSTEM_PROMPT, CLINREK_SYSTEM_PROMPT, ...).
+    prompt_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # draft — сохранено, но не действует; production — активная версия (ровно
+    # одна на ключ); archived — прошлая production-версия, хранится для отката.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="admin")
+
+
+class EvalCase(Base):
+    """Кейсы, добавленные в eval-датасет из админки (§13 дополнения к ТЗ).
+
+    Живёт в БД, а не только в eval/dataset.jsonl: файловая система Timeweb
+    эфемерна между деплоями, а добавлять кейсы коммитом в гит из работающего
+    процесса нельзя. evals/run.py объединяет статический dataset.jsonl (baseline)
+    и эти записи при каждом прогоне.
+    """
+
+    __tablename__ = "eval_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="uncategorized")
+    answerable: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_TEXTBOOK)
+    subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expect_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expect_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expect_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

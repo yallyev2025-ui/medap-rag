@@ -14,13 +14,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
 from app.security.auth import rate_limiter, require_service_token
-from app.storage import s3
 from app.workflows.ask import ask_grounded
 from constants import SOURCE_TEXTBOOK
-from db.models import Book, BookChunk
-from db.session import async_session
 
 logger = logging.getLogger(__name__)
 
@@ -177,29 +175,23 @@ async def get_evidence(evidence_id: int, request: Request) -> EvidenceDetail:
     """Source Viewer backend (§13 ТЗ, раздел 7 дополнения): по evidenceId из
     citation — точная страница/раздел/координаты, чтобы сайт открыл источник и
     подсветил именно этот фрагмент."""
-    async with async_session() as session:
-        chunk = await session.get(BookChunk, evidence_id)
-        if chunk is None:
-            raise HTTPException(status_code=404, detail="evidence not found")
-        book = await session.get(Book, chunk.book_id)
-
-    url = None
-    if book is not None and book.file_path:
-        url = s3.presigned_url(book.file_path)
+    detail = await fetch_evidence(evidence_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="evidence not found")
 
     return EvidenceDetail(
-        evidenceId=str(chunk.id),
-        sourceId=str(chunk.book_id),
-        sourceTitle=chunk.title,
-        author=chunk.author,
-        subject=chunk.subject,
-        page=chunk.page_from,
-        pageTo=chunk.page_to,
-        section=chunk.section,
-        exactSupportingText=chunk.content,
-        charStart=chunk.char_start,
-        charEnd=chunk.char_end,
-        authorityLevel=chunk.authority_level,
-        verificationStatus=chunk.verification_status,
-        url=url,
+        evidenceId=detail.evidence_id,
+        sourceId=detail.source_id,
+        sourceTitle=detail.source_title,
+        author=detail.author,
+        subject=detail.subject,
+        page=detail.page,
+        pageTo=detail.page_to,
+        section=detail.section,
+        exactSupportingText=detail.exact_supporting_text,
+        charStart=detail.char_start,
+        charEnd=detail.char_end,
+        authorityLevel=detail.authority_level,
+        verificationStatus=detail.verification_status,
+        url=detail.url,
     )

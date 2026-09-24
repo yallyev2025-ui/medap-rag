@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
 from app.llm import provider as llm
+from app.llm.prompts import get_prompt
 from app.llm.task_map import Task
 from app.verification.verify import verify_answer
 from config import settings
@@ -480,15 +481,19 @@ async def generate_answer(
     # Материалов по вопросу нет: либо приветствие/small talk, либо общий вопрос —
     # уводим в гибкий фолбэк (общие знания с честной пометкой). Верификация не нужна.
     if context == NO_CONTEXT_PLACEHOLDER:
+        fallback_prompt = await get_prompt("FALLBACK_SYSTEM_PROMPT", FALLBACK_SYSTEM_PROMPT)
         answer = await _complete(
-            FALLBACK_SYSTEM_PROMPT,
+            fallback_prompt,
             FALLBACK_USER_TEMPLATE.format(question=question),
             GENERATION_TEMPERATURE,
             history=history,
         )
         return GeneratedAnswer(answer, verified=None)
 
-    system_prompt = CLINREK_SYSTEM_PROMPT if is_clinrek else SYSTEM_PROMPT
+    if is_clinrek:
+        system_prompt = await get_prompt("CLINREK_SYSTEM_PROMPT", CLINREK_SYSTEM_PROMPT)
+    else:
+        system_prompt = await get_prompt("SYSTEM_PROMPT", SYSTEM_PROMPT)
     mode = detect_mode(question)
 
     if is_clinrek:
@@ -563,7 +568,8 @@ async def generate_differential(
     history: list[dict] | None = None,
 ) -> GeneratedAnswer | None:
     """Дифференциальный диагноз по симптомам (строго по многим рекомендациям)."""
-    return await _reasoning_answer(DIFFERENTIAL_SYSTEM_PROMPT, question, chunks, source_type, history)
+    system_prompt = await get_prompt("DIFFERENTIAL_SYSTEM_PROMPT", DIFFERENTIAL_SYSTEM_PROMPT)
+    return await _reasoning_answer(system_prompt, question, chunks, source_type, history)
 
 
 async def generate_multi(
@@ -573,15 +579,28 @@ async def generate_multi(
     history: list[dict] | None = None,
 ) -> GeneratedAnswer | None:
     """Разбор сочетания/последовательности заболеваний (по многим рекомендациям)."""
-    return await _reasoning_answer(MULTI_SYSTEM_PROMPT, question, chunks, source_type, history)
+    system_prompt = await get_prompt("MULTI_SYSTEM_PROMPT", MULTI_SYSTEM_PROMPT)
+    return await _reasoning_answer(system_prompt, question, chunks, source_type, history)
 
 
 async def generate_fallback(question: str) -> str:
     """Ответ из общих знаний ИИ с обязательной пометкой (по согласию пользователя),
     либо приветствие/small talk. Модель обычная — общие знания, экономим."""
+    fallback_prompt = await get_prompt("FALLBACK_SYSTEM_PROMPT", FALLBACK_SYSTEM_PROMPT)
     return await _complete(
-        FALLBACK_SYSTEM_PROMPT,
+        fallback_prompt,
         FALLBACK_USER_TEMPLATE.format(question=question),
         GENERATION_TEMPERATURE,
         Task.GROUNDED_QA,
     )
+
+
+# Ключи, редактируемые в Prompts & Policies (app/admin) — дефолт (константа выше),
+# если для ключа ещё нет production-версии в БД. См. app/llm/prompts.get_prompt.
+PROMPT_DEFAULTS: dict[str, str] = {
+    "SYSTEM_PROMPT": SYSTEM_PROMPT,
+    "CLINREK_SYSTEM_PROMPT": CLINREK_SYSTEM_PROMPT,
+    "FALLBACK_SYSTEM_PROMPT": FALLBACK_SYSTEM_PROMPT,
+    "DIFFERENTIAL_SYSTEM_PROMPT": DIFFERENTIAL_SYSTEM_PROMPT,
+    "MULTI_SYSTEM_PROMPT": MULTI_SYSTEM_PROMPT,
+}
