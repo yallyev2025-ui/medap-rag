@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set active = 'answers' %}
+{% block content %}
+<h1>Answer Inspector</h1>
+<p class="sub">
+  Все ответы workflow ask() — и Telegram, и /v1/chat (раздел 8 дополнения к ТЗ). Пишутся автоматически,
+  без правок на стороне клиентов.
+</p>
+
+<form method="get" action="/admin/answers" class="card">
+  <div class="fields">
+    <div>
+      <label for="verified">Verification</label>
+      <select id="verified" name="verified">
+        <option value="" {% if not verified_filter %}selected{% endif %}>Все</option>
+        <option value="true" {% if verified_filter == 'true' %}selected{% endif %}>PASS</option>
+        <option value="false" {% if verified_filter == 'false' %}selected{% endif %}>Не подтверждён</option>
+      </select>
+    </div>
+    <div>
+      <label for="flagged">Только отмеченные</label>
+      <select id="flagged" name="flagged">
+        <option value="" {% if not flagged_filter %}selected{% endif %}>Нет</option>
+        <option value="1" {% if flagged_filter %}selected{% endif %}>Да</option>
+      </select>
+    </div>
+  </div>
+  <button style="margin-top:12px">Применить</button>
+</form>
+
+<section>
+  {% for log in logs %}
+  <div class="card" style="margin-bottom:10px">
+    <div class="label">
+      #{{ log.id }} · {{ log.channel }} · {{ log.user_id or '—' }} · {{ log.workflow }}/{{ log.intent }}
+      · {{ log.created_at.strftime('%Y-%m-%d %H:%M') if log.created_at else '' }}
+      · <span class="{{ 'status-done' if log.verified else ('status-error' if log.verified == false else '') }}">
+        {% if log.verified is none %}не проверялось{% elif log.verified %}PASS{% else %}не подтверждён{% endif %}
+      </span>
+    </div>
+    <p style="margin:8px 0 0"><b>{{ log.question }}</b></p>
+    <p style="margin:6px 0 0; white-space:pre-wrap">{{ log.answer }}</p>
+    {% if log.citations %}
+    <p class="note" style="margin-top:6px">Источники: {% for c in log.citations %}{{ c.sourceTitle }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+    {% endif %}
+    {% if log.feedback_reason %}
+    <p class="note" style="margin-top:6px">Отмечено: <b>{{ log.feedback_reason }}</b>{% if log.feedback_note %} — {{ log.feedback_note }}{% endif %}</p>
+    {% endif %}
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer">Диагностика</summary>
+      <pre style="white-space:pre-wrap; font-size:12px; margin-top:8px">{{ log.diagnostics | tojson(indent=2) }}</pre>
+    </details>
+    <form method="post" action="/admin/answers/{{ log.id }}/feedback" class="fields" style="margin-top:10px; align-items:end">
+      <div>
+        <label for="reason-{{ log.id }}">Причина</label>
+        <select id="reason-{{ log.id }}" name="reason">
+          <option value="">— не отмечено —</option>
+          {% for code, label in feedback_reasons %}
+          <option value="{{ code }}" {% if log.feedback_reason == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="note-{{ log.id }}">Комментарий</label>
+        <input id="note-{{ log.id }}" name="note" value="{{ log.feedback_note or '' }}" style="width:100%">
+      </div>
+      <div><button>Сохранить</button></div>
+      <div>
+        <a href="/admin/evals?prefill_question={{ log.question | urlencode }}&prefill_subject={{ log.subject or '' | urlencode }}">
+          Добавить в Evals
+        </a>
+      </div>
+    </form>
+  </div>
+  {% else %}
+  <p class="note">Ответов пока нет</p>
+  {% endfor %}
+</section>
+{% endblock %}

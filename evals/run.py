@@ -35,16 +35,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
-
+from app.llm.usage import usage_for_request
 from app.observability.context import request_context
 from app.workflows.ask import ask
 from config import settings
 from constants import SOURCE_TEXTBOOK
-from db.models import AIUsageEvent
+from db.crud import list_eval_cases
 from db.session import async_session
 from rag.generator import NO_CONTEXT_ANSWER, relevant_chunks
 from rag.retriever import ChunkResult, retrieve
+
+
+async def load_db_cases() -> list[dict]:
+    """Кейсы, добавленные через админку (`/admin/evals`) — живут в БД, а не
+    только в eval/dataset.jsonl: файловая система Timeweb эфемерна между
+    деплоями, коммитить в гит из работающего процесса нельзя (см. db.models.EvalCase)."""
+    async with async_session() as session:
+        rows = await list_eval_cases(session)
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "question": row.question,
+                "category": row.category,
+                "answerable": row.answerable,
+                "source_type": row.source_type,
+                "subject": row.subject,
+                "expect_source": row.expect_source,
+                "expect_page": row.expect_page,
+                "expect_keywords": json.loads(row.expect_keywords) if row.expect_keywords else None,
+                "note": row.note,
+            }
+        )
+    return items
 
 
 def load_dataset(path: str) -> list[dict]:
@@ -148,30 +171,6 @@ def generation_metrics(item: dict, answer: str | None) -> dict[str, Any]:
         "missing_keywords": missing,
         "has_citation": has_citation,
         "reason": reason,
-    }
-
-
-# --- Стоимость ---------------------------------------------------------------
-
-
-async def usage_for_request(request_id: str) -> dict[str, Any]:
-    """Фактические токены и стоимость одного случая — из записей о расходе (§59)."""
-    async with async_session() as session:
-        row = (
-            await session.execute(
-                select(
-                    func.count(AIUsageEvent.id),
-                    func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
-                    func.coalesce(func.sum(AIUsageEvent.output_tokens), 0),
-                    func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0),
-                ).where(AIUsageEvent.request_id == request_id)
-            )
-        ).one()
-    return {
-        "calls": int(row[0]),
-        "inputTokens": int(row[1]),
-        "outputTokens": int(row[2]),
-        "costRub": float(row[3]),
     }
 
 
@@ -282,6 +281,46 @@ def summarize(cases: list[dict[str, Any]], retrieval_only: bool) -> dict[str, An
     return summary
 
 
+async def run_eval(
+    dataset_path: str = "eval/dataset.jsonl",
+    retrieval_only: bool = False,
+    include_db_cases: bool = True,
+    progress: bool = False,
+) -> dict[str, Any]:
+    """Прогоняет статический датасет (`dataset_path`, baseline в гите) плюс,
+    если include_db_cases, кейсы из админки (`EvalCase` в БД — см. load_db_cases).
+    Возвращает готовый отчёт (то же, что main() пишет в --out). Переиспользуется
+    и CLI (main()), и админкой (/admin/evals)."""
+    items = load_dataset(dataset_path)
+    if include_db_cases:
+        items = items + await load_db_cases()
+
+    cases = []
+    for index, item in enumerate(items, start=1):
+        case = await run_case(item, retrieval_only)
+        cases.append(case)
+        if progress:
+            status = "—" if case["generation"] is None else ("OK  " if case["generation"]["passed"] else "FAIL")
+            print(f"[{status}] {index}. {case['question']}")
+            print(f"       поиск: релевантных {case['retrieval']['relevant']}/{case['retrieval']['candidates']}"
+                  f", ранг ожидаемого источника: {case['retrieval']['rank'] or '—'}")
+            if case["generation"]:
+                print(f"       ответ: {case['generation']['reason']}"
+                      f" | {case['usage']['costRub']:.3f} ₽ | {case['latencyMs']} мс")
+
+    summary = summarize(cases, retrieval_only)
+    return {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "versions": {
+            "prompt": settings.PROMPT_VERSION,
+            "retrieval": settings.RETRIEVAL_VERSION,
+            "pricing": settings.PRICING_VERSION,
+        },
+        "summary": summary,
+        "cases": cases,
+    }
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Прогон eval-набора MedAP")
     parser.add_argument("--dataset", default="eval/dataset.jsonl")
@@ -293,30 +332,8 @@ async def main() -> None:
     parser.add_argument("--out", default=None, help="куда сохранить JSON-отчёт")
     args = parser.parse_args()
 
-    items = load_dataset(args.dataset)
-    cases = []
-    for index, item in enumerate(items, start=1):
-        case = await run_case(item, args.retrieval_only)
-        cases.append(case)
-        status = "—" if case["generation"] is None else ("OK  " if case["generation"]["passed"] else "FAIL")
-        print(f"[{status}] {index}. {case['question']}")
-        print(f"       поиск: релевантных {case['retrieval']['relevant']}/{case['retrieval']['candidates']}"
-              f", ранг ожидаемого источника: {case['retrieval']['rank'] or '—'}")
-        if case["generation"]:
-            print(f"       ответ: {case['generation']['reason']}"
-                  f" | {case['usage']['costRub']:.3f} ₽ | {case['latencyMs']} мс")
-
-    summary = summarize(cases, args.retrieval_only)
-    report = {
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "versions": {
-            "prompt": settings.PROMPT_VERSION,
-            "retrieval": settings.RETRIEVAL_VERSION,
-            "pricing": settings.PRICING_VERSION,
-        },
-        "summary": summary,
-        "cases": cases,
-    }
+    report = await run_eval(args.dataset, args.retrieval_only, progress=True)
+    summary = report["summary"]
 
     print("\n" + "=" * 60)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

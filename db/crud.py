@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from constants import SOURCE_TEXTBOOK
-from db.models import Book, BookChunk, Query, Usage, User
+from db.models import AnswerLog, Book, BookChunk, EvalCase, PromptVersion, Query, Usage, User
 
 
 def _today() -> date:
@@ -309,3 +309,79 @@ async def get_stats(session: AsyncSession) -> dict:
         "subject_counts": subject_counts,
         "avg_response_time_ms": avg_response_time_ms,
     }
+
+
+# --- Answer Inspector (§8 дополнения к ТЗ) --------------------------------------
+
+
+async def list_answer_logs(
+    session: AsyncSession,
+    limit: int = 50,
+    verified: bool | None = None,
+    only_flagged: bool = False,
+) -> list[AnswerLog]:
+    stmt = select(AnswerLog).order_by(AnswerLog.id.desc()).limit(limit)
+    if verified is not None:
+        stmt = stmt.where(AnswerLog.verified.is_(verified))
+    if only_flagged:
+        stmt = stmt.where(AnswerLog.feedback_reason.is_not(None))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def set_answer_feedback(
+    session: AsyncSession, answer_id: int, reason: str, note: str
+) -> AnswerLog | None:
+    log = await session.get(AnswerLog, answer_id)
+    if log is None:
+        return None
+    log.feedback_reason = reason or None
+    log.feedback_note = note.strip() or None
+    return log
+
+
+# --- Prompts & Policies (раздел 10 дополнения к ТЗ, упрощённая версия) ---------
+
+
+async def current_prompt(session: AsyncSession, key: str) -> PromptVersion | None:
+    stmt = (
+        select(PromptVersion)
+        .where(PromptVersion.prompt_key == key, PromptVersion.status == "production")
+        .order_by(PromptVersion.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def list_prompt_versions(session: AsyncSession, key: str) -> list[PromptVersion]:
+    stmt = select(PromptVersion).where(PromptVersion.prompt_key == key).order_by(PromptVersion.id.desc())
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def publish_prompt(session: AsyncSession, key: str, content: str, created_by: str) -> PromptVersion:
+    """Публикует новую production-версию промпта и переводит предыдущую в
+    archived — ничего не удаляется, полная история для отката."""
+    await session.execute(
+        update(PromptVersion)
+        .where(PromptVersion.prompt_key == key, PromptVersion.status == "production")
+        .values(status="archived")
+    )
+    version = PromptVersion(prompt_key=key, content=content, status="production", created_by=created_by)
+    session.add(version)
+    await session.flush()
+    return version
+
+
+# --- Evals (раздел 13 дополнения к ТЗ) -----------------------------------------
+
+
+async def list_eval_cases(session: AsyncSession) -> list[EvalCase]:
+    result = await session.execute(select(EvalCase).order_by(EvalCase.id))
+    return list(result.scalars().all())
+
+
+async def create_eval_case(session: AsyncSession, **fields) -> EvalCase:
+    case = EvalCase(**fields)
+    session.add(case)
+    await session.flush()
+    return case

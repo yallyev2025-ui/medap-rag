@@ -101,3 +101,16 @@ def source_status_label(code: str) -> str:
         if value == code:
             return label
     return code
+
+
+# --- Answer Inspector: причины плохого ответа (раздел 8 дополнения к ТЗ) --------
+FEEDBACK_REASONS: list[tuple[str, str]] = [
+    ("incorrect_answer", "Неверный ответ"),
+    ("bad_retrieval", "Плохой поиск"),
+    ("bad_citation", "Неверная цитата"),
+    ("insufficient_source", "Недостаточно материала в источнике"),
+    ("explanation_problem", "Проблема объяснения"),
+    ("source_conflict", "Конфликт источников"),
+    ("evaluation_problem", "Проблема оценки"),
+    ("other", "Другое"),
+]

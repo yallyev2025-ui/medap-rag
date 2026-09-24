@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% set active = 'evals' %}
+{% block content %}
+<h1>Evals</h1>
+<p class="sub">
+  Регрессионный датасет (§41/§61 ТЗ, раздел 13 дополнения). Базовый набор — <code>eval/dataset.jsonl</code>
+  в репозитории; кейсы, добавленные здесь, живут в БД (файловая система Timeweb эфемерна между деплоями).
+</p>
+
+<section>
+  <h1 style="font-size:18px">Добавить в Eval Dataset</h1>
+  <form method="post" action="/admin/evals/add" class="card">
+    <div class="fields">
+      <div>
+        <label for="question">Вопрос</label>
+        <input id="question" name="question" value="{{ prefill_question }}" required style="width:100%">
+      </div>
+      <div>
+        <label for="category">Категория</label>
+        <input id="category" name="category" placeholder="grounded_qa">
+      </div>
+      <div>
+        <label for="answerable">Есть подтверждение в материалах</label>
+        <select id="answerable" name="answerable">
+          <option value="true">Да</option>
+          <option value="false">Нет (ожидаем честный отказ)</option>
+        </select>
+      </div>
+      <div>
+        <label for="source_type">Тип источника</label>
+        <select id="source_type" name="source_type">
+          <option value="{{ source_textbook }}">Учебник</option>
+          <option value="{{ source_clinrek }}">Клинрек</option>
+        </select>
+      </div>
+      <div>
+        <label for="subject">Предмет</label>
+        <input id="subject" name="subject" value="{{ prefill_subject }}" autocapitalize="off">
+      </div>
+      <div>
+        <label for="expect_source">Ожидаемый источник (подстрока названия/автора)</label>
+        <input id="expect_source" name="expect_source">
+      </div>
+      <div>
+        <label for="expect_page">Ожидаемая страница</label>
+        <input id="expect_page" name="expect_page" type="number">
+      </div>
+      <div>
+        <label for="expect_keywords">Ключевые слова (через запятую)</label>
+        <input id="expect_keywords" name="expect_keywords">
+      </div>
+      <div>
+        <label for="note">Заметка</label>
+        <input id="note" name="note">
+      </div>
+    </div>
+    <button style="margin-top:12px">Добавить</button>
+  </form>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Кейсы из админки</h1>
+  <table>
+    <tr><th>Вопрос</th><th>Категория</th><th>Answerable</th><th>Предмет</th></tr>
+    {% for c in db_cases %}
+    <tr><td>{{ c.question }}</td><td>{{ c.category }}</td><td>{{ 'да' if c.answerable else 'нет' }}</td><td>{{ c.subject or '—' }}</td></tr>
+    {% else %}
+    <tr><td colspan="4" class="note">Пока не добавлено ни одного кейса из админки</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Прогон</h1>
+  <form method="post" action="/admin/evals/run" class="card">
+    <label><input type="checkbox" name="retrieval_only" value="1"> Только поиск (без вызовов LLM, бесплатно)</label>
+    <div><button style="margin-top:12px">Запустить прогон</button></div>
+    <p class="note" style="margin-bottom:0">
+      Выполняется синхронно в рамках запроса — для небольшого датасета это секунды/минуты.
+    </p>
+  </form>
+</section>
+
+{% if reports %}
+<section>
+  <h1 style="font-size:18px">Последние прогоны (сравнение до/после)</h1>
+  <table>
+    <tr>
+      <th>Время</th><th>Кейсов</th><th>Recall@K</th><th>MRR</th><th>Ответов пройдено</th>
+      <th>Verified rate</th><th>Галлюцинации</th><th>Стоимость</th>
+    </tr>
+    {% for r in reports %}
+    {% set s = r.summary %}
+    <tr>
+      <td>{{ r.generatedAt }}</td>
+      <td>{{ s.cases }}</td>
+      <td>{{ '%.2f'|format(s.retrieval.recallAtK) if s.retrieval.recallAtK is not none else '—' }}</td>
+      <td>{{ '%.2f'|format(s.retrieval.mrr) if s.retrieval.mrr is not none else '—' }}</td>
+      <td>{% if s.generation %}{{ s.generation.passed }}/{{ s.generation.total }}{% else %}—{% endif %}</td>
+      <td>{% if s.generation and s.generation.verifiedRate is not none %}{{ '%.0f'|format(s.generation.verifiedRate * 100) }}%{% else %}—{% endif %}</td>
+      <td>{% if s.generation %}{{ s.generation.hallucinations }}{% else %}—{% endif %}</td>
+      <td>{% if s.cost %}{{ '%.3f'|format(s.cost.totalRub) }} ₽{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}

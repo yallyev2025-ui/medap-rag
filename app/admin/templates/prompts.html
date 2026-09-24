@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% set active = 'prompts' %}
+{% block content %}
+<h1>Prompts &amp; Policies</h1>
+<p class="sub">
+  Редактирование → публикация → откат, полная история версий (раздел 10 дополнения к ТЗ, упрощённая
+  версия — без автоматического прогона эвалов перед публикацией). Пока для ключа нет
+  production-версии, действует дефолт из кода.
+</p>
+
+{% for key, row in rows.items() %}
+<section>
+  <h1 style="font-size:18px">{{ key }}{% if row.is_default %} <span class="note">(дефолт из кода)</span>{% endif %}</h1>
+  <form method="post" action="/admin/prompts/{{ key }}/publish" class="card">
+    <textarea name="content" rows="10" style="width:100%; font-family:monospace; font-size:13px">{{ row.content }}</textarea>
+    <button style="margin-top:12px">Опубликовать</button>
+    <p class="note" style="margin-bottom:0">
+      Публикация создаёт новую production-версию и переводит текущую в архив — ничего не удаляется.
+    </p>
+  </form>
+
+  {% if row.versions %}
+  <details style="margin-top:8px">
+    <summary style="cursor:pointer">История версий ({{ row.versions|length }})</summary>
+    <table style="margin-top:8px">
+      <tr><th>Дата</th><th>Статус</th><th>Автор</th><th></th></tr>
+      {% for v in row.versions %}
+      <tr>
+        <td>{{ v.created_at.strftime('%Y-%m-%d %H:%M') if v.created_at else '' }}</td>
+        <td class="{{ 'status-done' if v.status == 'production' else '' }}">{{ v.status }}</td>
+        <td>{{ v.created_by }}</td>
+        <td>
+          {% if v.status != 'production' %}
+          <form class="inline" method="post" action="/admin/prompts/{{ key }}/rollback/{{ v.id }}">
+            <button class="ghost">Откатить к этой</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

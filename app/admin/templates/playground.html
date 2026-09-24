@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% set active = 'playground' %}
+{% block content %}
+<h1>AI Playground</h1>
+<p class="sub">
+  Проверка Student AI прямо из админки, без образовательного сайта (раздел 4 дополнения к ТЗ):
+  пользовательский вид ответа и техническая панель одновременно.
+</p>
+
+<form method="post" action="/admin/playground" class="card">
+  <div class="fields">
+    <div>
+      <label for="source_type">Тип источника</label>
+      <select id="source_type" name="source_type">
+        <option value="{{ source_textbook }}" {% if source_type == source_textbook %}selected{% endif %}>Учебник</option>
+        <option value="{{ source_clinrek }}" {% if source_type == source_clinrek %}selected{% endif %}>Клинрек</option>
+      </select>
+    </div>
+    <div>
+      <label for="subject">Предмет/категория (необязательно)</label>
+      <input id="subject" name="subject" value="{{ subject }}" list="subject-options" autocapitalize="off">
+      <datalist id="subject-options">
+        {% for code, label in subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </datalist>
+    </div>
+  </div>
+  <div style="margin-top:12px">
+    <label for="question">Вопрос</label>
+    <textarea id="question" name="question" rows="3" style="width:100%" required>{{ question }}</textarea>
+  </div>
+  <button style="margin-top:12px">Отправить</button>
+</form>
+
+{% if result %}
+<section>
+  <h1 style="font-size:18px">Ответ</h1>
+  <div class="card">
+    <p style="margin:0; white-space:pre-wrap">{{ result.answer }}</p>
+  </div>
+</section>
+
+{% if result.citations %}
+<section>
+  <h1 style="font-size:18px">Цитаты</h1>
+  {% for c in result.citations %}
+  <div class="card" style="margin-bottom:8px; border-left:3px solid var(--accent)">
+    <div class="label">
+      [{{ c.citationId }}] {{ c.sourceTitle }}{% if c.author %} — {{ c.author }}{% endif %}
+      {% if c.page %}, стр. {{ c.page }}{% if c.pageTo and c.pageTo != c.page %}–{{ c.pageTo }}{% endif %}{% endif %}
+      {% if c.section %} · {{ c.section }}{% endif %}
+    </div>
+    <p style="margin:8px 0 0; white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:6px">{{ c.exactSupportingText }}</p>
+    <div class="note" style="margin-top:6px">
+      {{ c.authorityLevel or '—' }} · {{ c.verificationStatus or '—' }}
+      {% set ev = evidence_by_id.get(c.evidenceId) %}
+      {% if ev and ev.url %}
+      · <a href="{{ ev.url }}" target="_blank" rel="noopener">Открыть оригинал</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if result.conflicts %}
+<section>
+  <h1 style="font-size:18px">Конфликты источников</h1>
+  {% for c in result.conflicts %}
+  <div class="card" style="margin-bottom:8px; border-left:3px solid var(--err)">
+    <div class="label">{{ c.claim }}</div>
+    <p style="margin:8px 0 0">
+      <b>{{ c.sourceATitle }}</b> vs <b>{{ c.sourceBTitle }}</b>: {{ c.difference }}
+    </p>
+    <p class="note" style="margin-top:6px">{{ c.contextRecommendation }}</p>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <h1 style="font-size:18px">Техпанель</h1>
+  <div class="grid">
+    <div class="card"><div class="label">Workflow</div><div class="value" style="font-size:16px">{{ result.workflow }}</div></div>
+    <div class="card"><div class="label">Intent</div><div class="value" style="font-size:16px">{{ result.intent }}</div></div>
+    <div class="card">
+      <div class="label">Verification</div>
+      <div class="value {{ 'status-done' if result.verified else ('status-error' if result.verified == false else '') }}" style="font-size:16px">
+        {% if result.verified is none %}не проверялось{% elif result.verified %}PASS{% else %}не подтверждён{% endif %}
+      </div>
+    </div>
+    <div class="card"><div class="label">Найдено чанков</div><div class="value" style="font-size:16px">{{ result.chunks|length }}</div></div>
+    <div class="card"><div class="label">Использовано в цитатах</div><div class="value" style="font-size:16px">{{ result.citations|length }}</div></div>
+    {% if usage %}
+    <div class="card"><div class="label">Токены</div><div class="value" style="font-size:16px">{{ usage.inputTokens }} / {{ usage.outputTokens }}</div></div>
+    <div class="card"><div class="label">Стоимость</div><div class="value" style="font-size:16px">{{ '%.3f'|format(usage.costRub) }} ₽</div></div>
+    {% endif %}
+    <div class="card"><div class="label">Задержка</div><div class="value" style="font-size:16px">{{ result.diagnostics.totalMs }} мс</div></div>
+  </div>
+</section>
+
+<section>
+  <details>
+    <summary style="cursor:pointer; font-weight:600">Inspector Mode — весь pipeline</summary>
+    <pre style="white-space:pre-wrap; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:8px">{{ result.diagnostics | tojson(indent=2) }}</pre>
+  </details>
+</section>
+{% endif %}
+{% endblock %}

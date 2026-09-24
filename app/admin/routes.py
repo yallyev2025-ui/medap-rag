@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import tempfile
@@ -21,8 +22,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app.admin.stats import dashboard_stats
+from app.evidence.viewer import fetch_evidence
+from app.llm.prompts import clear_cache
 from app.llm.registry import model_registry
 from app.llm.task_map import task_model_map
+from app.llm.usage import usage_for_request
 from app.observability.context import request_context
 from app.security.audit import audit
 from app.security.auth import (
@@ -31,20 +35,35 @@ from app.security.auth import (
     is_admin,
     issue_admin_session,
 )
+from app.workflows.ask import ask
 from config import settings
 from constants import (
     AUTHORITY_LEVELS,
     DEFAULT_AUTHORITY_LEVEL,
     DEFAULT_VERIFICATION_STATUS,
+    FEEDBACK_REASONS,
     SOURCE_CLINREK,
     SOURCE_STATUSES,
     SOURCE_TEXTBOOK,
     SUBJECT_LABELS,
     VERIFICATION_STATUSES,
 )
-from db.crud import delete_book, list_books, update_book
-from db.models import IngestJob
+from db.crud import (
+    create_eval_case,
+    current_prompt,
+    delete_book,
+    list_answer_logs,
+    list_books,
+    list_eval_cases,
+    list_prompt_versions,
+    publish_prompt,
+    set_answer_feedback,
+    update_book,
+)
+from db.models import IngestJob, PromptVersion
 from db.session import async_session
+from evals.run import run_eval
+from rag.generator import PROMPT_DEFAULTS
 from rag.retriever import retrieve_with_diagnostics
 
 logger = logging.getLogger(__name__)
@@ -67,6 +86,12 @@ _ingest_tasks_by_job: dict[int, asyncio.Task] = {}
 
 # Расширения, которые умеет разбирать rag/processor.py.
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+
+# Последние прогоны /admin/evals — для сравнения «до/после» в текущей сессии
+# процесса. Не персистится на диск: файловая система Timeweb эфемерна между
+# деплоями, а прогон и так можно повторить в любой момент.
+_recent_eval_reports: list[dict] = []
+_MAX_RECENT_REPORTS = 5
 
 
 def _login_redirect() -> RedirectResponse:
@@ -475,3 +500,266 @@ async def set_source_status(request: Request, book_id: int, status: str = Form(.
         await session.commit()
     await audit("source_status", target=title, details=f"book_id={book_id}, status={status}")
     return RedirectResponse(url="/admin/sources", status_code=303)
+
+
+# --- AI Playground (раздел 4 дополнения к ТЗ) ------------------------------------
+
+
+@router.get("/playground", response_class=HTMLResponse)
+async def playground_form(request: Request):
+    if not is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        {
+            "subjects": SUBJECT_LABELS,
+            "source_textbook": SOURCE_TEXTBOOK,
+            "source_clinrek": SOURCE_CLINREK,
+            "result": None,
+            "usage": None,
+            "evidence_by_id": {},
+            "question": "",
+            "subject": "",
+            "source_type": SOURCE_TEXTBOOK,
+        },
+    )
+
+
+@router.post("/playground", response_class=HTMLResponse)
+async def playground_run(
+    request: Request,
+    question: str = Form(...),
+    source_type: str = Form(SOURCE_TEXTBOOK),
+    subject: str = Form(""),
+):
+    """Проверка Student AI прямо из админки, без образовательного сайта (раздел
+    4 дополнения к ТЗ): пользовательский вид ответа + техпанель одновременно."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    subject_value = subject.strip().lower() or None
+    with request_context(user_id="admin", channel="admin", workflow="PLAYGROUND"):
+        result = await ask(question, source_type=source_type, subject=subject_value)
+
+    usage = (
+        await usage_for_request(result.request_id)
+        if result.request_id
+        else {"calls": 0, "inputTokens": 0, "outputTokens": 0, "costRub": 0.0}
+    )
+
+    # «Открыть оригинал» под каждой цитатой (presigned S3, если источник его
+    # предоставляет — см. app/evidence/viewer.py). Тот же lookup, что и у
+    # /v1/evidence/{id}, не дублируем DB-запрос и presign.
+    evidence_by_id = {}
+    for c in result.citations:
+        detail = await fetch_evidence(int(c["evidenceId"]))
+        if detail is not None:
+            evidence_by_id[c["evidenceId"]] = detail
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        {
+            "subjects": SUBJECT_LABELS,
+            "source_textbook": SOURCE_TEXTBOOK,
+            "source_clinrek": SOURCE_CLINREK,
+            "result": result,
+            "usage": usage,
+            "evidence_by_id": evidence_by_id,
+            "question": question,
+            "subject": subject,
+            "source_type": source_type,
+        },
+    )
+
+
+# --- Answer Inspector (раздел 8 дополнения к ТЗ) ---------------------------------
+
+
+def _answer_view(log) -> dict:
+    """AnswerLog с распарсенными JSON-полями — для шаблонов (см. db.models.AnswerLog)."""
+    return {
+        "id": log.id,
+        "request_id": log.request_id,
+        "channel": log.channel,
+        "user_id": log.user_id,
+        "question": log.question,
+        "answer": log.answer,
+        "subject": log.subject,
+        "workflow": log.workflow,
+        "intent": log.intent,
+        "verified": log.verified,
+        "latency_ms": log.latency_ms,
+        "created_at": log.created_at,
+        "citations": json.loads(log.citations),
+        "conflicts": json.loads(log.conflicts),
+        "diagnostics": json.loads(log.diagnostics),
+        "feedback_reason": log.feedback_reason,
+        "feedback_note": log.feedback_note,
+    }
+
+
+@router.get("/answers", response_class=HTMLResponse)
+async def answers_list(request: Request, verified: str = "", flagged: str = ""):
+    if not is_admin(request):
+        return _login_redirect()
+    verified_filter = {"true": True, "false": False}.get(verified)
+    async with async_session() as session:
+        logs = await list_answer_logs(session, verified=verified_filter, only_flagged=bool(flagged))
+    return templates.TemplateResponse(
+        request,
+        "answers.html",
+        {
+            "logs": [_answer_view(log) for log in logs],
+            "verified_filter": verified,
+            "flagged_filter": flagged,
+            "feedback_reasons": FEEDBACK_REASONS,
+        },
+    )
+
+
+@router.post("/answers/{answer_id}/feedback")
+async def answers_feedback(
+    request: Request, answer_id: int, reason: str = Form(""), note: str = Form("")
+):
+    """Разбор плохого ответа (раздел 8/9 дополнения к ТЗ) — причина видна в
+    списке, дальше по ней можно добавить кейс в Evals (раздел 13)."""
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        log = await set_answer_feedback(session, answer_id, reason, note)
+        if log is None:
+            await session.commit()
+            return RedirectResponse(url="/admin/answers?error=not_found", status_code=303)
+        await session.commit()
+    await audit("answer_feedback", target=str(answer_id), details=f"reason={reason}")
+    return RedirectResponse(url="/admin/answers", status_code=303)
+
+
+# --- Prompts & Policies (раздел 10 дополнения к ТЗ, упрощённая версия) -----------
+
+
+@router.get("/prompts", response_class=HTMLResponse)
+async def prompts_list(request: Request):
+    """Редактирование → публикация → откат, без автоматического eval-гейта перед
+    публикацией (сознательное упрощение полного DRAFT→TEST→EVAL→PUBLISH из ТЗ —
+    см. plans/medap-ai/03_evidence.md). Константы в rag/generator.py остаются
+    дефолтом, пока для ключа нет production-версии в БД."""
+    if not is_admin(request):
+        return _login_redirect()
+    rows = {}
+    async with async_session() as session:
+        for key, default in PROMPT_DEFAULTS.items():
+            active = await current_prompt(session, key)
+            versions = await list_prompt_versions(session, key)
+            rows[key] = {
+                "content": active.content if active else default,
+                "is_default": active is None,
+                "versions": versions,
+            }
+    return templates.TemplateResponse(request, "prompts.html", {"rows": rows})
+
+
+@router.post("/prompts/{key}/publish")
+async def prompts_publish(request: Request, key: str, content: str = Form(...)):
+    if not is_admin(request):
+        return _login_redirect()
+    if key not in PROMPT_DEFAULTS:
+        return RedirectResponse(url="/admin/prompts?error=bad_key", status_code=303)
+    async with async_session() as session:
+        await publish_prompt(session, key, content, created_by="admin")
+        await session.commit()
+    clear_cache(key)
+    await audit("prompt_publish", target=key)
+    return RedirectResponse(url="/admin/prompts", status_code=303)
+
+
+@router.post("/prompts/{key}/rollback/{version_id}")
+async def prompts_rollback(request: Request, key: str, version_id: int):
+    """Откатывает к тексту старой версии, публикуя его КАК НОВУЮ версию — история
+    не переписывается, видно, что и когда откатывали."""
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        old = await session.get(PromptVersion, version_id)
+        if old is None or old.prompt_key != key:
+            await session.commit()
+            return RedirectResponse(url="/admin/prompts?error=not_found", status_code=303)
+        await publish_prompt(session, key, old.content, created_by="admin(rollback)")
+        await session.commit()
+    clear_cache(key)
+    await audit("prompt_rollback", target=key, details=f"from version_id={version_id}")
+    return RedirectResponse(url="/admin/prompts", status_code=303)
+
+
+# --- Evals (раздел 13 дополнения к ТЗ) -------------------------------------------
+
+
+@router.get("/evals", response_class=HTMLResponse)
+async def evals_page(request: Request, prefill_question: str = "", prefill_subject: str = ""):
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        db_cases = await list_eval_cases(session)
+    return templates.TemplateResponse(
+        request,
+        "evals.html",
+        {
+            "db_cases": db_cases,
+            "reports": list(reversed(_recent_eval_reports)),
+            "source_textbook": SOURCE_TEXTBOOK,
+            "source_clinrek": SOURCE_CLINREK,
+            "prefill_question": prefill_question,
+            "prefill_subject": prefill_subject,
+        },
+    )
+
+
+@router.post("/evals/add")
+async def evals_add(
+    request: Request,
+    question: str = Form(...),
+    category: str = Form("uncategorized"),
+    answerable: str = Form("true"),
+    source_type: str = Form(SOURCE_TEXTBOOK),
+    subject: str = Form(""),
+    expect_source: str = Form(""),
+    expect_page: str = Form(""),
+    expect_keywords: str = Form(""),
+    note: str = Form(""),
+):
+    """Кнопка «Добавить в Eval Dataset» (раздел 9/13 дополнения к ТЗ) — можно
+    предзаполнить из строки Answer Inspector query-параметрами."""
+    if not is_admin(request):
+        return _login_redirect()
+    keywords = [k.strip() for k in expect_keywords.split(",") if k.strip()] or None
+    async with async_session() as session:
+        await create_eval_case(
+            session,
+            question=question.strip(),
+            category=category.strip() or "uncategorized",
+            answerable=answerable == "true",
+            source_type=source_type,
+            subject=subject.strip().lower() or None,
+            expect_source=expect_source.strip() or None,
+            expect_page=int(expect_page) if expect_page.strip().isdigit() else None,
+            expect_keywords=json.dumps(keywords, ensure_ascii=False) if keywords else None,
+            note=note.strip() or None,
+        )
+        await session.commit()
+    await audit("eval_case_add", target=question[:80])
+    return RedirectResponse(url="/admin/evals", status_code=303)
+
+
+@router.post("/evals/run")
+async def evals_run(request: Request, retrieval_only: str = Form("")):
+    """Синхронный прогон (в рамках одного HTTP-запроса — датасет пока небольшой;
+    если вырастет, потребуется фоновая задача по аналогии с _run_ingest)."""
+    if not is_admin(request):
+        return _login_redirect()
+    report = await run_eval(retrieval_only=bool(retrieval_only))
+    _recent_eval_reports.append(report)
+    del _recent_eval_reports[:-_MAX_RECENT_REPORTS]
+    await audit("eval_run", details=f"cases={report['summary']['cases']}")
+    return RedirectResponse(url="/admin/evals", status_code=303)
