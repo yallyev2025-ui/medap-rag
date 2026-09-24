@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     # Отдельный лимит именно на загрузку документа — не делит квоту с обычными вопросами.
     USER_DOCUMENT_UPLOAD_PER_MINUTE: int = 3
 
+    # --- Web Research (§19, §34, этап 4A.6) — фетч ОДНОЙ страницы по URL ----------
+    WEB_RESEARCH_TIMEOUT_SECONDS: float = 10.0
+    # Лимит размера страницы (КБ) — до извлечения текста.
+    WEB_RESEARCH_MAX_KB: int = 2048
+    # Сколько текста страницы реально уходит в промпт (символы) — дальше отсекается.
+    WEB_RESEARCH_MAX_CHARS: int = 12000
+
     # --- Версии для воспроизводимости ответа (§35) --------------------------------
     PROMPT_VERSION: str = "v1"
     RETRIEVAL_VERSION: str = "v2-hybrid-bm25-rrf"

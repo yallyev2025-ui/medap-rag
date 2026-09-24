@@ -239,4 +239,36 @@
   </div>
   {% endif %}
 </section>
+
+<section>
+  <h1 style="font-size:18px">Web Research — предпросмотр</h1>
+  <p class="sub">
+    Ответ по ОДНОЙ конкретной странице по URL (§19, §34 ТЗ) — не общий поиск по интернету.
+    Отдельно от ответа по учебникам, никогда не помечается verified. Удобно проверить вручную
+    блокировку приватных адресов и устойчивость к инъекции в содержимом страницы.
+  </p>
+  <form method="post" action="/admin/playground/web-research" class="card">
+    <div>
+      <label for="research_url">URL страницы</label>
+      <input id="research_url" name="research_url" value="{{ research_url }}" style="width:100%" required>
+    </div>
+    <div style="margin-top:12px">
+      <label for="research_question">Вопрос (необязательно — иначе краткое изложение)</label>
+      <input id="research_question" name="research_question" value="{{ research_question }}" style="width:100%">
+    </div>
+    <button style="margin-top:12px">Изучить страницу</button>
+  </form>
+
+  {% if research_result %}
+  <div class="card" style="margin-top:12px">
+    {% if research_result.error %}
+    <p class="note status-error">{{ research_result.error }}</p>
+    {% else %}
+    <p class="note">⚠️ Веб-источник, не проверено (authority_level="web")</p>
+    <div class="label">{{ research_result.source_title or research_result.url }}</div>
+    <p style="margin:8px 0 0; white-space:pre-wrap">{{ research_result.answer }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
 {% endblock %}

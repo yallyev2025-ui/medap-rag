@@ -31,6 +31,7 @@ from app.workflows.user_documents import (
     list_user_documents,
 )
 from app.workflows.vision import TestSolveResult, solve_from_image
+from app.workflows.web_research import WebResearchResult, research_url
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
 from rag.retriever import retrieve
@@ -561,3 +562,48 @@ async def documents_delete(document_id: int, userId: str, request: Request) -> D
     with request_context(user_id=userId, channel="api", workflow="DOCUMENT_QA"):
         deleted = await delete_user_document(userId, document_id)
     return DocumentDeleteResponse(deleted=deleted)
+
+
+# --- Web Research (§19, §34 ТЗ, этап 4A.6) -------------------------------------
+# Одна конкретная страница по URL — не общий поиск по интернету (никакого
+# поискового API в репозитории не сконфигурировано). Отдельно от ответа по
+# учебникам: не идёт через retrieve()/generate_answer(), никогда не verified.
+
+
+class WebResearchRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+    question: str | None = None
+    context: StudentAIContext
+
+
+class WebResearchResponse(BaseModel):
+    url: str
+    answer: str
+    sourceTitle: str | None = None
+    # Последний по приоритету в constants.AUTHORITY_LEVELS — веб-контент никогда
+    # не становится verified автоматически (§19, §34).
+    authorityLevel: str = "web"
+    verified: bool | None = None
+    error: str | None = None
+    requestId: str | None = None
+
+
+def _web_research_response(result: WebResearchResult) -> WebResearchResponse:
+    return WebResearchResponse(
+        url=result.url,
+        answer=result.answer,
+        sourceTitle=result.source_title,
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.post("/web/research", response_model=WebResearchResponse)
+async def web_research_endpoint(payload: WebResearchRequest, request: Request) -> WebResearchResponse:
+    """Web Research (§19, §34 ТЗ, этап 4A.6): по конкретному URL — не общий поиск.
+    SSRF-защита (app/security/ssrf.py) выполняется до первого байта ответа страницы;
+    содержимое страницы передаётся модели как данные для анализа, не инструкции."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_RESEARCH"):
+        result = await research_url(payload.url, payload.question)
+    return _web_research_response(result)

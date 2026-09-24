@@ -38,6 +38,7 @@ from app.security.auth import (
 from app.workflows.ask import ask
 from app.workflows.evaluate import evaluate_free_recall, evaluate_recall
 from app.workflows.quick_outline import generate_quick_outline
+from app.workflows.web_research import research_url
 from config import settings
 from constants import (
     ALLOWED_UPLOAD_EXTENSIONS,
@@ -528,6 +529,9 @@ def _playground_context(**overrides) -> dict:
         "outline_json": "",
         "outline_topic": "",
         "outline_subject": "",
+        "research_result": None,
+        "research_url": "",
+        "research_question": "",
     }
     base.update(overrides)
     return base
@@ -653,6 +657,32 @@ async def playground_quick_outline(
             outline_json=outline_json,
             outline_topic=outline_topic,
             outline_subject=outline_subject,
+        ),
+    )
+
+
+@router.post("/playground/web-research", response_class=HTMLResponse)
+async def playground_web_research(
+    request: Request,
+    research_url_value: str = Form(..., alias="research_url"),
+    research_question: str = Form(""),
+):
+    """Предпросмотр Web Research (§19, §34 ТЗ) — та же функция, что и
+    POST /v1/web/research; здесь удобно вручную проверить блокировку SSRF и
+    устойчивость к инъекции в содержимом страницы."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    with request_context(user_id="admin", channel="admin", workflow="WEB_RESEARCH"):
+        result = await research_url(research_url_value, research_question.strip() or None)
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(
+            research_result=result,
+            research_url=research_url_value,
+            research_question=research_question,
         ),
     )
 

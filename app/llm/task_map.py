@@ -26,6 +26,9 @@ class Task(str, Enum):
     TEST_SOLVE_TEXT = "TEST_SOLVE_TEXT"
     DOCUMENT_QA = "DOCUMENT_QA"
     TARGETED_REPAIR = "TARGETED_REPAIR"
+    # Web Research (§19, §34 ТЗ, этап 4A.6) — заземлённый ответ по тексту ОДНОЙ
+    # загруженной веб-страницы, та же группа, что GROUNDED_QA/DOCUMENT_QA.
+    WEB_RESEARCH = "WEB_RESEARCH"
     # Quick Outline (раздел "Quick Outline" дополнения к ТЗ) — заземлённая генерация
     # строго типизированной схемы по учебникам для сайта владельца, не студенческий Q&A.
     QUICK_OUTLINE = "QUICK_OUTLINE"
@@ -48,6 +51,7 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.TEST_SOLVE_TEXT: DEEPSEEK,
     Task.DOCUMENT_QA: DEEPSEEK,
     Task.TARGETED_REPAIR: DEEPSEEK,
+    Task.WEB_RESEARCH: DEEPSEEK,
     Task.QUICK_OUTLINE: DEEPSEEK,
     Task.VISION_EXTRACT: OPENAI,
     Task.RECALL_EVALUATE: OPENAI,
