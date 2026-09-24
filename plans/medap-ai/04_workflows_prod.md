@@ -15,10 +15,19 @@
   запускал клинреко-врачебные промпты (`generate_differential`/`generate_multi`) даже для
   `source_type='учебник'`, если `detect_intent()` ошибочно распознавал студенческий вопрос как разбор
   симптомов — теперь эта ветка работает только при `source_type='клинрек'`.
-- **Батч 2 (следующий):** 4A.2 оценка ответов (Recall/Free-recall/Oral) + 4A.3 диагностика ошибок и
-  repair — вместе, т.к. repair по спецификации питается результатом оценки (`Student Answer →
-  Evaluation → Error Extraction → ... → Targeted Repair`), отдельно от EXPLAIN/CLASS_QUICK делать
-  бессмысленно.
+- **Батч 2 (готов):** 4A.2 оценка ответов Recall/Free-recall (текстовые — Oral требует голоса,
+  оставлен в батче 6) + 4A.3 диагностика ошибок и repair. `app/workflows/evaluate.py` —
+  сравнение не пословно с эталоном, а с материалами по теме (тот же retrieval, что и обычные
+  вопросы); формальных Knowledge Units в репозитории нет (`BookChunk.knowledge_unit_ids`
+  зарезервировано, не заполняется), поэтому covered/missing — пункты темы из найденного контекста.
+  Найденные ошибки (incorrect/causalErrors/contradictions) автоматически запускают
+  `generate_repair()` (rag/generator.py) — короткую адресную коррекцию, не повторную лекцию.
+  `evidenceReferences` — реальные citations из retrieval, не выдумываются моделью. AI не возвращает
+  mastery score (§21/§25) — только сырую структурированную оценку. API: `POST /v1/evaluate/recall`,
+  `POST /v1/evaluate/free-answer`, `POST /v1/repair` (отдельно, если оценка уже была). Проверить можно
+  в админке: `/admin/playground` → секция «Оценка ответа студента». `/v1/errors/diagnose` отдельным
+  эндпоинтом не сделан — то же самое уже возвращают `incorrect`/`causalErrors`/`contradictions` в
+  ответе evaluate.
 - **Батч 3:** 4A.4 Vision/Test Solver.
 - **Батч 4:** 4A.5 документы пользователя.
 - **Батч 5:** 4A.6 веб-поиск.

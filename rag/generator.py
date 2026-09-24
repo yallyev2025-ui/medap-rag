@@ -616,6 +616,43 @@ async def generate_fallback(question: str) -> str:
     )
 
 
+# --- Targeted Repair (§23 ТЗ, этап 4A.3) ----------------------------------------
+
+REPAIR_SYSTEM_PROMPT = """Ты — медицинский ассистент MedAP. Студент ответил на вопрос с ошибками (они перечислены ниже).
+Дай КОРОТКУЮ АДРЕСНУЮ коррекцию — объясни именно эти ошибки, опираясь строго на контекст. Не повторяй тему целиком и не читай лекцию заново: только то, что нужно, чтобы студент исправил именно перечисленные ошибки. 2–5 предложений, по-русски."""
+
+REPAIR_USER_TEMPLATE = """Вопрос: {question}
+
+Ошибки студента:
+{errors}
+
+Материалы:
+{context}"""
+
+
+async def generate_repair(question: str, errors: list[str], chunks: list[ChunkResult]) -> GeneratedAnswer:
+    """Короткая адресная коррекция после диагностики ошибок — не повторная лекция,
+    а точечное исправление конкретно найденных ошибок (§23 ТЗ)."""
+    context = build_context(chunks)
+    if context == NO_CONTEXT_PLACEHOLDER or not errors:
+        return GeneratedAnswer("", verified=None)
+
+    repair_prompt = await get_prompt("REPAIR_SYSTEM_PROMPT", REPAIR_SYSTEM_PROMPT)
+    user_prompt = REPAIR_USER_TEMPLATE.format(
+        question=question, errors="\n".join(f"- {e}" for e in errors), context=context
+    )
+    answer = await _complete(repair_prompt, user_prompt, GENERATION_TEMPERATURE, Task.TARGETED_REPAIR)
+
+    async def correct(issues: str) -> str:
+        correction_prompt = user_prompt + (
+            f"\n\nВ предыдущей коррекции есть проблема: {issues}\n"
+            "Исправь, используя ТОЛЬКО материалы выше."
+        )
+        return await _complete(repair_prompt, correction_prompt, GENERATION_TEMPERATURE, Task.TARGETED_REPAIR)
+
+    return await _verify_and_repair(context, answer, correct)
+
+
 # Ключи, редактируемые в Prompts & Policies (app/admin) — дефолт (константа выше),
 # если для ключа ещё нет production-версии в БД. См. app/llm/prompts.get_prompt.
 PROMPT_DEFAULTS: dict[str, str] = {
@@ -624,4 +661,5 @@ PROMPT_DEFAULTS: dict[str, str] = {
     "FALLBACK_SYSTEM_PROMPT": FALLBACK_SYSTEM_PROMPT,
     "DIFFERENTIAL_SYSTEM_PROMPT": DIFFERENTIAL_SYSTEM_PROMPT,
     "MULTI_SYSTEM_PROMPT": MULTI_SYSTEM_PROMPT,
+    "REPAIR_SYSTEM_PROMPT": REPAIR_SYSTEM_PROMPT,
 }

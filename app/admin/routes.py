@@ -36,6 +36,7 @@ from app.security.auth import (
     issue_admin_session,
 )
 from app.workflows.ask import ask
+from app.workflows.evaluate import evaluate_free_recall, evaluate_recall
 from config import settings
 from constants import (
     AUTHORITY_LEVELS,
@@ -505,25 +506,32 @@ async def set_source_status(request: Request, book_id: int, status: str = Form(.
 # --- AI Playground (раздел 4 дополнения к ТЗ) ------------------------------------
 
 
+def _playground_context(**overrides) -> dict:
+    base = {
+        "subjects": SUBJECT_LABELS,
+        "source_textbook": SOURCE_TEXTBOOK,
+        "source_clinrek": SOURCE_CLINREK,
+        "result": None,
+        "usage": None,
+        "evidence_by_id": {},
+        "question": "",
+        "subject": "",
+        "source_type": SOURCE_TEXTBOOK,
+        "eval_result": None,
+        "eval_question": "",
+        "eval_answer": "",
+        "eval_subject": "",
+        "eval_mode": "recall",
+    }
+    base.update(overrides)
+    return base
+
+
 @router.get("/playground", response_class=HTMLResponse)
 async def playground_form(request: Request):
     if not is_admin(request):
         return _login_redirect()
-    return templates.TemplateResponse(
-        request,
-        "playground.html",
-        {
-            "subjects": SUBJECT_LABELS,
-            "source_textbook": SOURCE_TEXTBOOK,
-            "source_clinrek": SOURCE_CLINREK,
-            "result": None,
-            "usage": None,
-            "evidence_by_id": {},
-            "question": "",
-            "subject": "",
-            "source_type": SOURCE_TEXTBOOK,
-        },
-    )
+    return templates.TemplateResponse(request, "playground.html", _playground_context())
 
 
 @router.post("/playground", response_class=HTMLResponse)
@@ -560,17 +568,48 @@ async def playground_run(
     return templates.TemplateResponse(
         request,
         "playground.html",
-        {
-            "subjects": SUBJECT_LABELS,
-            "source_textbook": SOURCE_TEXTBOOK,
-            "source_clinrek": SOURCE_CLINREK,
-            "result": result,
-            "usage": usage,
-            "evidence_by_id": evidence_by_id,
-            "question": question,
-            "subject": subject,
-            "source_type": source_type,
-        },
+        _playground_context(
+            result=result,
+            usage=usage,
+            evidence_by_id=evidence_by_id,
+            question=question,
+            subject=subject,
+            source_type=source_type,
+        ),
+    )
+
+
+@router.post("/playground/evaluate", response_class=HTMLResponse)
+async def playground_evaluate(
+    request: Request,
+    eval_question: str = Form(...),
+    eval_answer: str = Form(...),
+    eval_subject: str = Form(""),
+    eval_mode: str = Form("recall"),
+):
+    """Проверка оценки ответа студента (§21 ТЗ, этап 4A.2) прямо из админки —
+    тот же workflow, что и у /v1/evaluate/recall и /v1/evaluate/free-answer."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    subject_value = eval_subject.strip().lower() or None
+    workflow = "FREE_RECALL_EVALUATION" if eval_mode == "free_recall" else "RECALL_EVALUATION"
+    with request_context(user_id="admin", channel="admin", workflow=workflow):
+        if eval_mode == "free_recall":
+            eval_result = await evaluate_free_recall(eval_question, eval_answer, subject=subject_value)
+        else:
+            eval_result = await evaluate_recall(eval_question, eval_answer, subject=subject_value)
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(
+            eval_result=eval_result,
+            eval_question=eval_question,
+            eval_answer=eval_answer,
+            eval_subject=eval_subject,
+            eval_mode=eval_mode,
+        ),
     )
 
 

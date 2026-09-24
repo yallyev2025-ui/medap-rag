@@ -18,7 +18,10 @@ from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
 from app.security.auth import rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
+from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_recall
 from constants import SOURCE_TEXTBOOK
+from rag.generator import generate_repair
+from rag.retriever import retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +123,67 @@ class EvidenceDetail(BaseModel):
     url: str | None = None
 
 
+class EvaluateRequest(BaseModel):
+    """Recall — ответ на конкретный вопрос; Free-recall — свободное воспроизведение
+    темы (§21 ТЗ, этап 4A.2). В обоих случаях `question` — то, по чему искать
+    материалы (вопрос или тема), `studentAnswer` — текст, который оценивается."""
+
+    question: str = Field(..., min_length=1)
+    studentAnswer: str = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+class EvaluationResponse(BaseModel):
+    """AI НЕ возвращает mastery score — только сырую структурированную оценку;
+    решение, как обновлять состояние обучения, принимает продуктовый backend (§21, §25)."""
+
+    covered: list[str]
+    missing: list[str]
+    incorrect: list[str]
+    partiallyCorrect: list[str]
+    causalErrors: list[str]
+    terminologyErrors: list[str]
+    contradictions: list[str]
+    unsupportedStatements: list[str]
+    overallFeedback: str
+    evidenceReferences: list[Citation]
+    # Короткая адресная коррекция (§23) — только если найдены ошибки, иначе None.
+    repair: str | None = None
+    requestId: str | None = None
+
+
+def _evaluation_response(result: EvaluationResult) -> EvaluationResponse:
+    return EvaluationResponse(
+        covered=result.covered,
+        missing=result.missing,
+        incorrect=result.incorrect,
+        partiallyCorrect=result.partially_correct,
+        causalErrors=result.causal_errors,
+        terminologyErrors=result.terminology_errors,
+        contradictions=result.contradictions,
+        unsupportedStatements=result.unsupported_statements,
+        overallFeedback=result.overall_feedback,
+        evidenceReferences=[Citation(**c) for c in result.evidence_references],
+        repair=result.repair,
+        requestId=result.request_id,
+    )
+
+
+class RepairRequest(BaseModel):
+    """Точечная коррекция без повторной оценки — когда ошибки уже известны
+    (например, из предыдущего /v1/evaluate/recall)."""
+
+    question: str = Field(..., min_length=1)
+    errors: list[str] = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+class RepairResponse(BaseModel):
+    repair: str
+    verified: bool | None = None
+    requestId: str | None = None
+
+
 async def _answer(payload: ChatRequest, request: Request, forced_workflow: str | None = None) -> ChatResponse:
     rate_limiter.check(payload.context.userId)
 
@@ -195,3 +259,48 @@ async def get_evidence(evidence_id: int, request: Request) -> EvidenceDetail:
         verificationStatus=detail.verification_status,
         url=detail.url,
     )
+
+
+@router.post("/evaluate/recall", response_model=EvaluationResponse)
+async def evaluate_recall_endpoint(payload: EvaluateRequest, request: Request) -> EvaluationResponse:
+    """Студент отвечает на конкретный вопрос — структурированная оценка по
+    материалам (§21 ТЗ, этап 4A.2), не пословное сравнение с эталоном."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="RECALL_EVALUATION"):
+        result = await evaluate_recall(
+            payload.question,
+            payload.studentAnswer,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return _evaluation_response(result)
+
+
+@router.post("/evaluate/free-answer", response_model=EvaluationResponse)
+async def evaluate_free_answer_endpoint(payload: EvaluateRequest, request: Request) -> EvaluationResponse:
+    """Студент свободно воспроизводит тему целиком (не отвечает на точечный
+    вопрос) — тот же механизм оценки, что и recall."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="FREE_RECALL_EVALUATION"):
+        result = await evaluate_free_recall(
+            payload.question,
+            payload.studentAnswer,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return _evaluation_response(result)
+
+
+@router.post("/repair", response_model=RepairResponse)
+async def repair(payload: RepairRequest, request: Request) -> RepairResponse:
+    """Точечная коррекция по уже известным ошибкам (§23 ТЗ, этап 4A.3) — без
+    повторной оценки, если она уже была сделана раньше (например, evaluate/recall)."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="TARGETED_REPAIR") as ctx:
+        chunks = await retrieve(
+            payload.question,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+        result = await generate_repair(payload.question, payload.errors, chunks)
+    return RepairResponse(repair=result.text, verified=result.verified, requestId=ctx.request_id)

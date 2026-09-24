@@ -105,4 +105,86 @@
   </details>
 </section>
 {% endif %}
+
+<section>
+  <h1 style="font-size:18px">Оценка ответа студента (этап 4A.2)</h1>
+  <p class="sub">
+    Recall — ответ на конкретный вопрос; Free-recall — свободное воспроизведение темы целиком.
+    Сравнение идёт с материалами по теме, не пословно с эталоном.
+  </p>
+  <form method="post" action="/admin/playground/evaluate" class="card">
+    <div class="fields">
+      <div>
+        <label for="eval_mode">Режим</label>
+        <select id="eval_mode" name="eval_mode">
+          <option value="recall" {% if eval_mode == 'recall' %}selected{% endif %}>Recall (вопрос → ответ)</option>
+          <option value="free_recall" {% if eval_mode == 'free_recall' %}selected{% endif %}>Free-recall (тема целиком)</option>
+        </select>
+      </div>
+      <div>
+        <label for="eval_subject">Предмет (необязательно)</label>
+        <input id="eval_subject" name="eval_subject" value="{{ eval_subject }}" list="subject-options" autocapitalize="off">
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <label for="eval_question">Вопрос / тема</label>
+      <input id="eval_question" name="eval_question" value="{{ eval_question }}" style="width:100%" required>
+    </div>
+    <div style="margin-top:12px">
+      <label for="eval_answer">Ответ студента</label>
+      <textarea id="eval_answer" name="eval_answer" rows="4" style="width:100%" required>{{ eval_answer }}</textarea>
+    </div>
+    <button style="margin-top:12px">Оценить</button>
+  </form>
+
+  {% if eval_result %}
+  <div class="card" style="margin-top:12px">
+    <p style="margin:0 0 10px"><b>{{ eval_result.overall_feedback }}</b></p>
+    <div class="grid">
+      <div>
+        <div class="label status-done">Покрыто верно</div>
+        <ul>{% for x in eval_result.covered %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label">Пропущено</div>
+        <ul>{% for x in eval_result.missing %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label status-error">Неверно</div>
+        <ul>{% for x in eval_result.incorrect %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label">Частично верно</div>
+        <ul>{% for x in eval_result.partially_correct %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label status-error">Ошибки причинно-следственных связей</div>
+        <ul>{% for x in eval_result.causal_errors %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label">Ошибки терминологии</div>
+        <ul>{% for x in eval_result.terminology_errors %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label status-error">Противоречия материалу</div>
+        <ul>{% for x in eval_result.contradictions %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+      <div>
+        <div class="label">Не подтверждено контекстом</div>
+        <ul>{% for x in eval_result.unsupported_statements %}<li>{{ x }}</li>{% endfor %}</ul>
+      </div>
+    </div>
+    {% if eval_result.repair %}
+    <div class="note" style="margin-top:10px; padding:8px; background:var(--bg); border-radius:6px">
+      <b>Адресная коррекция:</b> {{ eval_result.repair }}
+    </div>
+    {% endif %}
+    {% if eval_result.evidence_references %}
+    <p class="note" style="margin-top:10px">
+      По материалам: {% for c in eval_result.evidence_references %}{{ c.sourceTitle }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
