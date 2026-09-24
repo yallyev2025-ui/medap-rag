@@ -75,6 +75,9 @@ async def init_db() -> None:
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS char_start INTEGER;"))
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS char_end INTEGER;"))
 
+        # Этап 4A.5: режим «спрашиваю по своему документу» у пользователя Telegram (§18 ТЗ).
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_document_id VARCHAR(64);"))
+
         # Гибридный retrieval (§7 ТЗ): лексический поиск через встроенный
         # полнотекстовый индекс Postgres — отдельный поисковый движок не нужен.
         # GENERATED ALWAYS AS ... STORED сам пересчитывает колонку для уже

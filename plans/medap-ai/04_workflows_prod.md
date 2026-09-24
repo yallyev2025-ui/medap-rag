@@ -50,7 +50,24 @@
   остальных `/v1/*`), stateless — хранения и публикации на нашей стороне нет, вызывается с отдельного
   сайта владельца. Админский Playground получил секцию-предпросмотр (`/admin/playground/quick-outline`)
   для проверки до готовности сайта-потребителя.
-- **Батч 4:** 4A.5 документы пользователя.
+- **Батч 4 (готов):** 4A.5 документы пользователя. `app/workflows/user_documents.py`:
+  `ingest_user_document()`/`ask_user_document()`/`delete_user_document()`/`list_user_documents()`.
+  Изоляция `user_id + document_id (=Book.id) + опциональный exam_id` — активированы уже
+  зарезервированные с этапа 2 поля `BookChunk.user_id`/`exam_id`; `retrieve()` (rag/retriever.py)
+  получил параметры `book_id`/`user_id`, оба фильтруются в самом SQL-запросе (защита от ошибки
+  проверки владения выше по стеку). `scripts/load_books.py::load_book()` теперь возвращает
+  `(book_id, chunks_count)` вместо просто chunks_count (без этого негде взять id личного документа) —
+  обновлены все 4 вызывающих места. Новый `Task.DOCUMENT_QA` наконец получил свою
+  `DOCUMENT_QA_MODE_INSTRUCTION` в `rag/generator.py` (тот же пробел, что был у EXPLAIN/CLASS_QUICK
+  до батча 1). API: `POST /v1/documents` (загрузка, base64 как у Vision), `GET /v1/documents`
+  (список своих документов), `POST /v1/documents/{id}/ask`, `DELETE /v1/documents/{id}` — отдельный
+  rate limit на загрузку (`USER_DOCUMENT_UPLOAD_PER_MINUTE`), не делит квоту с обычными вопросами.
+  Telegram: `bot/handlers/user_documents.py` — `F.document` загружает и включает режим «свой
+  документ» (`User.current_document_id`), дальше обычные текстовые сообщения уходят в этот документ
+  вместо общего поиска, `/exitdocument` — выход из режима. Чужой `document_id` даёт честную «не
+  найдено», а не чужие данные (проверено мок-тестом на уровне workflow). Admin Playground для личных
+  документов сознательно не делаем — это приватный контент студента, не публикуемый материал (в
+  отличие от Quick Outline).
 - **Батч 5:** 4A.6 веб-поиск.
 - **Батч 6:** 4A.7 голос.
 - **4B:** System Health (не требует реальных данных) — можно в любой момент; Content Studio/

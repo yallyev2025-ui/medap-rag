@@ -33,7 +33,9 @@ async def load_book(
     authority_level: str = DEFAULT_AUTHORITY_LEVEL,
     verification_status: str = DEFAULT_VERIFICATION_STATUS,
     language: str = "ru",
-) -> int:
+    user_id: str | None = None,
+    exam_id: str | None = None,
+) -> tuple[int, int]:
     # Извлечение текста (включая OCR сканов) и чанкинг — тяжёлая синхронная работа,
     # уводим в поток, чтобы не блокировать event loop бота во время /addbook.
     pages, paged = await asyncio.to_thread(extract_document, file_path)
@@ -104,6 +106,8 @@ async def load_book(
                             language=language,
                             char_start=chunk.char_start,
                             char_end=chunk.char_end,
+                            user_id=user_id,
+                            exam_id=exam_id,
                         )
                     )
 
@@ -114,7 +118,7 @@ async def load_book(
 
         await session.commit()
 
-    return len(chunks)
+    return book_id, len(chunks)
 
 
 def main() -> None:
@@ -127,7 +131,7 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"Извлекаю текст и разбиваю на чанки: {args.file}...")
-    chunks_count = asyncio.run(load_book(args.file, args.subject, args.author, args.title))
+    _book_id, chunks_count = asyncio.run(load_book(args.file, args.subject, args.author, args.title))
     print(f"Готово. Добавлено чанков: {chunks_count}. Можно удалить исходный файл: {args.file}")
 
 

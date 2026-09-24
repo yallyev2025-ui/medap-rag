@@ -66,6 +66,9 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
+# Отдельный лимитер на загрузку личного документа студента (§18) — не делит
+# квоту с обычными вопросами, у которых свой лимит выше.
+document_upload_rate_limiter = RateLimiter(settings.USER_DOCUMENT_UPLOAD_PER_MINUTE)
 
 
 def _serializer() -> URLSafeTimedSerializer:

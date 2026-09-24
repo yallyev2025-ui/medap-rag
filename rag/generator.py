@@ -267,6 +267,15 @@ TEST_SOLVE_MODE_INSTRUCTION = (
     "уверенно выбрать вариант — не угадывай, честно скажи, что материалов недостаточно."
 )
 
+# --- Документ пользователя (§18 ТЗ, этап 4A.5) — контекст состоит ровно из ОДНОГО
+# личного файла студента, а не из общего корпуса учебников. ---
+DOCUMENT_QA_MODE_INSTRUCTION = (
+    "Материалы ниже — это личный документ студента (конспект, старый экзамен и т.п.), "
+    "не учебник. Отвечай СТРОГО по этому документу, не подмешивай общие медицинские "
+    "знания молча — если нужного ответа в документе нет, прямо скажи, что в загруженном "
+    "документе это не покрыто, вместо того чтобы отвечать по общим знаниям без пометки."
+)
+
 # Шаблоны структуры ответа по предметам (subject из db/models.Book.subject,
 # совпадает с кодами из bot/handlers/admin.SUBJECTS). Подставляются один раз
 # в промпт по предмету найденных чанков — не генерируются заново на каждый вопрос.
@@ -504,7 +513,12 @@ async def generate_answer(
     знаний ИИ с ОБЯЗАТЕЛЬНОЙ пометкой, что это не из загруженных материалов.
     """
     is_clinrek = source_type == SOURCE_CLINREK
-    source_label = "клинических рекомендаций" if is_clinrek else "учебников"
+    if is_clinrek:
+        source_label = "клинических рекомендаций"
+    elif task is Task.DOCUMENT_QA:
+        source_label = "личного документа"
+    else:
+        source_label = "учебников"
     context = build_context(chunks)
 
     # Материалов по вопросу нет: либо приветствие/small talk, либо общий вопрос —
@@ -532,6 +546,8 @@ async def generate_answer(
         mode_instruction = CLASS_QUICK_MODE_INSTRUCTION
     elif task is Task.TEST_SOLVE_TEXT:
         mode_instruction = TEST_SOLVE_MODE_INSTRUCTION
+    elif task is Task.DOCUMENT_QA:
+        mode_instruction = DOCUMENT_QA_MODE_INSTRUCTION
     else:
         mode = detect_mode(question)
         mode_instruction = MODE_INSTRUCTIONS[mode]

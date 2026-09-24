@@ -114,6 +114,14 @@ async def set_user_selection(
     user.clinrek_symptom_mode = symptom_mode
 
 
+async def set_active_document(session: AsyncSession, user_id: int, document_id: str | None) -> None:
+    """Переключает режим «спрашиваю по своему документу» (§18, этап 4A.5). document_id=None — выход из режима."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return
+    user.current_document_id = document_id
+
+
 async def reset_chat(session: AsyncSession, user_id: int) -> None:
     """«Новая тема»: сдвигает границу — прошлые сообщения перестают учитываться в памяти."""
     user = await session.get(User, user_id)

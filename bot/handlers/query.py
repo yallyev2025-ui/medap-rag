@@ -19,6 +19,7 @@ from app.observability.context import request_context
 from app.workflows.ask import ask
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
+from bot.handlers.user_documents import handle_document_question
 from constants import SOURCE_CLINREK
 from db.crud import (
     get_or_create_user,
@@ -93,6 +94,11 @@ async def cmd_new(message: Message) -> None:
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
+    # Режим «свой документ» (§18) приоритетнее выбора учебник/клинрек.
+    if db_user.current_document_id is not None:
+        await handle_document_question(message, db_user, usage_ctx)
+        return
+
     # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
     if db_user.current_source_type is None:
         await message.answer(CHOOSE_MODE_TEXT)

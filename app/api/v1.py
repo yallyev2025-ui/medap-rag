@@ -11,16 +11,25 @@
 
 import base64
 import logging
+import os
+import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
-from app.security.auth import rate_limiter, require_service_token
+from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_recall
 from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outline
+from app.workflows.user_documents import (
+    UserDocument,
+    ask_user_document,
+    delete_user_document,
+    ingest_user_document,
+    list_user_documents,
+)
 from app.workflows.vision import TestSolveResult, solve_from_image
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
@@ -421,3 +430,134 @@ async def quick_outline_generate(payload: QuickOutlineRequest, request: Request)
             subject=payload.context.subjectId,
         )
     return _quick_outline_response(result)
+
+
+# --- Документы пользователя (§18 ТЗ, этап 4A.5) --------------------------------
+# Приватный документ студента (конспект, старый экзамен и т.п.): изоляция по
+# userId+documentId в самом retrieval (rag/retriever.py), не только на уровне API.
+
+
+class UserDocumentItem(BaseModel):
+    documentId: str
+    title: str
+    subject: str | None = None
+    chunksCount: int
+    loadedAt: str | None = None
+
+
+def _document_item(document: UserDocument) -> UserDocumentItem:
+    return UserDocumentItem(
+        documentId=str(document.id),
+        title=document.title,
+        subject=document.subject,
+        chunksCount=document.chunks_count,
+        loadedAt=document.loaded_at.isoformat() if document.loaded_at else None,
+    )
+
+
+class DocumentUploadRequest(BaseModel):
+    """Base64, тот же JSON-контракт, что у Vision — без multipart."""
+
+    filename: str = Field(..., min_length=1)
+    fileBase64: str = Field(..., min_length=1)
+    title: str | None = None
+    context: StudentAIContext
+
+
+class DocumentUploadResponse(BaseModel):
+    document: UserDocumentItem | None
+    error: str | None = None
+    requestId: str | None = None
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[UserDocumentItem]
+
+
+class DocumentAskRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+class DocumentAskResponse(BaseModel):
+    answer: str
+    verified: bool | None = None
+    citations: list[Citation]
+    error: str | None = None
+    requestId: str | None = None
+
+
+class DocumentDeleteResponse(BaseModel):
+    deleted: bool
+
+
+@router.post("/documents", response_model=DocumentUploadResponse)
+async def documents_upload(payload: DocumentUploadRequest, request: Request) -> DocumentUploadResponse:
+    """Загрузка личного документа студента (§18 ТЗ, этап 4A.5). Приватно: этот
+    документ никогда не попадает в retrieval другого пользователя и не становится
+    MedAP Verified содержимым автоматически."""
+    document_upload_rate_limiter.check(payload.context.userId)
+    try:
+        file_bytes = base64.b64decode(payload.fileBase64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="fileBase64 is not valid base64")
+
+    extension = os.path.splitext(payload.filename)[1].lower()
+    fd, tmp_path = tempfile.mkstemp(suffix=extension)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(file_bytes)
+        with request_context(user_id=payload.context.userId, channel="api", workflow="DOCUMENT_QA"):
+            result = await ingest_user_document(
+                tmp_path,
+                payload.filename,
+                user_id=payload.context.userId,
+                exam_id=payload.context.examId,
+                title=payload.title,
+                subject=payload.context.subjectId,
+            )
+    finally:
+        os.remove(tmp_path)
+
+    return DocumentUploadResponse(
+        document=_document_item(result.document) if result.document else None,
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.get("/documents", response_model=DocumentListResponse)
+async def documents_list(userId: str, request: Request) -> DocumentListResponse:
+    rate_limiter.check(userId)
+    documents = await list_user_documents(userId)
+    return DocumentListResponse(documents=[_document_item(d) for d in documents])
+
+
+@router.post("/documents/{document_id}/ask", response_model=DocumentAskResponse)
+async def documents_ask(document_id: int, payload: DocumentAskRequest, request: Request) -> DocumentAskResponse:
+    """Вопрос строго по ОДНОМУ личному документу пользователя — не по общему
+    корпусу учебников. Чужой documentId даёт честную «не найдено», а не чужие данные."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="DOCUMENT_QA"):
+        result = await ask_user_document(
+            payload.question,
+            user_id=payload.context.userId,
+            document_id=document_id,
+            exam_id=payload.context.examId,
+        )
+    return DocumentAskResponse(
+        answer=result.answer,
+        verified=result.verified,
+        citations=[Citation(**c) for c in result.evidence_references],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.delete("/documents/{document_id}", response_model=DocumentDeleteResponse)
+async def documents_delete(document_id: int, userId: str, request: Request) -> DocumentDeleteResponse:
+    """Немедленно убирает документ и все его чанки/эмбеддинги из выдачи (§18 ТЗ)."""
+    rate_limiter.check(userId)
+    with request_context(user_id=userId, channel="api", workflow="DOCUMENT_QA"):
+        deleted = await delete_user_document(userId, document_id)
+    return DocumentDeleteResponse(deleted=deleted)

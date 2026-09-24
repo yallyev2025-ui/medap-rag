@@ -7,6 +7,7 @@ USER_COMMANDS = [
     BotCommand(command="new", description="Новая тема (забыть контекст диалога)"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="limit", description="Сколько запросов осталось сегодня"),
+    BotCommand(command="exitdocument", description="Выйти из режима «свой документ»"),
 ]
 
 ADMIN_COMMANDS = USER_COMMANDS + [

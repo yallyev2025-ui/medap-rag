@@ -40,6 +40,7 @@ from app.workflows.evaluate import evaluate_free_recall, evaluate_recall
 from app.workflows.quick_outline import generate_quick_outline
 from config import settings
 from constants import (
+    ALLOWED_UPLOAD_EXTENSIONS,
     AUTHORITY_LEVELS,
     DEFAULT_AUTHORITY_LEVEL,
     DEFAULT_VERIFICATION_STATUS,
@@ -87,7 +88,7 @@ _ingest_tasks: set[asyncio.Task] = set()
 _ingest_tasks_by_job: dict[int, asyncio.Task] = {}
 
 # Расширения, которые умеет разбирать rag/processor.py.
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+ALLOWED_EXTENSIONS = set(ALLOWED_UPLOAD_EXTENSIONS)
 
 # Последние прогоны /admin/evals — для сравнения «до/после» в текущей сессии
 # процесса. Не персистится на диск: файловая система Timeweb эфемерна между
@@ -350,7 +351,7 @@ async def _run_ingest(
         # исчезнуть, оставив запись висеть в "pending" без объяснений.
         try:
             await _set_job(job_id, status="running", stage="parsing")
-            chunks = await load_book(
+            _book_id, chunks = await load_book(
                 file_path,
                 subject,
                 author,

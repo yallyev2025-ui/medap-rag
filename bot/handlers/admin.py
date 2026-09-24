@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from config import settings
 from constants import (
+    ALLOWED_UPLOAD_EXTENSIONS,
     CLINREK_CATEGORIES,
     SOURCE_CLINREK,
     SOURCE_TEXTBOOK,
@@ -40,7 +41,7 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 MAX_PDF_SIZE = 20 * 1024 * 1024  # лимит Telegram Bot API на скачивание файла ботом
 
 # Поддерживаемые форматы учебников. Сканированные PDF распознаются OCR на сервере.
-ALLOWED_EXTENSIONS = (".pdf", ".docx", ".txt")
+ALLOWED_EXTENSIONS = ALLOWED_UPLOAD_EXTENSIONS
 
 ADDBOOK_TMP_DIR = os.path.join(tempfile.gettempdir(), "medap_addbook")
 
@@ -357,7 +358,7 @@ async def addbook_choose_category(callback: CallbackQuery, state: FSMContext) ->
         title = os.path.splitext(name)[0]
         progress = f"({i}/{len(files)}) " if len(files) > 1 else ""
         try:
-            chunks_count = await load_book(file_path, subject, "", title, SOURCE_CLINREK)
+            _book_id, chunks_count = await load_book(file_path, subject, "", title, SOURCE_CLINREK)
             ok += 1
             await callback.message.answer(f"✅ {progress}«{title}» — {chunks_count} чанков")
         except Exception:
@@ -435,7 +436,7 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
         title = f"{base_title} — Часть {i}" if multiple else base_title
         progress = f"({i}/{len(files)}) " if multiple else ""
         try:
-            chunks_count = await load_book(file_path, subject, author, title, source_type)
+            _book_id, chunks_count = await load_book(file_path, subject, author, title, source_type)
             ok += 1
             await message.answer(f"✅ {progress}«{title}» добавлен: {chunks_count} чанков")
         except Exception:

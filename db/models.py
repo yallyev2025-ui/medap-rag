@@ -112,7 +112,10 @@ class BookChunk(Base):
         String(20), nullable=False, default=DEFAULT_VERIFICATION_STATUS
     )
     language: Mapped[str] = mapped_column(String(8), nullable=False, default="ru")
-    # Приватные материалы (этап 4, §18) — зарезервировано по §8, пока не используется.
+    # Приватные материалы (этап 4A.5, §18): владелец документа и опциональный экзамен.
+    # Заполняется только для source_type=SOURCE_USER_DOCUMENT (app/workflows/user_documents.py);
+    # retrieve() всегда фильтрует по обоим полям вместе с book_id — чужой user_id
+    # не может получить чужие чанки даже при ошибке выше по стеку.
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     exam_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Смещения фрагмента внутри raw-текста страницы page_from — best-effort
@@ -150,6 +153,9 @@ class User(Base):
     # Начало текущего «чата»: лёгкая память диалога берётся только с этого момента.
     # Кнопка/команда «Новая тема» сдвигает границу — прошлые сообщения забываются.
     chat_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Режим «спрашиваю по своему документу» (§18, этап 4A.5) — переключается независимо
+    # от current_source_type/current_subject; id — это Book.id личного документа.
+    current_document_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class Usage(Base):
