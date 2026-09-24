@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import case, func, select
 
-from db.models import AIUsageEvent
+from db.models import AIUsageEvent, User
 from db.session import async_session
 
 
@@ -33,6 +33,10 @@ class DashboardStats:
     fallback_share: float = 0.0
     top_workflows: list[dict[str, Any]] = field(default_factory=list)
     top_users: list[dict[str, Any]] = field(default_factory=list)
+    # Батч 10 — проверка на практике, укладывается ли реальная нагрузка в
+    # PREMIUM_MONTHLY_BUDGET_RUB (150₽/мес при подписке 400₽/мес).
+    premium_avg_month_spend_rub: float = 0.0
+    premium_max_month_spend_rub: float = 0.0
 
 
 def _month_start(now: datetime) -> datetime:
@@ -133,6 +137,26 @@ async def dashboard_stats() -> DashboardStats:
         stats.top_users = [
             {"userId": row[0], "calls": row[1], "costRub": float(row[2])} for row in users
         ]
+
+        # Средний/максимальный месячный расход среди premium-пользователей Telegram —
+        # проверка на практике, укладывается ли реальная нагрузка в PREMIUM_MONTHLY_BUDGET_RUB.
+        premium_ids = (
+            (await session.execute(select(User.id).where(User.is_premium.is_(True)))).scalars().all()
+        )
+        if premium_ids:
+            premium_keys = [f"telegram:{uid}" for uid in premium_ids]
+            premium_spend = await session.execute(
+                select(
+                    AIUsageEvent.user_id,
+                    func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0),
+                )
+                .where(AIUsageEvent.created_at >= month_start, AIUsageEvent.user_id.in_(premium_keys))
+                .group_by(AIUsageEvent.user_id)
+            )
+            spends = [float(row[1]) for row in premium_spend]
+            if spends:
+                stats.premium_avg_month_spend_rub = sum(spends) / len(spends)
+                stats.premium_max_month_spend_rub = max(spends)
 
     # Линейная экстраполяция расхода на месяц по уже прошедшим дням.
     days_passed = max((now - month_start).total_seconds() / 86400, 0.5)

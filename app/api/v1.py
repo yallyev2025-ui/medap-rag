@@ -115,6 +115,16 @@ class ChatResponse(BaseModel):
     requestId: str | None
     versions: dict[str, str]
     diagnostics: dict
+    # Контракт ответа (§36, батч 10) — производные поля, без нового вызова LLM.
+    # sourceMode: MEDAP/CLINICAL_RECOMMENDATION (GENERAL_KNOWLEDGE/WEB/PUBMED —
+    # отдельные эндпоинты, не этот). evidenceStatus: SUFFICIENT/PARTIAL/
+    # INSUFFICIENT/CONFLICTING. verificationStatus: VERIFIED/PARTIALLY_VERIFIED/
+    # UNVERIFIED/ABSTAINED.
+    sourceMode: str = "MEDAP"
+    evidenceStatus: str = "INSUFFICIENT"
+    verificationStatus: str = "UNVERIFIED"
+    unsupportedAreas: list[str] = Field(default_factory=list)
+    clinicalWarnings: list[str] = Field(default_factory=list)
 
 
 class EvidenceDetail(BaseModel):
@@ -314,6 +324,11 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
         requestId=result.request_id,
         versions=result.versions,
         diagnostics=result.diagnostics,
+        sourceMode=result.source_mode,
+        evidenceStatus=result.evidence_status,
+        verificationStatus=result.verification_status,
+        unsupportedAreas=result.unsupported_areas,
+        clinicalWarnings=result.clinical_warnings,
     )
 
 

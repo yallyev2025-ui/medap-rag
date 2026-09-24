@@ -36,12 +36,13 @@ def _matches(bracket_text: str, chunk: ChunkResult) -> bool:
 
 def extract_cited_chunks(answer: str, chunks: list[ChunkResult]) -> list[ChunkResult]:
     """Чанки, реально процитированные в тексте ответа, в порядке первого
-    упоминания. Если разбор ничего не нашёл (модель отступила от формата) —
-    честно деградируем до ВСЕХ переданных чанков, чтобы не остаться без единой
-    цитаты там, где источник фактически использовался."""
+    упоминания. Если разбор ничего не нашёл (модель не указала источник или
+    указала то, что не совпало ни с одним чанком) — возвращаем пустой список,
+    а не все переданные чанки: приписывать источник claim'у только потому, что
+    он в принципе был в контексте — запрещённый "citation laundering"."""
     brackets = _BRACKET.findall(answer)
     if not brackets:
-        return chunks
+        return []
 
     cited: list[ChunkResult] = []
     seen_ids: set[int] = set()
@@ -53,4 +54,4 @@ def extract_cited_chunks(answer: str, chunks: list[ChunkResult]) -> list[ChunkRe
                 cited.append(chunk)
                 seen_ids.add(chunk.id)
 
-    return cited or chunks
+    return cited

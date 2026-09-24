@@ -50,6 +50,9 @@ NOT_FOUND_ASK = (
     "В загруженных материалах по этому вопросу ничего нет. Как ответить?\n"
     "Учти: общие знания ИИ, интернет и PubMed — не официальные источники MedAP, перепроверяйте."
 )
+# Для клинреков fallback (общие знания/интернет/PubMed) запрещён полностью —
+# никаких вариантов не предлагается, в отличие от учебников выше.
+CLINREK_NOT_FOUND_TEXT = "Этой информации нет в представленных клинических рекомендациях."
 
 CONSENT_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -232,11 +235,17 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             usage_ctx["count"] = False
             return
 
-        # В материалах ничего релевантного — спрашиваем согласие на общие знания.
+        # В материалах ничего релевантного.
         if result.answer is None:
             await _clear_status(status)
-            _pending_general[db_user.id] = question
-            await message.answer(NOT_FOUND_ASK, reply_markup=CONSENT_KEYBOARD)
+            # Клинреки: fallback (общие знания/интернет/PubMed) запрещён полностью —
+            # не просто под кнопкой согласия, а вообще не предлагается (§ клинического
+            # промпта). Учебники — как раньше, три варианта на выбор.
+            if source_type == SOURCE_CLINREK:
+                await message.answer(CLINREK_NOT_FOUND_TEXT)
+            else:
+                _pending_general[db_user.id] = question
+                await message.answer(NOT_FOUND_ASK, reply_markup=CONSENT_KEYBOARD)
             usage_ctx["count"] = False
             return
 

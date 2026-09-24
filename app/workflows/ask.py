@@ -12,6 +12,7 @@ Telegram-бот. По §30 ТЗ Telegram — клиент AI-сервиса, а 
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,7 +27,9 @@ from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from db.models import AnswerLog
 from db.session import async_session
 from rag.generator import (
+    CLINREK_PARTIAL_EVIDENCE_MARKER,
     NO_CONTEXT_ANSWER,
+    PARTIAL_EVIDENCE_MARKER,
     build_history_messages,
     detect_intent,
     detect_subject,
@@ -40,6 +43,62 @@ from rag.generator import (
 from rag.retriever import ChunkResult, retrieve
 
 logger = logging.getLogger(__name__)
+
+# Батч 10 — контракт ответа (§36): производные поля из уже посчитанных данных
+# (verified/conflicts/текст ответа), НИ ОДНОГО нового вызова LLM.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+_CLINICAL_WARNING_KEYWORDS = ("🚩", "противопоказан", "осторожно", "требует исключения", "красные флаги")
+
+
+def _derive_source_mode(source_type: str) -> str:
+    return "CLINICAL_RECOMMENDATION" if source_type == SOURCE_CLINREK else "MEDAP"
+
+
+def _lines_containing(text: str, needle_check) -> list[str]:
+    return [line.strip() for line in _SENTENCE_SPLIT.split(text) if line.strip() and needle_check(line)]
+
+
+def _derive_contract_fields(
+    *,
+    answer: str | None,
+    source_type: str,
+    has_relevant: bool,
+    verified: bool | None,
+    conflicts: list[dict[str, Any]],
+) -> tuple[str, str, list[str], list[str]]:
+    """evidence_status, verification_status, unsupported_areas, clinical_warnings.
+
+    evidenceStatus: SUFFICIENT/PARTIAL/INSUFFICIENT/CONFLICTING.
+    verificationStatus: VERIFIED/PARTIALLY_VERIFIED/UNVERIFIED/ABSTAINED.
+    """
+    is_clinrek = source_type == SOURCE_CLINREK
+    marker = CLINREK_PARTIAL_EVIDENCE_MARKER if is_clinrek else PARTIAL_EVIDENCE_MARKER
+
+    if not has_relevant or answer is None or answer == NO_CONTEXT_ANSWER:
+        verification_status = "ABSTAINED" if verified is False else "UNVERIFIED"
+        return "INSUFFICIENT", verification_status, [], []
+
+    if conflicts:
+        evidence_status = "CONFLICTING"
+    elif marker in answer:
+        evidence_status = "PARTIAL"
+    else:
+        evidence_status = "SUFFICIENT"
+
+    if verified is True:
+        verification_status = "PARTIALLY_VERIFIED" if evidence_status == "PARTIAL" else "VERIFIED"
+    elif verified is False:
+        verification_status = "ABSTAINED"
+    else:
+        verification_status = "UNVERIFIED"
+
+    unsupported_areas = _lines_containing(answer, lambda line: marker in line) if evidence_status == "PARTIAL" else []
+    clinical_warnings = (
+        _lines_containing(answer, lambda line: any(k in line.lower() for k in _CLINICAL_WARNING_KEYWORDS))
+        if is_clinrek
+        else []
+    )
+    return evidence_status, verification_status, unsupported_areas, clinical_warnings
 
 
 @dataclass
@@ -67,6 +126,12 @@ class AskResult:
     chunks: list[ChunkResult] = field(default_factory=list)
     verified: bool | None = None
     conflicts: list[dict[str, Any]] = field(default_factory=list)
+    # Контракт ответа (§36, батч 10) — производные поля, без нового вызова LLM.
+    source_mode: str = "MEDAP"
+    evidence_status: str = "INSUFFICIENT"
+    verification_status: str = "UNVERIFIED"
+    unsupported_areas: list[str] = field(default_factory=list)
+    clinical_warnings: list[str] = field(default_factory=list)
 
 
 async def _build_evidence(
@@ -180,6 +245,10 @@ async def ask(
                 diagnostics=stages.as_dict(),
                 request_id=current_request_id(),
                 versions=_versions(),
+                # Small talk не оценивается по Evidence Pack — этот вопрос вне контракта.
+                source_mode=_derive_source_mode(source_type),
+                evidence_status="SUFFICIENT",
+                verification_status="UNVERIFIED",
             ),
             question,
         )
@@ -218,6 +287,9 @@ async def ask(
                 request_id=current_request_id(),
                 versions=_versions(),
                 chunks=chunks,
+                source_mode=_derive_source_mode(source_type),
+                evidence_status="INSUFFICIENT",
+                verification_status="UNVERIFIED",
             ),
             question,
         )
@@ -254,6 +326,9 @@ async def ask(
                 request_id=current_request_id(),
                 versions=_versions(),
                 chunks=chunks,
+                source_mode=_derive_source_mode(source_type),
+                evidence_status="INSUFFICIENT",
+                verification_status="UNVERIFIED",
             ),
             question,
         )
@@ -269,6 +344,13 @@ async def ask(
             details["cited"] = len(citations)
             details["conflicts"] = len(conflicts)
 
+    evidence_status, verification_status, unsupported_areas, clinical_warnings = _derive_contract_fields(
+        answer=generated.text,
+        source_type=source_type,
+        has_relevant=True,
+        verified=generated.verified,
+        conflicts=conflicts,
+    )
     return await _log_and_return(
         AskResult(
             answer=generated.text,
@@ -283,6 +365,11 @@ async def ask(
             chunks=chunks,
             verified=generated.verified,
             conflicts=conflicts,
+            source_mode=_derive_source_mode(source_type),
+            evidence_status=evidence_status,
+            verification_status=verification_status,
+            unsupported_areas=unsupported_areas,
+            clinical_warnings=clinical_warnings,
         ),
         question,
     )

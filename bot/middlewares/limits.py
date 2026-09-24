@@ -10,13 +10,13 @@ from db.crud import get_or_create_user, increment_usage, is_limit_exceeded
 from db.models import User
 from db.session import async_session
 
-FREE_LIMIT_TEXT = f"""Ты использовал {settings.FREE_DAILY_LIMIT} бесплатных запросов сегодня.
-Лимит обновится в 00:00.
+FREE_LIMIT_TEXT = f"""Ты израсходовал месячный лимит стоимости бесплатных AI-ответов ({settings.FREE_MONTHLY_BUDGET_RUB:.0f}₽).
+Лимит обновится 1 числа.
 
 Хочешь больше? → MedAP Premium [ссылка]"""
 
-PREMIUM_LIMIT_TEXT = f"""Ты использовал дневной лимит Premium ({settings.PREMIUM_DAILY_LIMIT} запросов).
-Лимит обновится в 00:00."""
+PREMIUM_LIMIT_TEXT = f"""Ты израсходовал месячный лимит стоимости AI-ответов Premium ({settings.PREMIUM_MONTHLY_BUDGET_RUB:.0f}₽).
+Лимит обновится 1 числа."""
 
 
 def _limit_message(user: User) -> str:

@@ -151,7 +151,7 @@ async def dashboard(request: Request):
     if not is_admin(request):
         return _login_redirect()
     stats = await dashboard_stats()
-    return templates.TemplateResponse(request, "dashboard.html", {"stats": stats})
+    return templates.TemplateResponse(request, "dashboard.html", {"stats": stats, "settings": settings})
 
 
 @router.get("/models", response_class=HTMLResponse)

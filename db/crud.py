@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from constants import SOURCE_TEXTBOOK
-from db.models import AnswerLog, Book, BookChunk, EvalCase, PromptVersion, Query, Usage, User
+from db.models import AIUsageEvent, AnswerLog, Book, BookChunk, EvalCase, PromptVersion, Query, Usage, User
 
 
 def _today() -> date:
@@ -48,7 +48,10 @@ async def increment_usage(session: AsyncSession, user_id: int) -> None:
 
 
 def daily_limit_for(user: User) -> int | None:
-    """Дневной лимит запросов пользователя. None = безлимит (только админы)."""
+    """УСТАРЕЛО (батч 10): дневной лимит по количеству больше не используется
+    для gate — см. monthly_budget_rub_for()/is_limit_exceeded() ниже. Оставлено
+    для обратной совместимости (FREE_DAILY_LIMIT/PREMIUM_DAILY_LIMIT в конфиге
+    больше не читаются нигде, кроме этой функции)."""
     if user.id in settings.ADMIN_IDS:
         return None
     if user.is_premium:
@@ -56,11 +59,35 @@ def daily_limit_for(user: User) -> int | None:
     return settings.FREE_DAILY_LIMIT
 
 
+def _month_start() -> datetime:
+    now = datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def month_spend_rub(session: AsyncSession, user_id: int) -> float:
+    """Сумма AI-расхода (₽) пользователя Telegram за текущий календарный месяц
+    (батч 10) — заменяет дневной счётчик количества запросов: точнее отражает
+    реальную стоимость, т.к. голос/фото стоят больше обычного текстового вопроса."""
+    stmt = select(func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0)).where(
+        AIUsageEvent.user_id == f"telegram:{user_id}",
+        AIUsageEvent.created_at >= _month_start(),
+    )
+    result = await session.execute(stmt)
+    return float(result.scalar_one())
+
+
+def monthly_budget_rub_for(user: User) -> float | None:
+    """Месячный ₽-бюджет пользователя. None = безлимит (только админы)."""
+    if user.id in settings.ADMIN_IDS:
+        return None
+    return settings.PREMIUM_MONTHLY_BUDGET_RUB if user.is_premium else settings.FREE_MONTHLY_BUDGET_RUB
+
+
 async def is_limit_exceeded(session: AsyncSession, user: User) -> bool:
-    limit = daily_limit_for(user)
-    if limit is None:
+    budget = monthly_budget_rub_for(user)
+    if budget is None:
         return False
-    return await get_today_usage(session, user.id) >= limit
+    return await month_spend_rub(session, user.id) >= budget
 
 
 async def log_query(

@@ -9,7 +9,7 @@ from aiogram.types import BotCommandScopeChat, Message
 from bot.commands import ADMIN_COMMANDS
 from bot.handlers.menu import send_main_menu
 from config import settings
-from db.crud import daily_limit_for, get_or_create_user, get_today_usage
+from db.crud import get_or_create_user, month_spend_rub, monthly_budget_rub_for
 from db.session import async_session
 
 logger = logging.getLogger(__name__)
@@ -69,11 +69,11 @@ async def cmd_limit(message: Message) -> None:
         user = await get_or_create_user(session, message.from_user)
         await session.commit()
 
-        limit = daily_limit_for(user)
-        if limit is None:
+        budget = monthly_budget_rub_for(user)
+        if budget is None:
             await message.answer(UNLIMITED_TEXT)
             return
 
-        used = await get_today_usage(session, user.id)
+        spent = await month_spend_rub(session, user.id)
 
-    await message.answer(f"Сегодня использовано: {used}/{limit}")
+    await message.answer(f"В этом месяце потрачено: {spent:.0f}₽ из {budget:.0f}₽. Обновится 1 числа.")

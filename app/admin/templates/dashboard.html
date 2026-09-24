@@ -25,6 +25,16 @@
     <div class="value">{{ '%.1f'|format(stats.fallback_share * 100) }}%</div>
     <div class="hint">задача ушла не на ту модель, что в TaskModelMap</div>
   </div>
+  <div class="card">
+    <div class="label">Средний расход Premium/мес</div>
+    <div class="value">{{ '%.2f'|format(stats.premium_avg_month_spend_rub) }} ₽</div>
+    <div class="hint">лимит {{ '%.0f'|format(settings.PREMIUM_MONTHLY_BUDGET_RUB) }} ₽/мес</div>
+  </div>
+  <div class="card">
+    <div class="label">Максимальный расход Premium/мес</div>
+    <div class="value">{{ '%.2f'|format(stats.premium_max_month_spend_rub) }} ₽</div>
+    <div class="hint">самый затратный premium-пользователь в этом месяце</div>
+  </div>
 </div>
 
 <section>
