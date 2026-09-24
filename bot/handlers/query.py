@@ -52,11 +52,11 @@ NOT_FOUND_ASK = (
 CONSENT_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
-            InlineKeyboardButton(text="Да, из общих знаний", callback_data="genk:yes"),
-            InlineKeyboardButton(text="🌐 Найти в интернете", callback_data="web:yes"),
+            InlineKeyboardButton(text="Общие знания", callback_data="genk:yes"),
+            InlineKeyboardButton(text="🌐 Интернет", callback_data="web:yes"),
+            InlineKeyboardButton(text="🔬 PubMed", callback_data="pubmed:yes"),
         ],
         [
-            InlineKeyboardButton(text="🔬 Искать в PubMed", callback_data="pubmed:yes"),
             InlineKeyboardButton(text="Нет", callback_data="genk:no"),
         ],
     ]
