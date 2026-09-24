@@ -241,6 +241,24 @@ MODE_INSTRUCTIONS = {
     "explanation": "Объясни простыми словами, используй аналогии и примеры ТОЛЬКО из контекста ниже.",
 }
 
+# --- Tutor/EXPLAIN и «на паре» (§24, §53.1 ТЗ, этап 4A.1) -----------------------
+# Раньше Workflow.EXPLAIN/CLASS_QUICK из роутера (app/orchestration/router.py)
+# только помечали запрос ярлыком в диагностике: generate_answer всегда шёл по
+# detect_mode(question) — отдельной regex-эвристике, независимой от роутера — и
+# всегда вызывал модель с Task.GROUNDED_QA, поэтому CLASS_QUICK_MAX_OUTPUT_TOKENS
+# никогда не применялся. Теперь режим приходит явно параметром `task`.
+EXPLAIN_MODE_INSTRUCTION = (
+    "Объясни причинно-следственно, с учётом уровня студента: начни со структуры "
+    "(что это и где место в теме), затем раскрой механизм по шагам. Без "
+    "AI-воды и общих фраз — только конкретика из контекста. Примеры и аналогии "
+    "добавляй только там, где они реально помогают понять механизм, не для объёма."
+)
+CLASS_QUICK_MODE_INSTRUCTION = (
+    "Режим «на паре»: отвечай МАКСИМАЛЬНО коротко и по существу — 2–4 предложения "
+    "или компактный список, без вступлений и общих фраз. Только самое важное для "
+    "ответа на вопрос прямо сейчас. Полнота не нужна, нужны точность и краткость."
+)
+
 # Шаблоны структуры ответа по предметам (subject из db/models.Book.subject,
 # совпадает с кодами из bot/handlers/admin.SUBJECTS). Подставляются один раз
 # в промпт по предмету найденных чанков — не генерируются заново на каждый вопрос.
@@ -466,11 +484,14 @@ async def generate_answer(
     chunks: list[ChunkResult],
     source_type: str = SOURCE_TEXTBOOK,
     history: list[dict] | None = None,
+    task: Task = Task.GROUNDED_QA,
 ) -> GeneratedAnswer:
     """Генерирует ответ с учётом режима.
 
     - source_type='клинрек' — врачебный клинический промпт (глубоко, из одной рекомендации).
-    - source_type='учебник' — студенческий промпт (как для экзамена).
+    - source_type='учебник' — студенческий промпт (как для экзамена), либо EXPLAIN/CLASS_QUICK
+      (§24, §53.1 ТЗ), если так классифицировал Orchestrator (app/orchestration/router.py) —
+      `task` определяет и модель через TaskModelMap, и стиль ответа.
     Если в материалах релевантного нет — гибкий фолбэк: приветствие или ответ из общих
     знаний ИИ с ОБЯЗАТЕЛЬНОЙ пометкой, что это не из загруженных материалов.
     """
@@ -494,11 +515,15 @@ async def generate_answer(
         system_prompt = await get_prompt("CLINREK_SYSTEM_PROMPT", CLINREK_SYSTEM_PROMPT)
     else:
         system_prompt = await get_prompt("SYSTEM_PROMPT", SYSTEM_PROMPT)
-    mode = detect_mode(question)
 
     if is_clinrek:
         mode_instruction = CLINREK_MODE_INSTRUCTION
+    elif task is Task.EXPLAIN:
+        mode_instruction = EXPLAIN_MODE_INSTRUCTION
+    elif task is Task.CLASS_QUICK:
+        mode_instruction = CLASS_QUICK_MODE_INSTRUCTION
     else:
+        mode = detect_mode(question)
         mode_instruction = MODE_INSTRUCTIONS[mode]
         if mode in ("question", "conspect"):
             mode_instruction += _structure_hint(detect_subject(chunks))
@@ -511,9 +536,7 @@ async def generate_answer(
         no_context_answer=NO_CONTEXT_ANSWER,
     )
 
-    answer = await _complete(
-        system_prompt, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
-    )
+    answer = await _complete(system_prompt, user_prompt, GENERATION_TEMPERATURE, task, history)
 
     async def correct(issues: str) -> str:
         correction_prompt = CORRECTION_TEMPLATE.format(
@@ -524,9 +547,7 @@ async def generate_answer(
             issues=issues,
             no_context_answer=NO_CONTEXT_ANSWER,
         )
-        return await _complete(
-            system_prompt, correction_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
-        )
+        return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, task, history)
 
     return await _verify_and_repair(context, answer, correct)
 

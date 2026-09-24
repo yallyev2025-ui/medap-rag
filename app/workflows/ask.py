@@ -224,12 +224,17 @@ async def ask(
 
     history = build_history_messages(turns)
     with stages.measure("generation") as details:
-        if intent == "DIFFERENTIAL":
+        # DIFFERENTIAL/MULTI — клинический разбор по симптомам/сочетанию состояний,
+        # промпты рассчитаны на врача и клинреки (rag/generator.py:DIFFERENTIAL_
+        # SYSTEM_PROMPT/MULTI_SYSTEM_PROMPT). Гейт по source_type — иначе учебный
+        # вопрос студента, который detect_intent() ошибочно принял за разбор
+        # симптомов, ушёл бы во врачебный тон на чанках из учебника.
+        if intent == "DIFFERENTIAL" and source_type == SOURCE_CLINREK:
             generated = await generate_differential(question, chunks, source_type, history)
-        elif intent == "MULTI":
+        elif intent == "MULTI" and source_type == SOURCE_CLINREK:
             generated = await generate_multi(question, chunks, source_type, history)
         else:
-            generated = await generate_answer(question, chunks, source_type, history)
+            generated = await generate_answer(question, chunks, source_type, history, task=decision.task)
         details["chars"] = len(generated.text if generated else "")
         details["verified"] = generated.verified if generated else None
 
