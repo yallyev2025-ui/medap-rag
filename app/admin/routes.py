@@ -37,6 +37,7 @@ from app.security.auth import (
 )
 from app.workflows.ask import ask
 from app.workflows.evaluate import evaluate_free_recall, evaluate_recall
+from app.workflows.quick_outline import generate_quick_outline
 from config import settings
 from constants import (
     AUTHORITY_LEVELS,
@@ -522,6 +523,10 @@ def _playground_context(**overrides) -> dict:
         "eval_answer": "",
         "eval_subject": "",
         "eval_mode": "recall",
+        "outline_result": None,
+        "outline_json": "",
+        "outline_topic": "",
+        "outline_subject": "",
     }
     base.update(overrides)
     return base
@@ -609,6 +614,44 @@ async def playground_evaluate(
             eval_answer=eval_answer,
             eval_subject=eval_subject,
             eval_mode=eval_mode,
+        ),
+    )
+
+
+@router.post("/playground/quick-outline", response_class=HTMLResponse)
+async def playground_quick_outline(
+    request: Request,
+    outline_topic: str = Form(...),
+    outline_subject: str = Form(""),
+):
+    """Предпросмотр Quick Outline (plans/medap-ai/QUICK_OUTLINE_SPEC.md) — сама
+    генерация вызывается с сайта владельца через POST /v1/quick-outline/generate;
+    здесь только посмотреть результат до того, как сайт-потребитель готов."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    subject_value = outline_subject.strip().lower() or None
+    with request_context(user_id="admin", channel="admin", workflow="QUICK_OUTLINE"):
+        outline_result = await generate_quick_outline(outline_topic, subject=subject_value)
+
+    outline_json = json.dumps(
+        {
+            "type": outline_result.outline_type,
+            "blocks": [{"title": b.title, "items": b.items} for b in outline_result.blocks],
+            "requiredPoints": outline_result.required_points,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(
+            outline_result=outline_result,
+            outline_json=outline_json,
+            outline_topic=outline_topic,
+            outline_subject=outline_subject,
         ),
     )
 

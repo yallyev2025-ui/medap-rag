@@ -39,6 +39,17 @@
   истины — только извлекает вход. API: `POST /v1/vision/analyze` (base64 в JSON, не multipart).
   Telegram: `bot/handlers/vision.py` — `F.photo` хендлер; `bot/middlewares/limits.py` расширен
   (раньше пропускал фото мимо лимитов/db_user, т.к. проверял только `event.text`).
+- **Quick Outline API (готов, вне нумерации 4A — отдельная фича по ТЗ владельца, см.
+  `plans/medap-ai/QUICK_OUTLINE_SPEC.md`):** НЕ студенческий workflow — обычный Q&A не меняется.
+  `app/workflows/quick_outline.py::generate_quick_outline()` — retrieve() по теме → структурированная
+  генерация (`Task.QUICK_OUTLINE` → DeepSeek) строго одного из 10 типов схемы
+  (mechanism/classification/sequence/comparison/definition/cause_effect/process/pharmacology/
+  physiology/pathophysiology/anatomy) с `blocks`+`requiredPoints` по присланному ТЗ; если по теме нет
+  материалов — честная пустая схема с `error`, ничего не выдумывается. API:
+  `POST /v1/quick-outline/generate` (тот же контракт `StudentAIContext`+service-token, что у
+  остальных `/v1/*`), stateless — хранения и публикации на нашей стороне нет, вызывается с отдельного
+  сайта владельца. Админский Playground получил секцию-предпросмотр (`/admin/playground/quick-outline`)
+  для проверки до готовности сайта-потребителя.
 - **Батч 4:** 4A.5 документы пользователя.
 - **Батч 5:** 4A.6 веб-поиск.
 - **Батч 6:** 4A.7 голос.

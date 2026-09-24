@@ -26,6 +26,9 @@ class Task(str, Enum):
     TEST_SOLVE_TEXT = "TEST_SOLVE_TEXT"
     DOCUMENT_QA = "DOCUMENT_QA"
     TARGETED_REPAIR = "TARGETED_REPAIR"
+    # Quick Outline (раздел "Quick Outline" дополнения к ТЗ) — заземлённая генерация
+    # строго типизированной схемы по учебникам для сайта владельца, не студенческий Q&A.
+    QUICK_OUTLINE = "QUICK_OUTLINE"
     # Восприятие и оценка студента — GPT-5.4 Mini (§56.2).
     VISION_EXTRACT = "VISION_EXTRACT"
     RECALL_EVALUATE = "RECALL_EVALUATE"
@@ -45,6 +48,7 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.TEST_SOLVE_TEXT: DEEPSEEK,
     Task.DOCUMENT_QA: DEEPSEEK,
     Task.TARGETED_REPAIR: DEEPSEEK,
+    Task.QUICK_OUTLINE: DEEPSEEK,
     Task.VISION_EXTRACT: OPENAI,
     Task.RECALL_EVALUATE: OPENAI,
     Task.FREE_RECALL_EVALUATE: OPENAI,

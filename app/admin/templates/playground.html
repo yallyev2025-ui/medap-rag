@@ -187,4 +187,56 @@
   </div>
   {% endif %}
 </section>
+
+<section>
+  <h1 style="font-size:18px">Quick Outline — предпросмотр</h1>
+  <p class="sub">
+    Сама генерация вызывается с сайта владельца через <code>POST /v1/quick-outline/generate</code> —
+    здесь только посмотреть, что получится, пока сайт-потребитель не готов. Студентов это не касается.
+  </p>
+  <form method="post" action="/admin/playground/quick-outline" class="card">
+    <div class="fields">
+      <div>
+        <label for="outline_topic">Тема</label>
+        <input id="outline_topic" name="outline_topic" value="{{ outline_topic }}" style="width:100%" required>
+      </div>
+      <div>
+        <label for="outline_subject">Предмет (необязательно)</label>
+        <input id="outline_subject" name="outline_subject" value="{{ outline_subject }}" list="subject-options" autocapitalize="off">
+      </div>
+    </div>
+    <button style="margin-top:12px">Сгенерировать схему</button>
+  </form>
+
+  {% if outline_result %}
+  <div class="card" style="margin-top:12px">
+    {% if outline_result.error %}
+    <p class="note">{{ outline_result.error }}</p>
+    {% else %}
+    <div class="label">Тип: {{ outline_result.outline_type or '—' }}</div>
+    {% for b in outline_result.blocks %}
+    <div style="margin-top:10px">
+      <b>{{ b.title }}</b>
+      <ul>{% for item in b.items %}<li>{{ item }}</li>{% endfor %}</ul>
+    </div>
+    {% endfor %}
+    {% if outline_result.required_points %}
+    <div style="margin-top:10px">
+      <div class="label">Required points</div>
+      <ul>{% for p in outline_result.required_points %}<li>{{ p }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if outline_result.evidence_references %}
+    <p class="note" style="margin-top:10px">
+      По материалам: {% for c in outline_result.evidence_references %}{{ c.sourceTitle }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+    {% endif %}
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer">Сырой JSON (для копирования)</summary>
+      <pre style="white-space:pre-wrap; font-size:12px; margin-top:8px">{{ outline_json }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
 {% endblock %}

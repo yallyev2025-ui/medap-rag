@@ -20,6 +20,7 @@ from app.observability.context import request_context
 from app.security.auth import rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_recall
+from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outline
 from app.workflows.vision import TestSolveResult, solve_from_image
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
@@ -225,6 +226,43 @@ def _vision_response(result: TestSolveResult) -> VisionAnalyzeResponse:
     )
 
 
+class QuickOutlineBlock(BaseModel):
+    title: str
+    items: list[str]
+
+
+class QuickOutlineRequest(BaseModel):
+    """Quick Outline (plans/medap-ai/QUICK_OUTLINE_SPEC.md) — вызывается с сайта владельца
+    продукта для подготовки контента; к студенческому Q&A отношения не имеет."""
+
+    topic: str = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+class QuickOutlineResponse(BaseModel):
+    topic: str
+    type: str | None
+    blocks: list[QuickOutlineBlock]
+    requiredPoints: list[str]
+    evidenceReferences: list[Citation]
+    # Заполнено, только если по теме нет материалов или генерация недоступна —
+    # в обоих случаях schema пустая, а не выдуманная.
+    error: str | None = None
+    requestId: str | None = None
+
+
+def _quick_outline_response(result: QuickOutlineResult) -> QuickOutlineResponse:
+    return QuickOutlineResponse(
+        topic=result.topic,
+        type=result.outline_type,
+        blocks=[QuickOutlineBlock(title=b.title, items=b.items) for b in result.blocks],
+        requiredPoints=result.required_points,
+        evidenceReferences=[Citation(**c) for c in result.evidence_references],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
 async def _answer(payload: ChatRequest, request: Request, forced_workflow: str | None = None) -> ChatResponse:
     rate_limiter.check(payload.context.userId)
 
@@ -367,3 +405,19 @@ async def vision_analyze(payload: VisionAnalyzeRequest, request: Request) -> Vis
             subject=payload.context.subjectId,
         )
     return _vision_response(result)
+
+
+@router.post("/quick-outline/generate", response_model=QuickOutlineResponse)
+async def quick_outline_generate(payload: QuickOutlineRequest, request: Request) -> QuickOutlineResponse:
+    """Quick Outline — строго типизированная «схема для тетради» по загруженным
+    учебникам (plans/medap-ai/QUICK_OUTLINE_SPEC.md). Вызывается с сайта
+    владельца продукта для подготовки контента; никак не задействован в
+    обычном студенческом Q&A (тот отвечает как раньше)."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="QUICK_OUTLINE"):
+        result = await generate_quick_outline(
+            payload.topic,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return _quick_outline_response(result)
