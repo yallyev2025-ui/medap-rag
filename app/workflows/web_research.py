@@ -53,7 +53,10 @@ class WebResearchResult:
     request_id: str | None = None
 
 
-def _extract_text(html: str) -> tuple[str, str | None]:
+def _extract_text(html: bytes) -> tuple[str, str | None]:
+    # bytes, не str: кодировка страницы неизвестна заранее (см. research_url) —
+    # BeautifulSoup сам определяет её (meta charset / эвристика UnicodeDammit),
+    # надёжнее, чем полагаться на Content-Type или угадывать вручную.
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
@@ -68,30 +71,40 @@ async def research_url(url: str, question: str | None = None) -> WebResearchResu
     except BlockedURLError as exc:
         return WebResearchResult(url=url, error=str(exc), request_id=current_request_id())
 
+    # Лимит размера страницы проверяется ВО ВРЕМЯ загрузки (стриминг + досрочный
+    # обрыв), а не после — client.get() без стриминга сначала буферизует весь
+    # ответ в память и только потом отдаёт response.content, то есть проверка
+    # "после" не защищает от большого/бесконечного ответа вообще (реальная
+    # находка security-review: старый код именно так и делал).
+    max_bytes = settings.WEB_RESEARCH_MAX_KB * 1024
     try:
         async with httpx.AsyncClient(
             timeout=settings.WEB_RESEARCH_TIMEOUT_SECONDS,
             follow_redirects=False,
         ) as client:
-            response = await client.get(url, headers={"User-Agent": "MedAP-Student-AI/1.0"})
+            async with client.stream("GET", url, headers={"User-Agent": "MedAP-Student-AI/1.0"}) as response:
+                if response.status_code >= 300:
+                    return WebResearchResult(
+                        url=url,
+                        error=(
+                            f"Страница вернула статус {response.status_code} "
+                            "(редиректы не выполняются из соображений безопасности — дай финальный URL)."
+                        ),
+                        request_id=current_request_id(),
+                    )
+
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        return WebResearchResult(
+                            url=url, error="Страница слишком большая для анализа.", request_id=current_request_id()
+                        )
     except httpx.HTTPError:
         logger.exception("Web Research: не удалось загрузить страницу %s", url)
         return WebResearchResult(url=url, error="Не удалось загрузить страницу.", request_id=current_request_id())
 
-    if response.status_code >= 300:
-        return WebResearchResult(
-            url=url,
-            error=(
-                f"Страница вернула статус {response.status_code} "
-                "(редиректы не выполняются из соображений безопасности — дай финальный URL)."
-            ),
-            request_id=current_request_id(),
-        )
-
-    if len(response.content) / 1024 > settings.WEB_RESEARCH_MAX_KB:
-        return WebResearchResult(url=url, error="Страница слишком большая для анализа.", request_id=current_request_id())
-
-    text, title = _extract_text(response.text)
+    text, title = _extract_text(bytes(body))
     if not text:
         return WebResearchResult(url=url, error="На странице не нашлось текста для анализа.", request_id=current_request_id())
 
