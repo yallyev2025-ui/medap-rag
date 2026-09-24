@@ -9,6 +9,8 @@ USER_COMMANDS = [
     BotCommand(command="limit", description="Сколько запросов осталось сегодня"),
     BotCommand(command="exitdocument", description="Выйти из режима «свой документ»"),
     BotCommand(command="selfcheck", description="Проверить свой ответ (текст или голосом)"),
+    BotCommand(command="websearch", description="Найти в интернете"),
+    BotCommand(command="pubmed", description="Искать в PubMed"),
 ]
 
 ADMIN_COMMANDS = USER_COMMANDS + [

@@ -8,6 +8,8 @@ import time
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -66,6 +68,14 @@ CONSENT_KEYBOARD = InlineKeyboardMarkup(
 _pending_general: dict[int, str] = {}
 
 
+class SearchStates(StatesGroup):
+    """Прямой вход в веб-поиск/PubMed по команде — не только когда бот сам не
+    нашёл ответ (CONSENT_KEYBOARD ниже), но и когда студент сразу хочет искать."""
+
+    waiting_web_query = State()
+    waiting_pubmed_query = State()
+
+
 async def _send_answer(message: Message, answer: str) -> None:
     for part in split_for_telegram(to_telegram_html(answer)):
         await message.answer(part, parse_mode=ParseMode.HTML)
@@ -89,6 +99,50 @@ async def _clear_status(status: Message | None) -> None:
         pass
 
 
+async def _run_web_search(message: Message, user_id: int, query: str) -> None:
+    status = await message.answer("🌐 Ищу в интернете…")
+    try:
+        with request_context(user_id=f"telegram:{user_id}", channel="telegram", workflow="WEB_SEARCH"):
+            result = await search_and_answer(query)
+    except Exception:
+        logger.exception("Ошибка при веб-поиске")
+        await _set_status(status, ERROR_TEXT)
+        return
+
+    if result.error:
+        await _set_status(status, f"⚠️ {result.error}")
+        return
+
+    await _clear_status(status)
+    answer = result.answer
+    if result.sources:
+        links = "\n".join(f"— {s['title'] or s['url']} ({s['url']})" for s in result.sources)
+        answer = f"{answer}\n\nИсточники:\n{links}"
+    await _send_answer(message, answer)
+
+
+async def _run_pubmed_search(message: Message, user_id: int, query: str) -> None:
+    status = await message.answer("🔬 Ищу в PubMed…")
+    try:
+        with request_context(user_id=f"telegram:{user_id}", channel="telegram", workflow="PUBMED_SEARCH"):
+            result = await search_pubmed(query)
+    except Exception:
+        logger.exception("Ошибка при поиске в PubMed")
+        await _set_status(status, ERROR_TEXT)
+        return
+
+    if result.error:
+        await _set_status(status, f"⚠️ {result.error}")
+        return
+
+    await _clear_status(status)
+    answer = result.answer
+    if result.articles:
+        links = "\n".join(f"— {a.title} ({a.journal or '—'}, {a.year or '—'}): {a.url}" for a in result.articles)
+        answer = f"{answer}\n\nСтатьи:\n{links}"
+    await _send_answer(message, answer)
+
+
 @router.message(Command("new"))
 async def cmd_new(message: Message) -> None:
     async with async_session() as session:
@@ -96,6 +150,30 @@ async def cmd_new(message: Message) -> None:
         await reset_chat(session, user.id)
         await session.commit()
     await message.answer(NEW_CHAT_TEXT)
+
+
+@router.message(Command("websearch"))
+async def cmd_websearch(message: Message, state: FSMContext) -> None:
+    await state.set_state(SearchStates.waiting_web_query)
+    await message.answer("Что найти в интернете?")
+
+
+@router.message(SearchStates.waiting_web_query, F.text)
+async def websearch_run(message: Message, state: FSMContext, db_user: User, usage_ctx: dict) -> None:
+    await state.clear()
+    await _run_web_search(message, db_user.id, message.text)
+
+
+@router.message(Command("pubmed"))
+async def cmd_pubmed(message: Message, state: FSMContext) -> None:
+    await state.set_state(SearchStates.waiting_pubmed_query)
+    await message.answer("Что искать в PubMed? (на английском — так PubMed индексирует статьи)")
+
+
+@router.message(SearchStates.waiting_pubmed_query, F.text)
+async def pubmed_run(message: Message, state: FSMContext, db_user: User, usage_ctx: dict) -> None:
+    await state.clear()
+    await _run_pubmed_search(message, db_user.id, message.text)
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -224,25 +302,7 @@ async def consent_web_search(callback: CallbackQuery) -> None:
         await callback.message.answer("Запрос устарел — задайте вопрос заново.")
         return
 
-    status = await callback.message.answer("🌐 Ищу в интернете…")
-    try:
-        with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram", workflow="WEB_SEARCH"):
-            result = await search_and_answer(question)
-    except Exception:
-        logger.exception("Ошибка при веб-поиске")
-        await _set_status(status, ERROR_TEXT)
-        return
-
-    if result.error:
-        await _set_status(status, f"⚠️ {result.error}")
-        return
-
-    await _clear_status(status)
-    answer = result.answer
-    if result.sources:
-        links = "\n".join(f"— {s['title'] or s['url']} ({s['url']})" for s in result.sources)
-        answer = f"{answer}\n\nИсточники:\n{links}"
-    await _send_answer(callback.message, answer)
+    await _run_web_search(callback.message, callback.from_user.id, question)
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
@@ -263,25 +323,7 @@ async def consent_pubmed_search(callback: CallbackQuery) -> None:
         await callback.message.answer("Запрос устарел — задайте вопрос заново.")
         return
 
-    status = await callback.message.answer("🔬 Ищу в PubMed…")
-    try:
-        with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram", workflow="PUBMED_SEARCH"):
-            result = await search_pubmed(question)
-    except Exception:
-        logger.exception("Ошибка при поиске в PubMed")
-        await _set_status(status, ERROR_TEXT)
-        return
-
-    if result.error:
-        await _set_status(status, f"⚠️ {result.error}")
-        return
-
-    await _clear_status(status)
-    answer = result.answer
-    if result.articles:
-        links = "\n".join(f"— {a.title} ({a.journal or '—'}, {a.year or '—'}): {a.url}" for a in result.articles)
-        answer = f"{answer}\n\nСтатьи:\n{links}"
-    await _send_answer(callback.message, answer)
+    await _run_pubmed_search(callback.message, callback.from_user.id, question)
 
     async with async_session() as session:
         user = await get_or_create_user(session, callback.from_user)
