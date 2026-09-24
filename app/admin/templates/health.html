@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% set active = 'health' %}
+{% block content %}
+<h1>System Health</h1>
+<p class="sub">
+  Живой статус инфраструктуры (раздел 14 дополнения к ТЗ) — работает ли всё прямо сейчас, а не
+  история расхода (для этого <a href="/admin">Dashboard</a>).
+</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">База данных</div>
+    <div class="value {{ 'status-done' if health.db_ok else 'status-error' }}">
+      {% if health.db_ok %}OK ({{ health.db_latency_ms }} мс){% else %}ERROR{% endif %}
+    </div>
+    {% if health.db_error %}<div class="hint">{{ health.db_error }}</div>{% endif %}
+  </div>
+  <div class="card">
+    <div class="label">S3-хранилище</div>
+    <div class="value {{ 'status-done' if health.s3_configured else '' }}">
+      {{ 'Настроено' if health.s3_configured else 'Не настроено' }}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Доля фолбэков за месяц</div>
+    <div class="value {{ 'status-error' if dash.fallback_share > 0.05 else '' }}">
+      {{ '%.1f'|format(dash.fallback_share * 100) }}%
+    </div>
+    <div class="hint">задача ушла не на ту модель, что в TaskModelMap</div>
+  </div>
+  <div class="card">
+    <div class="label">Ошибок за сутки</div>
+    <div class="value {{ 'status-error' if dash.errors_today > 0 else '' }}">{{ dash.errors_today }}</div>
+  </div>
+</div>
+
+<section>
+  <h1 style="font-size:18px">Провайдеры</h1>
+  <table>
+    <tr><th>Провайдер</th><th>Модель</th><th>Статус</th></tr>
+    {% for p in health.providers %}
+    <tr>
+      <td>{{ p.provider }}</td>
+      <td>{{ p.model_id }}</td>
+      <td class="{{ 'status-done' if p.enabled else 'status-error' }}">
+        {{ 'Настроен' if p.enabled else 'Нет ключа' }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="margin-top:8px">Соответствие задач моделям — на <a href="/admin/models">странице Models</a>.</p>
+</section>
+
+<section>
+  <h1 style="font-size:18px">Очередь загрузки источников</h1>
+  <table>
+    <tr><th>Статус</th><th>Количество</th></tr>
+    {% for status, count in health.jobs_by_status.items() %}
+    <tr>
+      <td>{{ status }}</td>
+      <td class="{{ 'status-error' if status == 'error' and count > 0 else '' }}">{{ count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if health.stuck_jobs > 0 %}
+  <p class="note status-error" style="margin-top:8px">
+    {{ health.stuck_jobs }} загрузка(и) с ошибкой — разобраться на <a href="/admin/sources">странице Knowledge Base</a>.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

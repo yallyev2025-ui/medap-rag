@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
+from app.admin.health import system_health
 from app.admin.stats import dashboard_stats
 from app.evidence.viewer import fetch_evidence
 from app.llm.prompts import clear_cache
@@ -159,6 +160,17 @@ async def models(request: Request):
             "task_map": {task.value: provider for task, provider in task_model_map().items()},
         },
     )
+
+
+@router.get("/health", response_class=HTMLResponse)
+async def health_page(request: Request):
+    """System Health (раздел 14 дополнения к ТЗ, этап 4B.5) — живой статус
+    инфраструктуры, отдельно от Dashboard (тот про историю расхода)."""
+    if not is_admin(request):
+        return _login_redirect()
+    health = await system_health()
+    dash = await dashboard_stats()
+    return templates.TemplateResponse(request, "health.html", {"health": health, "dash": dash})
 
 
 @router.get("/retrieval", response_class=HTMLResponse)
