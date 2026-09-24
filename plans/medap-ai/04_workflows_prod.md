@@ -28,7 +28,17 @@
   в админке: `/admin/playground` → секция «Оценка ответа студента». `/v1/errors/diagnose` отдельным
   эндпоинтом не сделан — то же самое уже возвращают `incorrect`/`causalErrors`/`contradictions` в
   ответе evaluate.
-- **Батч 3:** 4A.4 Vision/Test Solver.
+- **Батч 3 (готов):** 4A.4 Vision/Test Solver. `app/workflows/vision.py`:
+  `extract_from_image()` — VISION_EXTRACT (GPT-5.4 Mini, multi-part image_url content в сообщении,
+  `image_units=1` в телеметрию расхода) распознаёт вопрос/варианты/схему с фото, возвращает confidence;
+  при `confidence < 0.5` или пустом вопросе — `needs_retake=True`, честная просьба переснять, а не
+  угадывание нечитаемого текста. Распознанный вопрос решается через ОБЫЧНЫЙ Evidence-конвейер
+  (`retrieve()` + `generate_answer(..., task=Task.TEST_SOLVE_TEXT)` — новая
+  `TEST_SOLVE_MODE_INSTRUCTION` в `rag/generator.py`, просит объяснить и почему дистракторы неверны),
+  тот же Verification Layer, citations только из реально процитированного. Vision не источник
+  истины — только извлекает вход. API: `POST /v1/vision/analyze` (base64 в JSON, не multipart).
+  Telegram: `bot/handlers/vision.py` — `F.photo` хендлер; `bot/middlewares/limits.py` расширен
+  (раньше пропускал фото мимо лимитов/db_user, т.к. проверял только `event.text`).
 - **Батч 4:** 4A.5 документы пользователя.
 - **Батч 5:** 4A.6 веб-поиск.
 - **Батч 6:** 4A.7 голос.

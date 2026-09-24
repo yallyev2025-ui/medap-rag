@@ -259,6 +259,14 @@ CLASS_QUICK_MODE_INSTRUCTION = (
     "ответа на вопрос прямо сейчас. Полнота не нужна, нужны точность и краткость."
 )
 
+# --- Test Solver (§17, §53.2 ТЗ, этап 4A.4) — вопрос распознан из фото/скрина ---
+TEST_SOLVE_MODE_INSTRUCTION = (
+    "Это тестовый вопрос (возможно, с вариантами ответа — они даны в тексте вопроса, если есть). "
+    "Определи правильный вариант СТРОГО по контексту. Дай короткое объяснение, почему он верен, "
+    "и, если контекст позволяет, почему остальные варианты неверны. Если по контексту нельзя "
+    "уверенно выбрать вариант — не угадывай, честно скажи, что материалов недостаточно."
+)
+
 # Шаблоны структуры ответа по предметам (subject из db/models.Book.subject,
 # совпадает с кодами из bot/handlers/admin.SUBJECTS). Подставляются один раз
 # в промпт по предмету найденных чанков — не генерируются заново на каждый вопрос.
@@ -522,6 +530,8 @@ async def generate_answer(
         mode_instruction = EXPLAIN_MODE_INSTRUCTION
     elif task is Task.CLASS_QUICK:
         mode_instruction = CLASS_QUICK_MODE_INSTRUCTION
+    elif task is Task.TEST_SOLVE_TEXT:
+        mode_instruction = TEST_SOLVE_MODE_INSTRUCTION
     else:
         mode = detect_mode(question)
         mode_instruction = MODE_INSTRUCTIONS[mode]

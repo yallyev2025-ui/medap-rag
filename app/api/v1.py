@@ -9,6 +9,7 @@
 диагностики.
 """
 
+import base64
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,6 +20,7 @@ from app.observability.context import request_context
 from app.security.auth import rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_recall
+from app.workflows.vision import TestSolveResult, solve_from_image
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
 from rag.retriever import retrieve
@@ -184,6 +186,45 @@ class RepairResponse(BaseModel):
     requestId: str | None = None
 
 
+class VisionAnalyzeRequest(BaseModel):
+    """Фото/скрин теста (§17 ТЗ, этап 4A.4). Base64, не multipart — тот же
+    JSON-контракт, что у остальных /v1 эндпоинтов."""
+
+    imageBase64: str = Field(..., min_length=1)
+    mimeType: str = "image/jpeg"
+    context: StudentAIContext
+
+
+class VisionAnalyzeResponse(BaseModel):
+    question: str
+    options: list[str]
+    diagramDescription: str | None
+    confidence: float
+    # True — распознавание неуверенное, нужно попросить переснять; answer в
+    # этом случае всегда null.
+    needsRetake: bool
+    qualityIssue: str | None
+    answer: str | None
+    verified: bool | None
+    citations: list[Citation]
+    requestId: str | None
+
+
+def _vision_response(result: TestSolveResult) -> VisionAnalyzeResponse:
+    return VisionAnalyzeResponse(
+        question=result.extraction.question,
+        options=result.extraction.options,
+        diagramDescription=result.extraction.diagram_description,
+        confidence=result.extraction.confidence,
+        needsRetake=result.needs_retake,
+        qualityIssue=result.extraction.quality_issue,
+        answer=result.answer,
+        verified=result.verified,
+        citations=[Citation(**c) for c in result.citations],
+        requestId=result.request_id,
+    )
+
+
 async def _answer(payload: ChatRequest, request: Request, forced_workflow: str | None = None) -> ChatResponse:
     rate_limiter.check(payload.context.userId)
 
@@ -304,3 +345,25 @@ async def repair(payload: RepairRequest, request: Request) -> RepairResponse:
         )
         result = await generate_repair(payload.question, payload.errors, chunks)
     return RepairResponse(repair=result.text, verified=result.verified, requestId=ctx.request_id)
+
+
+@router.post("/vision/analyze", response_model=VisionAnalyzeResponse)
+async def vision_analyze(payload: VisionAnalyzeRequest, request: Request) -> VisionAnalyzeResponse:
+    """Vision/Test Solver (§16, §17, §53.2 ТЗ, этап 4A.4): фото/скрин теста →
+    распознавание → решение по материалам MedAP с verification и citations.
+    Vision не источник медицинской истины — решает тот же Evidence-конвейер,
+    что и обычные вопросы."""
+    rate_limiter.check(payload.context.userId)
+    try:
+        image_bytes = base64.b64decode(payload.imageBase64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="imageBase64 is not valid base64")
+
+    with request_context(user_id=payload.context.userId, channel="api", workflow="VISION_EXTRACT"):
+        result = await solve_from_image(
+            image_bytes,
+            payload.mimeType,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return _vision_response(result)
