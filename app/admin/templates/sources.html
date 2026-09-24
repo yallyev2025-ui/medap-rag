@@ -135,6 +135,44 @@
 </section>
 
 <section>
+  <h1 style="font-size:18px">Клинические рекомендации — обновления с сайта Минздрава</h1>
+  <p class="sub">
+    Проверка новых версий на Рубрикаторе (cr.minzdrav.gov.ru) — по кнопке, не автоматически по
+    расписанию. Найденные обновления нужно явно выбрать и загрузить; старая версия при замене
+    архивируется, а не удаляется.
+  </p>
+  <form method="get" action="/admin/clinreks/check-updates" class="card">
+    <button>Проверить обновления клинреков</button>
+  </form>
+  {% if clinrek_sync_error %}
+  <p class="note" style="color:#b91c1c">{{ clinrek_sync_error }}</p>
+  {% endif %}
+  {% if clinrek_apply_summary %}
+  <p class="note">{{ clinrek_apply_summary }}</p>
+  {% endif %}
+  {% if clinrek_updates is not none %}
+    {% if clinrek_updates %}
+    <form method="post" action="/admin/clinreks/apply-updates" class="card">
+      <table>
+        <tr><th></th><th>Название</th><th>Категория</th><th>Статус</th></tr>
+        {% for update in clinrek_updates %}
+        <tr>
+          <td><input type="checkbox" name="external_ref" value="{{ update.remote.external_ref }}"></td>
+          <td>{{ update.remote.title }}</td>
+          <td>{{ update.remote.category or '—' }}</td>
+          <td>{{ 'Новая' if update.is_new else 'Обновление версии' }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <button style="margin-top:12px">Загрузить выбранные</button>
+    </form>
+    {% else %}
+    <p class="note">Обновлений нет — всё актуально.</p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section>
   <h1 style="font-size:18px">Источники в базе</h1>
   <p class="sub">
     Название, автор и предмет можно править прямо здесь — переиндексация не требуется,

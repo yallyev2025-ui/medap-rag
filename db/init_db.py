@@ -78,6 +78,9 @@ async def init_db() -> None:
         # Этап 4A.5: режим «спрашиваю по своему документу» у пользователя Telegram (§18 ТЗ).
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_document_id VARCHAR(64);"))
 
+        # Батч 9: синхронизация клинреков с Рубрикатором Минздрава ("{код}_{версия}").
+        await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS external_ref VARCHAR(32);"))
+
         # Гибридный retrieval (§7 ТЗ): лексический поиск через встроенный
         # полнотекстовый индекс Postgres — отдельный поисковый движок не нужен.
         # GENERATED ALWAYS AS ... STORED сам пересчитывает колонку для уже

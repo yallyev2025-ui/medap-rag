@@ -680,9 +680,10 @@ def _web_search_response(result: WebSearchResult) -> WebSearchResponse:
 
 @router.post("/web/search", response_model=WebSearchResponse)
 async def web_search_endpoint(payload: WebSearchRequest, request: Request) -> WebSearchResponse:
-    """Настоящий поиск по интернету (Tavily, §19 ТЗ) — в отличие от /v1/web/research
-    (одна заданная страница), здесь запрос уходит в поисковый API и ответ строится
-    по нескольким найденным результатам. Пусто TAVILY_API_KEY -> честная ошибка."""
+    """Настоящий поиск по интернету (Yandex Search API, §19 ТЗ) — в отличие от
+    /v1/web/research (одна заданная страница), здесь запрос уходит в поисковый API
+    и ответ строится по нескольким найденным результатам. Пусто YANDEX_SEARCH_API_KEY
+    или YANDEX_FOLDER_ID -> честная ошибка."""
     rate_limiter.check(payload.context.userId)
     with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_SEARCH"):
         result = await search_and_answer(payload.query)

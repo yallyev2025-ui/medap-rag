@@ -1,14 +1,22 @@
 """Настоящий веб-поиск по интернету (§19 ТЗ, батч 8) — в отличие от
 app/workflows/web_research.py (одна заданная страница), здесь запрос идёт в
-поисковый API (Tavily) и ответ строится по НЕСКОЛЬКИМ найденным результатам.
+поисковый API (Yandex Search API) и ответ строится по НЕСКОЛЬКИМ найденным
+результатам.
 
-Tavily сам фетчит страницы — SSRF-защита (app/security/ssrf.py) здесь не нужна:
-это не наш прямой fetch произвольного URL студента, а один вызов доверенного
-внешнего API по HTTPS с ключом. Пусто `TAVILY_API_KEY` = честная "не настроено",
-без похода в сеть — тот же принцип, что у OPENAI_API_KEY/SERVICE_TOKEN.
+Yandex Search API сам фетчит страницы — SSRF-защита (app/security/ssrf.py)
+здесь не нужна: это не наш прямой fetch произвольного URL студента, а один
+вызов доверенного внешнего API по HTTPS с ключом. Пусто YANDEX_SEARCH_API_KEY
+или YANDEX_FOLDER_ID = честная "не настроено", без похода в сеть — тот же
+принцип, что у OPENAI_API_KEY/SERVICE_TOKEN.
+
+Выбран вместо Tavily по запросу пользователя: Tavily тарифицируется через
+западный биллинг, недоступный без карты, которую нельзя оформить. Yandex
+Cloud принимает российский биллинг.
 """
 
+import base64
 import logging
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,7 +29,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-TAVILY_URL = "https://api.tavily.com/search"
+YANDEX_SEARCH_URL = "https://searchapi.api.cloud.yandex.net/v2/web/search"
 
 WEB_SEARCH_SYSTEM_PROMPT = """Тебе даны результаты поиска по интернету (заголовок, ссылка, фрагмент текста для каждого) и вопрос.
 
@@ -49,31 +57,69 @@ class WebSearchResult:
     request_id: str | None = None
 
 
-async def _tavily_search(query: str) -> list[dict[str, Any]]:
+def _doc_text(doc: ET.Element) -> str:
+    # Точные теги внутри <passages> не подтверждены живым запросом (нет доступа
+    # к Yandex Cloud из песочницы) — пробуем известные варианты по очереди,
+    # запасной путь — просто заголовок+ссылка без сниппета, не роняем функцию.
+    passages = doc.findall("./passages/passage")
+    if passages:
+        return " ".join(p.text.strip() for p in passages if p.text and p.text.strip())
+    headline = doc.find("./headline")
+    if headline is not None and headline.text:
+        return headline.text.strip()
+    return ""
+
+
+def _parse_yandex_xml(raw_xml: bytes) -> list[dict[str, Any]]:
+    root = ET.fromstring(raw_xml)
+    results: list[dict[str, Any]] = []
+    for doc in root.findall(".//group/doc"):
+        url_el = doc.find("./url")
+        title_el = doc.find("./title")
+        url = (url_el.text or "").strip() if url_el is not None and url_el.text else ""
+        title = (title_el.text or "").strip() if title_el is not None and title_el.text else ""
+        if not url:
+            continue
+        results.append({"url": url, "title": title, "content": _doc_text(doc)})
+    return results
+
+
+async def _yandex_search(query: str) -> list[dict[str, Any]]:
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
-            TAVILY_URL,
+            YANDEX_SEARCH_URL,
+            headers={"Authorization": f"Api-Key {settings.YANDEX_SEARCH_API_KEY}"},
             json={
-                "api_key": settings.TAVILY_API_KEY,
-                "query": query,
-                "max_results": settings.TAVILY_MAX_RESULTS,
+                "query": {"searchType": "SEARCH_TYPE_RU", "queryText": query},
+                "folderId": settings.YANDEX_FOLDER_ID,
+                "responseFormat": "FORMAT_XML",
             },
         )
         response.raise_for_status()
         data = response.json()
-    return data.get("results", [])
+
+    raw_data = data.get("rawData")
+    if not raw_data:
+        return []
+    try:
+        raw_xml = base64.b64decode(raw_data)
+        return _parse_yandex_xml(raw_xml)
+    except (ValueError, ET.ParseError):
+        logger.exception("Web Search: не удалось разобрать ответ Yandex Search API")
+        return []
 
 
 async def search_and_answer(query: str) -> WebSearchResult:
-    if not settings.TAVILY_API_KEY:
+    if not settings.YANDEX_SEARCH_API_KEY or not settings.YANDEX_FOLDER_ID:
         return WebSearchResult(query=query, error=_NOT_CONFIGURED_MESSAGE, request_id=current_request_id())
 
     try:
-        results = await _tavily_search(query)
+        results = await _yandex_search(query)
     except httpx.HTTPError:
-        logger.exception("Web Search: сбой запроса к Tavily")
+        logger.exception("Web Search: сбой запроса к Yandex Search API")
         return WebSearchResult(query=query, error="Поиск сейчас недоступен, попробуй позже.", request_id=current_request_id())
 
+    results = results[: settings.WEB_SEARCH_MAX_RESULTS]
     if not results:
         return WebSearchResult(query=query, error=_NO_RESULTS_MESSAGE, request_id=current_request_id())
 

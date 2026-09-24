@@ -75,6 +75,10 @@ class Book(Base):
     pages_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reindexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Клинреки, синхронизированные с Рубрикатором Минздрава (app/integrations/
+    # clinrek_sync.py, батч 9): хранит "{код}_{версия}" с сайта — по нему
+    # определяется, что версия обновилась. None у обычных источников.
+    external_ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class BookChunk(Base):

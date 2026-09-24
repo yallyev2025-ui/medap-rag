@@ -16,6 +16,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -24,6 +25,7 @@ from sqlalchemy import select
 from app.admin.health import system_health
 from app.admin.stats import dashboard_stats
 from app.evidence.viewer import fetch_evidence
+from app.integrations.clinrek_sync import apply_update, check_for_updates
 from app.llm.prompts import clear_cache
 from app.llm.registry import model_registry
 from app.llm.task_map import task_model_map
@@ -214,10 +216,7 @@ async def retrieval_inspector(
     )
 
 
-@router.get("/sources", response_class=HTMLResponse)
-async def sources(request: Request):
-    if not is_admin(request):
-        return _login_redirect()
+async def _sources_context(**overrides) -> dict:
     # Список для выбора предмета в форме загрузки — не только зашитые в код коды
     # (SUBJECT_LABELS), но и любые предметы, которыми уже реально помечены
     # загруженные учебники (в т.ч. добавленные вручную ранее): предмет один раз
@@ -233,25 +232,33 @@ async def sources(request: Request):
         for code in await get_textbook_subjects(session):
             if code and code not in textbook_subjects:
                 textbook_subjects[code] = code.capitalize()
-    return templates.TemplateResponse(
-        request,
-        "sources.html",
-        {
-            "books": books,
-            "jobs": jobs,
-            "subjects": SUBJECT_LABELS,
-            "textbook_subjects": textbook_subjects,
-            "clinrek_categories": [(value, label) for _code, label, value in CLINREK_CATEGORIES if value],
-            "source_textbook": SOURCE_TEXTBOOK,
-            "source_clinrek": SOURCE_CLINREK,
-            "max_upload_mb": settings.MAX_UPLOAD_MB,
-            "authority_levels": AUTHORITY_LEVELS,
-            "default_authority_level": DEFAULT_AUTHORITY_LEVEL,
-            "verification_statuses": VERIFICATION_STATUSES,
-            "default_verification_status": DEFAULT_VERIFICATION_STATUS,
-            "source_statuses": SOURCE_STATUSES,
-        },
-    )
+    base = {
+        "books": books,
+        "jobs": jobs,
+        "subjects": SUBJECT_LABELS,
+        "textbook_subjects": textbook_subjects,
+        "clinrek_categories": [(value, label) for _code, label, value in CLINREK_CATEGORIES if value],
+        "source_textbook": SOURCE_TEXTBOOK,
+        "source_clinrek": SOURCE_CLINREK,
+        "max_upload_mb": settings.MAX_UPLOAD_MB,
+        "authority_levels": AUTHORITY_LEVELS,
+        "default_authority_level": DEFAULT_AUTHORITY_LEVEL,
+        "verification_statuses": VERIFICATION_STATUSES,
+        "default_verification_status": DEFAULT_VERIFICATION_STATUS,
+        "source_statuses": SOURCE_STATUSES,
+        "clinrek_updates": None,
+        "clinrek_sync_error": None,
+        "clinrek_apply_summary": None,
+    }
+    base.update(overrides)
+    return base
+
+
+@router.get("/sources", response_class=HTMLResponse)
+async def sources(request: Request):
+    if not is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(request, "sources.html", await _sources_context())
 
 
 @router.post("/sources/upload")
@@ -541,6 +548,59 @@ async def set_source_status(request: Request, book_id: int, status: str = Form(.
     return RedirectResponse(url="/admin/sources", status_code=303)
 
 
+@router.get("/clinreks/check-updates", response_class=HTMLResponse)
+async def clinrek_check_updates(request: Request):
+    """Проверка обновлений клинреков на Рубрикаторе Минздрава (§9 ТЗ, батч 9) —
+    кнопка, не автоматическое расписание (решение пользователя): список найденного
+    показывается, загрузка выбранных — отдельным подтверждением ниже."""
+    if not is_admin(request):
+        return _login_redirect()
+    try:
+        async with async_session() as session:
+            updates = await check_for_updates(session)
+        error = None
+    except httpx.HTTPError:
+        logger.exception("Clinrek sync: сбой запроса к Рубрикатору Минздрава")
+        updates = []
+        error = "Не удалось связаться с сайтом Минздрава — попробуйте позже."
+    return templates.TemplateResponse(
+        request, "sources.html", await _sources_context(clinrek_updates=updates, clinrek_sync_error=error)
+    )
+
+
+@router.post("/clinreks/apply-updates")
+async def clinrek_apply_updates(request: Request, external_ref: list[str] = Form(default=[])):
+    """Загружает выбранные обновления — тот же конвейер, что при обычной загрузке
+    (load_book через apply_update). Сбой одной рекомендации не должен обрывать
+    остальные — тот же принцип "залогировать и продолжать", что в load_clinreks.py."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    async with async_session() as session:
+        updates = await check_for_updates(session)
+        selected = {u.remote.external_ref: u for u in updates if u.remote.external_ref in external_ref}
+
+        applied = 0
+        failed: list[str] = []
+        for ref, update in selected.items():
+            try:
+                await apply_update(session, update)
+                applied += 1
+            except Exception:
+                logger.exception("Clinrek sync: не удалось применить обновление %s", ref)
+                failed.append(update.remote.title)
+
+        remaining_updates = await check_for_updates(session)
+
+    summary = f"Загружено: {applied}." + (f" Ошибок: {len(failed)} ({', '.join(failed)})." if failed else "")
+    await audit("clinrek_sync_apply", target="clinreks", details=summary)
+    return templates.TemplateResponse(
+        request,
+        "sources.html",
+        await _sources_context(clinrek_updates=remaining_updates, clinrek_apply_summary=summary),
+    )
+
+
 # --- AI Playground (раздел 4 дополнения к ТЗ) ------------------------------------
 
 
@@ -760,8 +820,9 @@ async def playground_web_research(
 
 @router.post("/playground/web-search", response_class=HTMLResponse)
 async def playground_web_search(request: Request, websearch_query: str = Form(...)):
-    """Предпросмотр настоящего веб-поиска (Tavily, §19 ТЗ) — та же функция, что и
-    POST /v1/web/search. Без TAVILY_API_KEY сразу видно «не настроено», не 500."""
+    """Предпросмотр настоящего веб-поиска (Yandex Search API, §19 ТЗ) — та же функция,
+    что и POST /v1/web/search. Без YANDEX_SEARCH_API_KEY/YANDEX_FOLDER_ID сразу видно
+    «не настроено», не 500."""
     if not is_admin(request):
         return _login_redirect()
 

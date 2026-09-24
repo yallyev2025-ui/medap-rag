@@ -204,10 +204,12 @@ Telegram-бот, `/v1/chat`+`/v1/explain` — всё отвечало на ре�
 
 ### Открытые пункты — статус после батча 8
 
-1. **Настоящий поиск по интернету** — код готов (`app/workflows/web_search.py`, Tavily, `Task.WEB_SEARCH`,
-   `POST /v1/web/search`, кнопка «🌐 Найти в интернете» в Telegram), но **неактивен**: `TAVILY_API_KEY`
-   пуст, пользователь ещё не зарегистрировался и не прислал ключ. Активируется само, без правок кода,
-   как только ключ появится в переменных Timeweb.
+1. **Настоящий поиск по интернету** — код готов (`app/workflows/web_search.py`, Yandex Search API,
+   `Task.WEB_SEARCH`, `POST /v1/web/search`, кнопка «🌐 Интернет» в Telegram), но **неактивен**:
+   `YANDEX_SEARCH_API_KEY`/`YANDEX_FOLDER_ID` пусты, пользователь ещё не завёл Yandex Cloud аккаунт.
+   Изначально реализовано на Tavily, заменено на Yandex Search API — у пользователя нет карты с
+   западным биллингом. Активируется само, без правок кода, как только оба значения появятся в
+   переменных Timeweb.
 2. **PubMed** — сделано (`app/workflows/pubmed.py`, NCBI E-utilities, ключ не нужен, `Task.PUBMED_SEARCH`,
    `POST /v1/pubmed/search`, кнопка «🔬 Искать в PubMed» в Telegram). Живой сетевой тест к NCBI из
    песочницы разработки был недоступен (egress-политика окружения блокирует хост) — проверено
