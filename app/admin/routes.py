@@ -44,6 +44,7 @@ from config import settings
 from constants import (
     ALLOWED_UPLOAD_EXTENSIONS,
     AUTHORITY_LEVELS,
+    CLINREK_CATEGORIES,
     DEFAULT_AUTHORITY_LEVEL,
     DEFAULT_VERIFICATION_STATUS,
     FEEDBACK_REASONS,
@@ -57,6 +58,7 @@ from db.crud import (
     create_eval_case,
     current_prompt,
     delete_book,
+    get_textbook_subjects,
     list_answer_logs,
     list_books,
     list_eval_cases,
@@ -214,6 +216,11 @@ async def retrieval_inspector(
 async def sources(request: Request):
     if not is_admin(request):
         return _login_redirect()
+    # Список для выбора предмета в форме загрузки — не только зашитые в код коды
+    # (SUBJECT_LABELS), но и любые предметы, которыми уже реально помечены
+    # загруженные учебники (в т.ч. добавленные вручную ранее): предмет один раз
+    # вписывается как новый, дальше выбирается из списка, а не печатается заново.
+    textbook_subjects = dict(SUBJECT_LABELS)
     async with async_session() as session:
         books = await list_books(session)
         jobs = (
@@ -221,6 +228,9 @@ async def sources(request: Request):
             .scalars()
             .all()
         )
+        for code in await get_textbook_subjects(session):
+            if code and code not in textbook_subjects:
+                textbook_subjects[code] = code.capitalize()
     return templates.TemplateResponse(
         request,
         "sources.html",
@@ -228,6 +238,8 @@ async def sources(request: Request):
             "books": books,
             "jobs": jobs,
             "subjects": SUBJECT_LABELS,
+            "textbook_subjects": textbook_subjects,
+            "clinrek_categories": [(value, label) for _code, label, value in CLINREK_CATEGORIES if value],
             "source_textbook": SOURCE_TEXTBOOK,
             "source_clinrek": SOURCE_CLINREK,
             "max_upload_mb": settings.MAX_UPLOAD_MB,
@@ -246,6 +258,10 @@ async def upload_source(
     file: UploadFile = File(...),
     source_type: str = Form(SOURCE_TEXTBOOK),
     subject: str = Form(...),
+    # Заполнено, только если в форме выбран пункт «+ Другой предмет» — новый
+    # предмет вписывается один раз, дальше выбирается из списка (он появится
+    # там сам: список строится по реально загруженным учебникам, см. sources()).
+    new_subject: str = Form(""),
     author: str = Form(""),
     title: str = Form(""),
     section: str = Form(""),
@@ -271,6 +287,11 @@ async def upload_source(
     # строго нижним регистром: несовпадение регистра значит "разные предметы",
     # и учебник молча выпадает из поиска. Нормализуем здесь, а не полагаемся на
     # то, что каждый администратор аккуратно вводит текст с любого устройства.
+    # new_subject учитывается только для учебников (клинреки — закрытый список
+    # категорий пациентов, "+ другой предмет" там не показывается) — проверяем
+    # source_type на сервере, а не только скрытием поля через JS в форме.
+    if source_type == SOURCE_TEXTBOOK and new_subject.strip():
+        subject = new_subject.strip()
     subject = subject.strip().lower()
 
     extension = os.path.splitext(file.filename or "")[1].lower()

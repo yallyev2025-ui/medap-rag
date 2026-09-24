@@ -17,20 +17,25 @@
       </div>
       <div>
         <label for="source_type">Тип источника</label>
-        <select id="source_type" name="source_type">
+        <select id="source_type" name="source_type" onchange="medapToggleSubjectFields(this.value)">
           <option value="{{ source_textbook }}">Учебник</option>
           <option value="{{ source_clinrek }}">Клиническая рекомендация</option>
         </select>
       </div>
-      <div>
-        <label for="subject">Предмет или категория</label>
-        <input id="subject" name="subject" list="subject-options" required placeholder="pathphys" autocapitalize="off">
-        <datalist id="subject-options">
-          {% for code, label in subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
-          <option value="взрослые">Клинреки: взрослые</option>
-          <option value="дети">Клинреки: дети</option>
-          <option value="взрослые_и_дети">Клинреки: взрослые и дети</option>
-        </datalist>
+      <div id="textbook-subject-field">
+        <label for="subject_textbook">Предмет</label>
+        <select id="subject_textbook" name="subject" onchange="medapToggleNewSubject(this.value)">
+          {% for code, label in textbook_subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          <option value="__new__">+ Другой предмет…</option>
+        </select>
+        <input id="new_subject" name="new_subject" placeholder="Впишите новый предмет"
+               style="display:none; margin-top:6px; width:100%" autocapitalize="off">
+      </div>
+      <div id="clinrek-subject-field" style="display:none">
+        <label for="subject_clinrek">Категория пациентов</label>
+        <select id="subject_clinrek" name="subject" disabled>
+          {% for value, label in clinrek_categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
       </div>
       <div>
         <label for="author">Автор (для учебника)</label>
@@ -83,6 +88,21 @@
       индексация. Большой учебник занимает минуты; статус виден ниже.
     </p>
   </form>
+  <script>
+    function medapToggleSubjectFields(sourceType) {
+      var isClinrek = sourceType === "{{ source_clinrek }}";
+      document.getElementById("textbook-subject-field").style.display = isClinrek ? "none" : "";
+      document.getElementById("clinrek-subject-field").style.display = isClinrek ? "" : "none";
+      document.getElementById("subject_textbook").disabled = isClinrek;
+      document.getElementById("subject_clinrek").disabled = !isClinrek;
+      if (isClinrek) {
+        document.getElementById("new_subject").style.display = "none";
+      }
+    }
+    function medapToggleNewSubject(subjectValue) {
+      document.getElementById("new_subject").style.display = subjectValue === "__new__" ? "" : "none";
+    }
+  </script>
 </section>
 
 <section>
@@ -120,6 +140,10 @@
     Название, автор и предмет можно править прямо здесь — переиндексация не требуется,
     правка обновит и сам источник, и подписи у уже загруженных фрагментов.
   </p>
+  <datalist id="subject-options">
+    {% for code, label in textbook_subjects.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+    {% for value, label in clinrek_categories %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+  </datalist>
   <table>
     <tr>
       <th>Название</th><th>Автор</th><th>Предмет</th><th>Тип</th>
@@ -129,7 +153,7 @@
     <tr>
       <td><input name="title" value="{{ book.title }}" form="edit-{{ book.id }}" style="width:100%"></td>
       <td><input name="author" value="{{ book.author }}" form="edit-{{ book.id }}" style="width:100%"></td>
-      <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" style="width:100%" autocapitalize="off"></td>
+      <td><input name="subject" value="{{ book.subject }}" form="edit-{{ book.id }}" list="subject-options" style="width:100%" autocapitalize="off"></td>
       <td>{{ book.source_type }}</td>
       <td>
         <select name="authority_level" form="edit-{{ book.id }}">
