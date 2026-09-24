@@ -30,14 +30,15 @@ class LimitsMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
-        # Фото (Vision/Test Solver, §17 ТЗ) и документы (§18 ТЗ, этап 4A.5) тоже
-        # расходуют лимит и требуют db_user — раньше middleware пропускал их мимо
-        # (event.text пуст у обоих), и хендлер остался бы без db_user/usage_ctx в data.
+        # Фото (Vision/Test Solver, §17 ТЗ), документы (§18 ТЗ, этап 4A.5) и голосовые
+        # (устная самопроверка, батч 8) тоже расходуют лимит и требуют db_user — раньше
+        # middleware пропускал их мимо (event.text пуст у всех), и хендлер остался бы
+        # без db_user/usage_ctx в data.
         if event.from_user is None:
             return await handler(event, data)
         if event.text and event.text.startswith("/"):
             return await handler(event, data)
-        if not event.text and not event.photo and not event.document:
+        if not event.text and not event.photo and not event.document and not event.voice:
             return await handler(event, data)
 
         async with async_session() as session:

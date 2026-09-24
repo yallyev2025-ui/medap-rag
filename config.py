@@ -39,6 +39,19 @@ class Settings(BaseSettings):
     # тарификация по минутам аудио, поэтому лимит на размер файла обязателен.
     ORAL_MAX_AUDIO_MB: int = 15
 
+    # --- Настоящий веб-поиск (§19 ТЗ) — Tavily, сам фетчит страницы, поэтому SSRF-
+    # защита (app/security/ssrf.py) здесь не нужна: мы зовём один доверенный API,
+    # а не произвольный URL студента. Пусто = функция вернёт честную "не настроено".
+    TAVILY_API_KEY: str = ""
+    TAVILY_MAX_RESULTS: int = 5
+    WEB_SEARCH_SNIPPET_MAX_CHARS: int = 2000
+
+    # --- PubMed (сверх исходного ТЗ, добавлено по запросу) — NCBI E-utilities,
+    # бесплатный публичный API, ключ не обязателен (лимит 3 запроса/сек без ключа).
+    PUBMED_MAX_RESULTS: int = 5
+    # Рекомендуется NCBI (не обязательно) — добавляется в запросы, если задано.
+    PUBMED_CONTACT_EMAIL: str = ""
+
     # --- Цены провайдеров (§59, §64). Доллары за 1M токенов, с версией и датой -----
     PRICING_VERSION: str = "2026-09-19"
     DEEPSEEK_INPUT_PRICE_USD: float = 0.30

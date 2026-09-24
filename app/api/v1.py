@@ -31,7 +31,9 @@ from app.workflows.user_documents import (
     list_user_documents,
 )
 from app.workflows.vision import TestSolveResult, solve_from_image
+from app.workflows.pubmed import PubMedResult, search_pubmed
 from app.workflows.web_research import WebResearchResult, research_url
+from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
 from constants import SOURCE_TEXTBOOK
 from rag.generator import generate_repair
@@ -643,3 +645,90 @@ async def web_research_endpoint(payload: WebResearchRequest, request: Request) -
     with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_RESEARCH"):
         result = await research_url(payload.url, payload.question)
     return _web_research_response(result)
+
+
+# --- Настоящий веб-поиск (Tavily) и PubMed (§19 ТЗ + сверх ТЗ, батч 8) ----------
+
+
+class WebSearchSource(BaseModel):
+    title: str
+    url: str
+
+
+class WebSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    context: StudentAIContext
+
+
+class WebSearchResponse(BaseModel):
+    query: str
+    answer: str
+    sources: list[WebSearchSource]
+    error: str | None = None
+    requestId: str | None = None
+
+
+def _web_search_response(result: WebSearchResult) -> WebSearchResponse:
+    return WebSearchResponse(
+        query=result.query,
+        answer=result.answer,
+        sources=[WebSearchSource(**s) for s in result.sources],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.post("/web/search", response_model=WebSearchResponse)
+async def web_search_endpoint(payload: WebSearchRequest, request: Request) -> WebSearchResponse:
+    """Настоящий поиск по интернету (Tavily, §19 ТЗ) — в отличие от /v1/web/research
+    (одна заданная страница), здесь запрос уходит в поисковый API и ответ строится
+    по нескольким найденным результатам. Пусто TAVILY_API_KEY -> честная ошибка."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_SEARCH"):
+        result = await search_and_answer(payload.query)
+    return _web_search_response(result)
+
+
+class PubMedArticleModel(BaseModel):
+    pmid: str
+    title: str
+    journal: str | None = None
+    year: str | None = None
+    url: str
+
+
+class PubMedSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    question: str | None = None
+    context: StudentAIContext
+
+
+class PubMedSearchResponse(BaseModel):
+    query: str
+    answer: str
+    articles: list[PubMedArticleModel]
+    error: str | None = None
+    requestId: str | None = None
+
+
+def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
+    return PubMedSearchResponse(
+        query=result.query,
+        answer=result.answer,
+        articles=[
+            PubMedArticleModel(pmid=a.pmid, title=a.title, journal=a.journal, year=a.year, url=a.url)
+            for a in result.articles
+        ],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.post("/pubmed/search", response_model=PubMedSearchResponse)
+async def pubmed_search_endpoint(payload: PubMedSearchRequest, request: Request) -> PubMedSearchResponse:
+    """Поиск по научным статьям PubMed (сверх исходного ТЗ) — NCBI E-utilities,
+    заземлённый ответ по реальным абстрактам, не по общим знаниям модели."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_SEARCH"):
+        result = await search_pubmed(payload.query, payload.question)
+    return _pubmed_response(result)

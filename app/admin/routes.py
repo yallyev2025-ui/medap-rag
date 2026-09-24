@@ -38,8 +38,10 @@ from app.security.auth import (
 )
 from app.workflows.ask import ask
 from app.workflows.evaluate import evaluate_free_recall, evaluate_oral, evaluate_recall
+from app.workflows.pubmed import search_pubmed
 from app.workflows.quick_outline import generate_quick_outline
 from app.workflows.web_research import research_url
+from app.workflows.web_search import search_and_answer
 from config import settings
 from constants import (
     ALLOWED_UPLOAD_EXTENSIONS,
@@ -565,6 +567,10 @@ def _playground_context(**overrides) -> dict:
         "research_result": None,
         "research_url": "",
         "research_question": "",
+        "websearch_result": None,
+        "websearch_query": "",
+        "pubmed_result": None,
+        "pubmed_query": "",
     }
     base.update(overrides)
     return base
@@ -749,6 +755,40 @@ async def playground_web_research(
             research_url=research_url_value,
             research_question=research_question,
         ),
+    )
+
+
+@router.post("/playground/web-search", response_class=HTMLResponse)
+async def playground_web_search(request: Request, websearch_query: str = Form(...)):
+    """Предпросмотр настоящего веб-поиска (Tavily, §19 ТЗ) — та же функция, что и
+    POST /v1/web/search. Без TAVILY_API_KEY сразу видно «не настроено», не 500."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    with request_context(user_id="admin", channel="admin", workflow="WEB_SEARCH"):
+        result = await search_and_answer(websearch_query)
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(websearch_result=result, websearch_query=websearch_query),
+    )
+
+
+@router.post("/playground/pubmed", response_class=HTMLResponse)
+async def playground_pubmed(request: Request, pubmed_query: str = Form(...)):
+    """Предпросмотр поиска по PubMed (сверх исходного ТЗ) — та же функция, что и
+    POST /v1/pubmed/search."""
+    if not is_admin(request):
+        return _login_redirect()
+
+    with request_context(user_id="admin", channel="admin", workflow="PUBMED_SEARCH"):
+        result = await search_pubmed(pubmed_query)
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(pubmed_result=result, pubmed_query=pubmed_query),
     )
 
 

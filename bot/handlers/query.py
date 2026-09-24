@@ -17,6 +17,8 @@ from aiogram.types import (
 
 from app.observability.context import request_context
 from app.workflows.ask import ask
+from app.workflows.pubmed import search_pubmed
+from app.workflows.web_search import search_and_answer
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
 from bot.handlers.user_documents import handle_document_question
@@ -43,16 +45,20 @@ ERROR_TEXT = "⚠️ Произошла ошибка, попробуй ещё р
 CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу ответы строго по выбранной базе."
 NEW_CHAT_TEXT = "🆕 Начал новую тему — предыдущий разговор забыт."
 NOT_FOUND_ASK = (
-    "В загруженных материалах по этому вопросу ничего нет.\n"
-    "Ответить из общих знаний ИИ? Это не официальный источник — перепроверьте."
+    "В загруженных материалах по этому вопросу ничего нет. Как ответить?\n"
+    "Учти: общие знания ИИ, интернет и PubMed — не официальные источники MedAP, перепроверяйте."
 )
 
 CONSENT_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(text="Да, из общих знаний", callback_data="genk:yes"),
+            InlineKeyboardButton(text="🌐 Найти в интернете", callback_data="web:yes"),
+        ],
+        [
+            InlineKeyboardButton(text="🔬 Искать в PubMed", callback_data="pubmed:yes"),
             InlineKeyboardButton(text="Нет", callback_data="genk:no"),
-        ]
+        ],
     ]
 )
 
@@ -197,6 +203,84 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
         return
 
     await _clear_status(status)
+    await _send_answer(callback.message, answer)
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await increment_usage(session, user.id)
+        await session.commit()
+
+
+@router.callback_query(F.data == "web:yes")
+async def consent_web_search(callback: CallbackQuery) -> None:
+    await callback.answer()
+    question = _pending_general.pop(callback.from_user.id, None)
+    try:
+        await callback.message.edit_reply_markup()
+    except Exception:
+        pass
+
+    if not question:
+        await callback.message.answer("Запрос устарел — задайте вопрос заново.")
+        return
+
+    status = await callback.message.answer("🌐 Ищу в интернете…")
+    try:
+        with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram", workflow="WEB_SEARCH"):
+            result = await search_and_answer(question)
+    except Exception:
+        logger.exception("Ошибка при веб-поиске")
+        await _set_status(status, ERROR_TEXT)
+        return
+
+    if result.error:
+        await _set_status(status, f"⚠️ {result.error}")
+        return
+
+    await _clear_status(status)
+    answer = result.answer
+    if result.sources:
+        links = "\n".join(f"— {s['title'] or s['url']} ({s['url']})" for s in result.sources)
+        answer = f"{answer}\n\nИсточники:\n{links}"
+    await _send_answer(callback.message, answer)
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await increment_usage(session, user.id)
+        await session.commit()
+
+
+@router.callback_query(F.data == "pubmed:yes")
+async def consent_pubmed_search(callback: CallbackQuery) -> None:
+    await callback.answer()
+    question = _pending_general.pop(callback.from_user.id, None)
+    try:
+        await callback.message.edit_reply_markup()
+    except Exception:
+        pass
+
+    if not question:
+        await callback.message.answer("Запрос устарел — задайте вопрос заново.")
+        return
+
+    status = await callback.message.answer("🔬 Ищу в PubMed…")
+    try:
+        with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram", workflow="PUBMED_SEARCH"):
+            result = await search_pubmed(question)
+    except Exception:
+        logger.exception("Ошибка при поиске в PubMed")
+        await _set_status(status, ERROR_TEXT)
+        return
+
+    if result.error:
+        await _set_status(status, f"⚠️ {result.error}")
+        return
+
+    await _clear_status(status)
+    answer = result.answer
+    if result.articles:
+        links = "\n".join(f"— {a.title} ({a.journal or '—'}, {a.year or '—'}): {a.url}" for a in result.articles)
+        answer = f"{answer}\n\nСтатьи:\n{links}"
     await _send_answer(callback.message, answer)
 
     async with async_session() as session:

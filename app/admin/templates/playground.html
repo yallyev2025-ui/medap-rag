@@ -295,4 +295,68 @@
   </div>
   {% endif %}
 </section>
+
+<section>
+  <h1 style="font-size:18px">Веб-поиск (Tavily) — предпросмотр</h1>
+  <p class="sub">
+    Настоящий поиск по интернету по запросу (§19 ТЗ), не одна заданная страница — та же функция,
+    что и <code>POST /v1/web/search</code>. Без ключа Tavily (переменная <code>TAVILY_API_KEY</code>)
+    сразу видно «не настроено».
+  </p>
+  <form method="post" action="/admin/playground/web-search" class="card">
+    <div>
+      <label for="websearch_query">Запрос</label>
+      <input id="websearch_query" name="websearch_query" value="{{ websearch_query }}" style="width:100%" required>
+    </div>
+    <button style="margin-top:12px">Искать в интернете</button>
+  </form>
+
+  {% if websearch_result %}
+  <div class="card" style="margin-top:12px">
+    {% if websearch_result.error %}
+    <p class="note status-error">{{ websearch_result.error }}</p>
+    {% else %}
+    <p class="note">⚠️ Веб-источники, не проверено</p>
+    <p style="margin:8px 0 0; white-space:pre-wrap">{{ websearch_result.answer }}</p>
+    {% if websearch_result.sources %}
+    <div style="margin-top:10px">
+      <div class="label">Источники</div>
+      <ul>{% for s in websearch_result.sources %}<li><a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title or s.url }}</a></li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+<section>
+  <h1 style="font-size:18px">PubMed — предпросмотр</h1>
+  <p class="sub">
+    Поиск по научным статьям (сверх исходного ТЗ) — та же функция, что и
+    <code>POST /v1/pubmed/search</code>. Ключ не нужен (NCBI E-utilities, публичный API).
+  </p>
+  <form method="post" action="/admin/playground/pubmed" class="card">
+    <div>
+      <label for="pubmed_query">Запрос (на английском — PubMed индексирует статьи на английском)</label>
+      <input id="pubmed_query" name="pubmed_query" value="{{ pubmed_query }}" style="width:100%" required>
+    </div>
+    <button style="margin-top:12px">Искать в PubMed</button>
+  </form>
+
+  {% if pubmed_result %}
+  <div class="card" style="margin-top:12px">
+    {% if pubmed_result.error %}
+    <p class="note status-error">{{ pubmed_result.error }}</p>
+    {% else %}
+    <p style="margin:8px 0 0; white-space:pre-wrap">{{ pubmed_result.answer }}</p>
+    {% if pubmed_result.articles %}
+    <div style="margin-top:10px">
+      <div class="label">Статьи</div>
+      <ul>{% for a in pubmed_result.articles %}<li><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title }}</a> — {{ a.journal or '—' }}, {{ a.year or '—' }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
 {% endblock %}

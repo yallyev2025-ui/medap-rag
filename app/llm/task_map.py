@@ -29,6 +29,11 @@ class Task(str, Enum):
     # Web Research (§19, §34 ТЗ, этап 4A.6) — заземлённый ответ по тексту ОДНОЙ
     # загруженной веб-страницы, та же группа, что GROUNDED_QA/DOCUMENT_QA.
     WEB_RESEARCH = "WEB_RESEARCH"
+    # Настоящий поиск по интернету (Tavily, §19 ТЗ, батч 8) — отдельно от WEB_RESEARCH
+    # (там одна заданная страница, здесь несколько результатов поиска по запросу).
+    WEB_SEARCH = "WEB_SEARCH"
+    # PubMed (сверх исходного ТЗ, батч 8) — заземлённый ответ по абстрактам статей.
+    PUBMED_SEARCH = "PUBMED_SEARCH"
     # Quick Outline (раздел "Quick Outline" дополнения к ТЗ) — заземлённая генерация
     # строго типизированной схемы по учебникам для сайта владельца, не студенческий Q&A.
     QUICK_OUTLINE = "QUICK_OUTLINE"
@@ -52,6 +57,8 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.DOCUMENT_QA: DEEPSEEK,
     Task.TARGETED_REPAIR: DEEPSEEK,
     Task.WEB_RESEARCH: DEEPSEEK,
+    Task.WEB_SEARCH: DEEPSEEK,
+    Task.PUBMED_SEARCH: DEEPSEEK,
     Task.QUICK_OUTLINE: DEEPSEEK,
     Task.VISION_EXTRACT: OPENAI,
     Task.RECALL_EVALUATE: OPENAI,
