@@ -129,6 +129,16 @@ class Settings(BaseSettings):
     # Сколько текста страницы реально уходит в промпт (символы) — дальше отсекается.
     WEB_RESEARCH_MAX_CHARS: int = 12000
 
+    # --- Gates (§49 ТЗ, этап 4B) ---------------------------------------------------
+    # Выключены по умолчанию: пороги честно ставить только после baseline на
+    # настоящих учебниках. Значения ниже — заглушки, вписать реальные после
+    # первого прогона evals/benchmark на загруженном корпусе.
+    GATES_ENABLED: bool = False
+    GATE_MIN_RECALL_AT_K: float = 0.7
+    GATE_MIN_PASS_RATE: float = 0.7
+    GATE_MAX_HALLUCINATIONS: int = 0
+    GATE_MIN_VERIFIED_RATE: float = 0.8
+
     # --- Версии для воспроизводимости ответа (§35) --------------------------------
     PROMPT_VERSION: str = "v1"
     RETRIEVAL_VERSION: str = "v2-hybrid-bm25-rrf"

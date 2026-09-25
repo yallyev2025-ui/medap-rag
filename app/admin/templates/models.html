@@ -4,16 +4,48 @@
 <h1>Models</h1>
 <p class="sub">
   За каждой атомарной задачей закреплён провайдер (TaskModelMap, §56.5 ТЗ). Модель не выбирается
-  заново на каждый запрос. Маппинг меняется переменной TASK_MODEL_MAP_OVERRIDES, код не трогается;
-  production-смена проходит benchmark на этапе 4.
+  заново на каждый запрос. Смена здесь действует сразу, без пересборки образа, с историей и откатом;
+  решение принимается по benchmark на странице <a href="/admin/evals#benchmark">Evals</a>.
+  Приоритет: админка → переменная TASK_MODEL_MAP_OVERRIDES → код.
 </p>
 
 <section>
   <h1 style="font-size:18px">TaskModelMap</h1>
+  {% if error == 'gates' %}
+  <p class="note status-error">Смена заблокирована: этот провайдер провалил Gates в последнем benchmark (GATES_ENABLED=true).</p>
+  {% elif error %}
+  <p class="note status-error">Некорректный запрос: {{ error }}</p>
+  {% endif %}
   <table>
-    <tr><th>Задача</th><th>Провайдер</th></tr>
-    {% for task, provider in task_map.items() %}
-    <tr><td>{{ task }}</td><td>{{ provider }}</td></tr>
+    <tr><th>Задача</th><th>Провайдер</th><th>Откуда</th><th>Сменить</th><th></th></tr>
+    {% for task, entry in task_map.items() %}
+    <tr>
+      <td>{{ task }}</td>
+      <td>{{ entry.provider }}</td>
+      <td>{{ entry.source }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/models/apply"
+              onsubmit="return confirm('Сменить production-провайдера для {{ task }}?')">
+          <input type="hidden" name="task" value="{{ task }}">
+          <select name="provider">
+            {% for key, profile in registry.items() %}
+            <option value="{{ key }}" {% if key == entry.provider %}selected{% endif %}>
+              {{ key }}{% if not profile.enabled %} (нет ключа){% endif %}{% if key in blocked_providers %} (провал Gates){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <button class="ghost">Применить</button>
+        </form>
+      </td>
+      <td>
+        {% if entry.source == 'админка' %}
+        <form class="inline" method="post" action="/admin/models/rollback">
+          <input type="hidden" name="task" value="{{ task }}">
+          <button class="ghost">Откатить</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
     {% endfor %}
   </table>
 </section>

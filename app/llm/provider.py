@@ -21,7 +21,7 @@ from typing import Any
 import openai
 
 from app.llm.registry import ModelProfile, profile
-from app.llm.task_map import DEEPSEEK, OPENAI, Task, provider_for
+from app.llm.task_map import DEEPSEEK, OPENAI, Task, resolve_provider
 from app.llm.usage import record_usage
 from config import settings
 
@@ -114,7 +114,7 @@ async def complete(
     `json_schema` включает structured output: ответ парсится и проверяется на
     обязательные поля верхнего уровня; при провале делается один повтор.
     """
-    provider_key, fallback_from = provider_for(task)
+    provider_key, fallback_from = await resolve_provider(task)
     prof: ModelProfile = profile(provider_key)
     client = _client(provider_key)
 

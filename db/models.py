@@ -344,3 +344,35 @@ class EvalCase(Base):
     expect_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvalRun(Base):
+    """Сохранённый прогон evals/benchmark (этап 4B). Раньше отчёты жили в памяти
+    процесса и терялись при каждом деплое — а baseline и Gates без истории
+    прогонов бессмысленны."""
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # "eval" — обычный прогон датасета; "benchmark" — сравнение провайдеров.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="eval")
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    report: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
+    is_baseline: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TaskModelOverride(Base):
+    """Production-маппинг задача → провайдер, изменённый из админки (этап 4B, §60).
+
+    Приоритетнее TASK_MODEL_MAP_OVERRIDES из окружения: смена без пересборки
+    образа. История не переписывается — откат создаёт новую активную строку."""
+
+    __tablename__ = "task_model_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="admin")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

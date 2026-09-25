@@ -28,7 +28,7 @@ from app.evidence.viewer import fetch_evidence
 from app.integrations.clinrek_sync import apply_update, check_for_updates
 from app.llm.prompts import clear_cache
 from app.llm.registry import model_registry
-from app.llm.task_map import task_model_map
+from app.llm.task_map import Task, clear_override_cache, effective_task_model_map
 from app.llm.usage import usage_for_request
 from app.observability.context import request_context
 from app.security.audit import audit
@@ -39,6 +39,7 @@ from app.security.auth import (
     issue_admin_session,
 )
 from app.workflows.ask import ask
+from app.workflows.content_studio import CONTENT_CASE, CONTENT_RECALL, CONTENT_TEST, generate_content
 from app.workflows.evaluate import evaluate_free_recall, evaluate_oral, evaluate_recall
 from app.workflows.pubmed import search_pubmed
 from app.workflows.quick_outline import generate_quick_outline
@@ -52,6 +53,9 @@ from constants import (
     DEFAULT_AUTHORITY_LEVEL,
     DEFAULT_VERIFICATION_STATUS,
     FEEDBACK_REASONS,
+    FEEDBACK_TO_REGRESSION,
+    REGRESSION_CATEGORIES,
+    REGRESSION_CATEGORY_CODES,
     SOURCE_CLINREK,
     SOURCE_STATUSES,
     SOURCE_TEXTBOOK,
@@ -59,25 +63,39 @@ from constants import (
     VERIFICATION_STATUSES,
 )
 from db.crud import (
+    apply_model_override,
     create_eval_case,
     current_prompt,
     delete_book,
+    get_baseline_run,
     get_textbook_subjects,
     list_answer_logs,
     list_books,
     list_eval_cases,
+    list_eval_runs,
     list_prompt_versions,
     publish_prompt,
+    rollback_model_override,
+    save_eval_run,
     set_answer_feedback,
+    set_baseline_run,
     update_book,
 )
 from db.models import IngestJob, PromptVersion
 from db.session import async_session
+from evals.benchmark import run_benchmark
+from evals.gates import check_gates, gates_passed
 from evals.run import run_eval
 from rag.generator import PROMPT_DEFAULTS
 from rag.retriever import retrieve_with_diagnostics
 
 logger = logging.getLogger(__name__)
+
+CONTENT_TYPE_LABELS = {
+    CONTENT_RECALL: "Recall-вопросы",
+    CONTENT_TEST: "Тестовые вопросы",
+    CONTENT_CASE: "Клинический кейс",
+}
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -98,11 +116,6 @@ _ingest_tasks_by_job: dict[int, asyncio.Task] = {}
 # Расширения, которые умеет разбирать rag/processor.py.
 ALLOWED_EXTENSIONS = set(ALLOWED_UPLOAD_EXTENSIONS)
 
-# Последние прогоны /admin/evals — для сравнения «до/после» в текущей сессии
-# процесса. Не персистится на диск: файловая система Timeweb эфемерна между
-# деплоями, а прогон и так можно повторить в любой момент.
-_recent_eval_reports: list[dict] = []
-_MAX_RECENT_REPORTS = 5
 
 
 def _login_redirect() -> RedirectResponse:
@@ -158,14 +171,69 @@ async def dashboard(request: Request):
 async def models(request: Request):
     if not is_admin(request):
         return _login_redirect()
+    effective = await effective_task_model_map()
+    async with async_session() as session:
+        last_benchmark = (await list_eval_runs(session, "benchmark", limit=1)) or [None]
+    blocked = _providers_blocked_by_gates(last_benchmark[0])
     return templates.TemplateResponse(
         request,
         "models.html",
         {
             "registry": model_registry(),
-            "task_map": {task.value: provider for task, provider in task_model_map().items()},
+            "task_map": {task.value: {"provider": p, "source": src} for task, (p, src) in effective.items()},
+            "gates_enabled": settings.GATES_ENABLED,
+            "blocked_providers": blocked,
+            "error": request.query_params.get("error", ""),
         },
     )
+
+
+def _providers_blocked_by_gates(benchmark_run) -> set[str]:
+    """Провайдеры, провалившие Gates в последнем benchmark — смена задачи на них
+    блокируется, только если Gates включены (§49)."""
+    if benchmark_run is None or not settings.GATES_ENABLED:
+        return set()
+    report = json.loads(benchmark_run.report)
+    return {
+        p["provider"]
+        for p in report.get("providers", [])
+        if not all(g["passed"] for g in p.get("gates", []))
+    }
+
+
+@router.post("/models/apply")
+async def models_apply(request: Request, task: str = Form(...), provider: str = Form(...)):
+    """Смена production-провайдера задачи без пересборки образа (§60), с историей."""
+    if not is_admin(request):
+        return _login_redirect()
+    try:
+        Task(task)
+    except ValueError:
+        return RedirectResponse(url="/admin/models?error=bad_task", status_code=303)
+    if provider not in model_registry():
+        return RedirectResponse(url="/admin/models?error=bad_provider", status_code=303)
+
+    async with async_session() as session:
+        last_benchmark = (await list_eval_runs(session, "benchmark", limit=1)) or [None]
+        if provider in _providers_blocked_by_gates(last_benchmark[0]):
+            return RedirectResponse(url="/admin/models?error=gates", status_code=303)
+        await apply_model_override(session, task, provider)
+        await session.commit()
+    clear_override_cache()
+    await audit("model_override_apply", target=task, details=f"provider={provider}")
+    return RedirectResponse(url="/admin/models", status_code=303)
+
+
+@router.post("/models/rollback")
+async def models_rollback(request: Request, task: str = Form(...)):
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        restored = await rollback_model_override(session, task)
+        await session.commit()
+    clear_override_cache()
+    await audit("model_override_rollback", target=task, details=f"provider={restored or 'по умолчанию'}")
+    return RedirectResponse(url="/admin/models", status_code=303)
 
 
 @router.get("/health", response_class=HTMLResponse)
@@ -631,6 +699,12 @@ def _playground_context(**overrides) -> dict:
         "websearch_query": "",
         "pubmed_result": None,
         "pubmed_query": "",
+        "content_result": None,
+        "content_json": "",
+        "content_topic": "",
+        "content_subject": "",
+        "content_type": CONTENT_RECALL,
+        "content_types": CONTENT_TYPE_LABELS,
     }
     base.update(overrides)
     return base
@@ -750,6 +824,38 @@ async def playground_oral(
             eval_question=eval_question,
             eval_subject=eval_subject,
             eval_mode="oral",
+        ),
+    )
+
+
+@router.post("/playground/content", response_class=HTMLResponse)
+async def playground_content(
+    request: Request,
+    content_topic: str = Form(...),
+    content_type: str = Form(CONTENT_RECALL),
+    content_subject: str = Form(""),
+):
+    """Предпросмотр Content Studio (§31 ТЗ) — генерация для сайта идёт через
+    /v1/content/*; здесь только посмотреть качество черновика."""
+    if not is_admin(request):
+        return _login_redirect()
+    if content_type not in CONTENT_TYPE_LABELS:
+        content_type = CONTENT_RECALL
+
+    with request_context(user_id="admin", channel="admin", workflow=f"CONTENT_{content_type.upper()}"):
+        content_result = await generate_content(
+            content_type, content_topic, subject=content_subject.strip().lower() or None
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "playground.html",
+        _playground_context(
+            content_result=content_result,
+            content_json=json.dumps(content_result.items, ensure_ascii=False, indent=2),
+            content_topic=content_topic,
+            content_subject=content_subject,
+            content_type=content_type,
         ),
     )
 
@@ -894,6 +1000,7 @@ async def answers_list(request: Request, verified: str = "", flagged: str = ""):
             "verified_filter": verified,
             "flagged_filter": flagged,
             "feedback_reasons": FEEDBACK_REASONS,
+            "feedback_to_regression": FEEDBACK_TO_REGRESSION,
         },
     )
 
@@ -975,22 +1082,68 @@ async def prompts_rollback(request: Request, key: str, version_id: int):
 # --- Evals (раздел 13 дополнения к ТЗ) -------------------------------------------
 
 
+def _eval_metrics(summary: dict) -> dict[str, float | None]:
+    generation = summary.get("generation") or {}
+    total = generation.get("total") or 0
+    return {
+        "recallAtK": summary.get("retrieval", {}).get("recallAtK"),
+        "mrr": summary.get("retrieval", {}).get("mrr"),
+        "passRate": (generation["passed"] / total) if total else None,
+        "verifiedRate": generation.get("verifiedRate"),
+        "hallucinations": generation.get("hallucinations") if generation else None,
+        "costRub": summary.get("cost", {}).get("totalRub"),
+    }
+
+
+def _eval_run_view(run, baseline_metrics: dict | None) -> dict:
+    report = json.loads(run.report)
+    metrics = _eval_metrics(report.get("summary", {}))
+    delta: dict[str, float | None] = {key: None for key in metrics}
+    if baseline_metrics is not None and not run.is_baseline:
+        for key, value in metrics.items():
+            base = baseline_metrics.get(key)
+            delta[key] = (value - base) if value is not None and base is not None else None
+    gates = check_gates(report)
+    return {
+        "id": run.id,
+        "created_at": run.created_at,
+        "is_baseline": run.is_baseline,
+        "summary": report.get("summary", {}),
+        "metrics": metrics,
+        "delta": delta,
+        "gates": gates,
+        "gates_passed": gates_passed(gates),
+    }
+
+
 @router.get("/evals", response_class=HTMLResponse)
-async def evals_page(request: Request, prefill_question: str = "", prefill_subject: str = ""):
+async def evals_page(
+    request: Request, prefill_question: str = "", prefill_subject: str = "", prefill_category: str = ""
+):
     if not is_admin(request):
         return _login_redirect()
     async with async_session() as session:
         db_cases = await list_eval_cases(session)
+        runs = await list_eval_runs(session, "eval")
+        benchmark_runs = await list_eval_runs(session, "benchmark", limit=5)
+        baseline = await get_baseline_run(session)
+
+    baseline_metrics = _eval_metrics(json.loads(baseline.report).get("summary", {})) if baseline else None
     return templates.TemplateResponse(
         request,
         "evals.html",
         {
             "db_cases": db_cases,
-            "reports": list(reversed(_recent_eval_reports)),
+            "runs": [_eval_run_view(r, baseline_metrics) for r in runs],
+            "benchmarks": [{"id": r.id, "created_at": r.created_at, **json.loads(r.report)} for r in benchmark_runs],
+            "has_baseline": baseline is not None,
+            "gates_enabled": settings.GATES_ENABLED,
+            "regression_categories": REGRESSION_CATEGORIES,
             "source_textbook": SOURCE_TEXTBOOK,
             "source_clinrek": SOURCE_CLINREK,
             "prefill_question": prefill_question,
             "prefill_subject": prefill_subject,
+            "prefill_category": prefill_category if prefill_category in REGRESSION_CATEGORY_CODES else "",
         },
     )
 
@@ -1038,7 +1191,35 @@ async def evals_run(request: Request, retrieval_only: str = Form("")):
     if not is_admin(request):
         return _login_redirect()
     report = await run_eval(retrieval_only=bool(retrieval_only))
-    _recent_eval_reports.append(report)
-    del _recent_eval_reports[:-_MAX_RECENT_REPORTS]
+    async with async_session() as session:
+        await save_eval_run(session, "eval", report, label="retrieval-only" if retrieval_only else None)
+        await session.commit()
     await audit("eval_run", details=f"cases={report['summary']['cases']}")
     return RedirectResponse(url="/admin/evals", status_code=303)
+
+
+@router.post("/evals/{run_id}/baseline")
+async def evals_set_baseline(request: Request, run_id: int):
+    """Прогон, относительно которого считаются дельты (и от которого ставятся пороги Gates)."""
+    if not is_admin(request):
+        return _login_redirect()
+    async with async_session() as session:
+        ok = await set_baseline_run(session, run_id)
+        await session.commit()
+    if ok:
+        await audit("eval_baseline", target=str(run_id))
+    return RedirectResponse(url="/admin/evals", status_code=303)
+
+
+@router.post("/evals/benchmark")
+async def evals_benchmark(request: Request):
+    """Benchmark провайдеров (§60): тот же датасет на каждом провайдере с ключом.
+    Синхронно, как и обычный прогон; стоит примерно как два прогона evals."""
+    if not is_admin(request):
+        return _login_redirect()
+    report = await run_benchmark()
+    async with async_session() as session:
+        await save_eval_run(session, "benchmark", report)
+        await session.commit()
+    await audit("benchmark_run", details=", ".join(p["provider"] for p in report["providers"]))
+    return RedirectResponse(url="/admin/evals#benchmark", status_code=303)

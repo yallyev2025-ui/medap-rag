@@ -1,5 +1,6 @@
 """CRUD-операции для пользователей, лимитов и истории запросов."""
 
+import json
 from datetime import date, datetime, timezone
 
 from aiogram.types import User as TelegramUser
@@ -9,7 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from constants import SOURCE_TEXTBOOK
-from db.models import AIUsageEvent, AnswerLog, Book, BookChunk, EvalCase, PromptVersion, Query, Usage, User
+from db.models import (
+    AIUsageEvent,
+    AnswerLog,
+    Book,
+    BookChunk,
+    EvalCase,
+    EvalRun,
+    PromptVersion,
+    Query,
+    TaskModelOverride,
+    Usage,
+    User,
+)
 
 
 def _today() -> date:
@@ -420,3 +433,76 @@ async def create_eval_case(session: AsyncSession, **fields) -> EvalCase:
     session.add(case)
     await session.flush()
     return case
+
+
+# --- Прогоны evals/benchmark и baseline (этап 4B) --------------------------------
+
+
+async def save_eval_run(session: AsyncSession, kind: str, report: dict, label: str | None = None) -> EvalRun:
+    run = EvalRun(kind=kind, label=label, report=json.dumps(report, ensure_ascii=False))
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def list_eval_runs(session: AsyncSession, kind: str, limit: int = 10) -> list[EvalRun]:
+    result = await session.execute(
+        select(EvalRun).where(EvalRun.kind == kind).order_by(EvalRun.id.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_baseline_run(session: AsyncSession) -> EvalRun | None:
+    result = await session.execute(
+        select(EvalRun).where(EvalRun.kind == "eval", EvalRun.is_baseline.is_(True)).order_by(EvalRun.id.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def set_baseline_run(session: AsyncSession, run_id: int) -> bool:
+    run = await session.get(EvalRun, run_id)
+    if run is None or run.kind != "eval":
+        return False
+    await session.execute(update(EvalRun).where(EvalRun.kind == "eval").values(is_baseline=False))
+    run.is_baseline = True
+    return True
+
+
+# --- Production-маппинг задача → провайдер из админки (этап 4B, §60) ------------
+
+
+async def apply_model_override(session: AsyncSession, task: str, provider: str, actor: str = "admin") -> None:
+    """Новая активная строка, прежняя активная по задаче деактивируется — история
+    не переписывается, откат возможен (rollback_model_override)."""
+    await session.execute(
+        update(TaskModelOverride)
+        .where(TaskModelOverride.task == task, TaskModelOverride.active.is_(True))
+        .values(active=False)
+    )
+    session.add(TaskModelOverride(task=task, provider=provider, active=True, created_by=actor))
+    await session.flush()
+
+
+async def rollback_model_override(session: AsyncSession, task: str, actor: str = "admin") -> str | None:
+    """Возврат к провайдеру, который был до текущего оверрайда. Если истории нет —
+    снимает оверрайд (задача возвращается к маппингу из кода/окружения). Возвращает
+    провайдер после отката или None, если оверрайд просто снят."""
+    rows = (
+        await session.execute(
+            select(TaskModelOverride).where(TaskModelOverride.task == task).order_by(TaskModelOverride.id.desc())
+        )
+    ).scalars().all()
+    if not rows:
+        return None
+
+    current, previous = rows[0], rows[1] if len(rows) > 1 else None
+    await session.execute(
+        update(TaskModelOverride)
+        .where(TaskModelOverride.task == task, TaskModelOverride.active.is_(True))
+        .values(active=False)
+    )
+    if previous is None or not current.active:
+        return None
+    session.add(TaskModelOverride(task=task, provider=previous.provider, active=True, created_by=actor))
+    await session.flush()
+    return previous.provider

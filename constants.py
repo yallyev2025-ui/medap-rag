@@ -121,3 +121,42 @@ FEEDBACK_REASONS: list[tuple[str, str]] = [
     ("evaluation_problem", "Проблема оценки"),
     ("other", "Другое"),
 ]
+
+
+# --- Категории регрессий (§40 ТЗ, этап 4B) ------------------------------------
+# Каждая найденная ошибка превращается в eval-кейс своей категории. В списке —
+# и классы ошибок из §40, и уже используемые категории eval/dataset.jsonl, чтобы
+# старые кейсы оставались валидными.
+REGRESSION_CATEGORIES: list[tuple[str, str]] = [
+    ("hallucination", "Галлюцинация (ответ без подтверждения)"),
+    ("wrong_citation", "Неверная цитата"),
+    ("retrieval_miss", "Промах поиска"),
+    ("source_priority", "Неверный приоритет источника"),
+    ("suppressed_conflict", "Подавленный конфликт источников"),
+    ("numeric_error", "Числовая ошибка (дозы, единицы, диапазоны)"),
+    ("evaluation_error", "Ошибка оценки ответа студента"),
+    ("private_data_leak", "Утечка приватных данных"),
+    ("vision_error", "Ошибка Vision"),
+    ("prompt_injection", "Prompt injection"),
+    ("grounded_factual_qa", "Фактический вопрос по материалам"),
+    ("explain_to_student", "Объяснение студенту"),
+    ("no_evidence_abstention", "Честный отказ без подтверждения"),
+    ("mechanism_causality", "Механизм / причинность"),
+    ("textbook_strict", "Строго по учебнику"),
+    ("numeric_safety", "Числовая безопасность"),
+    ("source_conflict", "Конфликт источников"),
+    ("multi_step", "Многошаговый вопрос"),
+    ("uncategorized", "Без категории"),
+]
+REGRESSION_CATEGORY_CODES = [code for code, _ in REGRESSION_CATEGORIES]
+# Провал в этих категориях — блокер релиза независимо от числовых порогов (§49).
+CRITICAL_REGRESSION_CATEGORIES = ("private_data_leak", "prompt_injection")
+
+# Причина из Answer Inspector → категория регрессии (кнопка «Добавить в Eval Dataset»).
+FEEDBACK_TO_REGRESSION: dict[str, str] = {
+    "incorrect_answer": "hallucination",
+    "bad_retrieval": "retrieval_miss",
+    "bad_citation": "wrong_citation",
+    "source_conflict": "suppressed_conflict",
+    "evaluation_problem": "evaluation_error",
+}

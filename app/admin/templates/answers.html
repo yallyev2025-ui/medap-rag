@@ -66,7 +66,7 @@
       </div>
       <div><button>Сохранить</button></div>
       <div>
-        <a href="/admin/evals?prefill_question={{ log.question | urlencode }}&prefill_subject={{ log.subject or '' | urlencode }}">
+        <a href="/admin/evals?prefill_question={{ log.question | urlencode }}&prefill_subject={{ log.subject or '' | urlencode }}&prefill_category={{ feedback_to_regression.get(log.feedback_reason, '') }}">
           Добавить в Evals
         </a>
       </div>

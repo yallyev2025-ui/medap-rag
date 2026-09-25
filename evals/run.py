@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from app.llm.usage import usage_for_request
+from evals.gates import check_gates, gates_block
 from app.observability.context import request_context
 from app.workflows.ask import ask
 from config import settings
@@ -330,6 +331,11 @@ async def main() -> None:
         help="только поиск, без вызовов LLM (бесплатно и быстро)",
     )
     parser.add_argument("--out", default=None, help="куда сохранить JSON-отчёт")
+    parser.add_argument(
+        "--gates",
+        action="store_true",
+        help="проверить пороги GATE_*; при GATES_ENABLED и провале — код выхода 1 (для CI)",
+    )
     args = parser.parse_args()
 
     report = await run_eval(args.dataset, args.retrieval_only, progress=True)
@@ -343,6 +349,14 @@ async def main() -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nОтчёт сохранён: {out_path}")
+
+    if args.gates:
+        results = check_gates(report)
+        print("\nGates" + ("" if settings.GATES_ENABLED else " (выключены — только информативно)") + ":")
+        for r in results:
+            print(f"  [{'OK  ' if r.passed else 'FAIL'}] {r.gate}: {r.actual} (порог {r.threshold})")
+        if gates_block(results):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

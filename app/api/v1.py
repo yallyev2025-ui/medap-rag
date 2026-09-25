@@ -13,6 +13,7 @@ import base64
 import logging
 import os
 import tempfile
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
 from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
+from app.workflows.content_studio import CONTENT_CASE, CONTENT_RECALL, CONTENT_TEST, generate_content
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_oral, evaluate_recall
 from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outline
 from app.workflows.user_documents import (
@@ -484,6 +486,70 @@ async def quick_outline_generate(payload: QuickOutlineRequest, request: Request)
             subject=payload.context.subjectId,
         )
     return _quick_outline_response(result)
+
+
+# --- Content Studio (§31 ТЗ, этап 4B) -------------------------------------------
+# Как Quick Outline: вызывается с сайта владельца, черновик хранится и публикуется
+# там. Ответ всегда status="AI_DRAFT" — без проверки человеком не публикуется.
+
+
+class ContentRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    count: int = Field(5, ge=1, le=20)
+    context: StudentAIContext
+
+
+class ContentDraftResponse(BaseModel):
+    topic: str
+    contentType: str
+    status: str
+    # Каждый элемент несёт citationIds/evidenceIds — трассировку к конкретным
+    # фрагментам (evidenceReferences ниже и /v1/evidence/{evidenceId}).
+    items: list[dict[str, Any]]
+    evidenceReferences: list[Citation]
+    droppedUnsupported: int = 0
+    error: str | None = None
+    requestId: str | None = None
+
+
+async def _generate_content(content_type: str, payload: ContentRequest) -> ContentDraftResponse:
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow=f"CONTENT_{content_type.upper()}"):
+        result = await generate_content(
+            content_type,
+            payload.topic,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+            count=payload.count,
+        )
+    return ContentDraftResponse(
+        topic=result.topic,
+        contentType=result.content_type,
+        status=result.status,
+        items=result.items,
+        evidenceReferences=[Citation(**c) for c in result.evidence_references],
+        droppedUnsupported=result.dropped_unsupported,
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.post("/content/recall-items", response_model=ContentDraftResponse)
+async def content_recall_items(payload: ContentRequest, request: Request) -> ContentDraftResponse:
+    """Recall-вопросы с эталонными пунктами ответа — черновик для сайта владельца."""
+    return await _generate_content(CONTENT_RECALL, payload)
+
+
+@router.post("/content/test-questions", response_model=ContentDraftResponse)
+async def content_test_questions(payload: ContentRequest, request: Request) -> ContentDraftResponse:
+    """Тестовые вопросы (варианты, правильный, объяснение) — черновик для сайта владельца."""
+    return await _generate_content(CONTENT_TEST, payload)
+
+
+@router.post("/content/clinical-case", response_model=ContentDraftResponse)
+async def content_clinical_case(payload: ContentRequest, request: Request) -> ContentDraftResponse:
+    """Учебный клинический кейс с вопросами и разбором — черновик для сайта владельца."""
+    return await _generate_content(CONTENT_CASE, payload)
 
 
 # --- Документы пользователя (§18 ТЗ, этап 4A.5) --------------------------------

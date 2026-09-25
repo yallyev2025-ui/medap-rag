@@ -264,6 +264,81 @@
   {% endif %}
 </section>
 
+<section id="content-studio">
+  <h1 style="font-size:18px">Content Studio — предпросмотр</h1>
+  <p class="sub">
+    Черновики учебного контента по загруженным материалам. Генерация для сайта —
+    <code>POST /v1/content/recall-items</code>, <code>/test-questions</code>, <code>/clinical-case</code>;
+    хранение, правка и публикация — на сайте. Всё здесь — AI-черновик, без проверки человеком не публикуется.
+  </p>
+  <form method="post" action="/admin/playground/content" class="card">
+    <div class="fields">
+      <div>
+        <label for="content_topic">Тема</label>
+        <input id="content_topic" name="content_topic" value="{{ content_topic }}" style="width:100%" required>
+      </div>
+      <div>
+        <label for="content_type">Тип</label>
+        <select id="content_type" name="content_type">
+          {% for code, label in content_types.items() %}
+          <option value="{{ code }}" {% if code == content_type %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="content_subject">Предмет (необязательно)</label>
+        <input id="content_subject" name="content_subject" value="{{ content_subject }}" list="subject-options" autocapitalize="off">
+      </div>
+    </div>
+    <button style="margin-top:12px">Сгенерировать черновик</button>
+  </form>
+
+  {% if content_result %}
+  {% set refs = {} %}
+  {% for c in content_result.evidence_references %}{% set _ = refs.update({c.evidenceId: c}) %}{% endfor %}
+  <div class="card" style="margin-top:12px">
+    {% if content_result.error %}
+    <p class="note">{{ content_result.error }}</p>
+    {% else %}
+    <div class="label">
+      Статус: {{ content_result.status }} · элементов: {{ content_result.items|length }}
+      {% if content_result.dropped_unsupported %} · отброшено без опоры на источник: {{ content_result.dropped_unsupported }}{% endif %}
+    </div>
+    {% for item in content_result.items %}
+    <div style="margin-top:12px">
+      {% if item.scenario %}
+      <p><b>Случай:</b> {{ item.scenario }}</p>
+      <ol>
+        {% for q in item.questions %}
+        <li><b>{{ q.question }}</b><br>{{ q.answer }}
+          <span class="note">— {% for eid in q.evidenceIds %}{{ refs[eid].sourceTitle if eid in refs else eid }}{% if eid in refs and refs[eid].page %}, стр. {{ refs[eid].page }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <b>{{ loop.index }}. {{ item.question }}</b>
+      {% if item.options %}
+      <ol type="A">
+        {% for opt in item.options %}<li>{% if loop.index0 == item.correctIndex %}<b>{{ opt }} ✓</b>{% else %}{{ opt }}{% endif %}</li>{% endfor %}
+      </ol>
+      {% if item.explanation %}<p class="note">{{ item.explanation }}</p>{% endif %}
+      {% endif %}
+      {% if item.expectedPoints %}
+      <ul>{% for p in item.expectedPoints %}<li>{{ p }}</li>{% endfor %}</ul>
+      {% endif %}
+      <p class="note">Источники: {% for eid in item.evidenceIds %}{{ refs[eid].sourceTitle if eid in refs else eid }}{% if eid in refs and refs[eid].page %}, стр. {{ refs[eid].page }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer">Сырой JSON (для копирования)</summary>
+      <pre style="white-space:pre-wrap; font-size:12px; margin-top:8px">{{ content_json }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
 <section>
   <h1 style="font-size:18px">Web Research — предпросмотр</h1>
   <p class="sub">
