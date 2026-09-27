@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from app.admin.routes import router as admin_router
 from app.api.v1 import router as v1_router
+from app.security.body_size import MaxBodySizeMiddleware
 
 from config import settings
 from constants import SOURCE_TEXTBOOK, clinrek_label, subject_label
@@ -38,6 +39,20 @@ app = FastAPI(title="MedAP Student AI")
 # реранкер занимают ~4.5 ГБ и должны жить в памяти в единственном экземпляре.
 app.include_router(v1_router)
 app.include_router(admin_router)
+
+# Лимит на размер тела запроса ДО парсинга в модель (батч 14, app/security/body_size.py) —
+# запас ~40% сверх декодированного MB-предела задачи: тело — это base64 (+33%) плюс
+# сама JSON-обёртка, легитимный запрос ровно на предельный размер файла не должен
+# отбиваться здесь раньше точной проверки внутри обработчика/workflow.
+_MB = 1024 * 1024
+app.add_middleware(
+    MaxBodySizeMiddleware,
+    limits={
+        "/v1/documents": int(settings.USER_DOCUMENT_MAX_MB * 1.4 * _MB),
+        "/v1/evaluate/oral": int(settings.ORAL_MAX_AUDIO_MB * 1.4 * _MB),
+        "/v1/vision/analyze": int(settings.VISION_MAX_IMAGE_MB * 1.4 * _MB),
+    },
+)
 
 
 def _source_str(c: ChunkResult) -> str:

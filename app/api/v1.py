@@ -463,6 +463,9 @@ async def vision_analyze(payload: VisionAnalyzeRequest, request: Request) -> Vis
     except (ValueError, base64.binascii.Error):
         raise HTTPException(status_code=400, detail="imageBase64 is not valid base64")
 
+    if len(image_bytes) > settings.VISION_MAX_IMAGE_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Изображение больше {settings.VISION_MAX_IMAGE_MB} МБ")
+
     with request_context(user_id=payload.context.userId, channel="api", workflow="VISION_EXTRACT"):
         result = await solve_from_image(
             image_bytes,
