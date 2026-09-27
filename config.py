@@ -1,6 +1,7 @@
+import os
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -103,6 +104,15 @@ class Settings(BaseSettings):
     # пиковая память при одновременном рендере нескольких страниц (в процессе
     # уже живут эмбеддер и реранкер).
     OCR_WORKERS: int = 4
+
+    # Батч 16: без этого PyTorch/BLAS (расчёт эмбеддингов, rag/embedder.py)
+    # по умолчанию претендует на ВСЕ видимые ядра процессора — во время
+    # загрузки источника это отбирает процессор у event loop (бот/админка/API)
+    # настолько, что всё остальное подвисает. Авто-подбор: одно ядро оставляем
+    # свободным; переопределяется переменной окружения CPU_THREAD_LIMIT, если
+    # нужно вручную (например, если контейнер видит больше ядер, чем реально
+    # выделено тарифом Timeweb).
+    CPU_THREAD_LIMIT: int = Field(default_factory=lambda: max(1, (os.cpu_count() or 2) - 1))
 
     ADMIN_IDS_RAW: str = ""
 
@@ -251,3 +261,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Батч 16: должно случиться ДО первого импорта torch где-либо в процессе —
+# config.py импортируется практически везде первым, поэтому это надёжная
+# точка. setdefault(), а не прямое присваивание: если оператор уже явно
+# выставил переменную окружения сам, не переписываем её.
+os.environ.setdefault("OMP_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
+os.environ.setdefault("MKL_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
+os.environ.setdefault("OPENBLAS_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
