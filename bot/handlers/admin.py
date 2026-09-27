@@ -30,7 +30,7 @@ from db.crud import (
     set_premium,
 )
 from db.session import async_session
-from scripts.load_books import load_book
+from scripts.load_books import SOURCE_INGEST_LOCK, load_book
 
 logger = logging.getLogger(__name__)
 
@@ -352,13 +352,19 @@ async def addbook_choose_category(callback: CallbackQuery, state: FSMContext) ->
     await callback.message.edit_text(
         f"Загружаю клин. рекомендации ({len(files)} шт.) в категорию «{clinrek_label(subject)}»…"
     )
+    # Батч 15: одновременно с этим может грузиться другой источник (веб-админка
+    # или ещё один /addbook) — тот же SOURCE_INGEST_LOCK не даёт им разбираться
+    # разом. Предупреждаем один раз заранее, а не молча заставляем ждать.
+    if SOURCE_INGEST_LOCK.locked():
+        await callback.message.answer("⏳ Сейчас грузится другой источник — начну, как только освободится.")
 
     ok = 0
     for i, (file_path, name) in enumerate(files, start=1):
         title = os.path.splitext(name)[0]
         progress = f"({i}/{len(files)}) " if len(files) > 1 else ""
         try:
-            _book_id, chunks_count = await load_book(file_path, subject, "", title, SOURCE_CLINREK)
+            async with SOURCE_INGEST_LOCK:
+                _book_id, chunks_count = await load_book(file_path, subject, "", title, SOURCE_CLINREK)
             ok += 1
             await callback.message.answer(f"✅ {progress}«{title}» — {chunks_count} чанков")
         except Exception:
@@ -430,13 +436,18 @@ async def addbook_title(message: Message, state: FSMContext) -> None:
         f"({len(files)} шт.), это может занять время "
         "(для сканированных PDF дольше — распознаю текст)..."
     )
+    # Батч 15: та же очередь, что и у клинреков/веб-админки — не разбирать
+    # несколько источников одновременно.
+    if SOURCE_INGEST_LOCK.locked():
+        await message.answer("⏳ Сейчас грузится другой источник — начну, как только освободится.")
 
     ok = 0
     for i, (file_path, _name) in enumerate(files, start=1):
         title = f"{base_title} — Часть {i}" if multiple else base_title
         progress = f"({i}/{len(files)}) " if multiple else ""
         try:
-            _book_id, chunks_count = await load_book(file_path, subject, author, title, source_type)
+            async with SOURCE_INGEST_LOCK:
+                _book_id, chunks_count = await load_book(file_path, subject, author, title, source_type)
             ok += 1
             await message.answer(f"✅ {progress}«{title}» добавлен: {chunks_count} чанков")
         except Exception:

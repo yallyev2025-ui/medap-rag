@@ -454,28 +454,35 @@ async def _run_ingest(
     Переиспользуется `scripts.load_books.load_book` — та же функция, которой грузит
     бот, поэтому у сайта и Telegram один и тот же чанкинг и эмбеддинги.
     """
-    from scripts.load_books import load_book
+    from scripts.load_books import SOURCE_INGEST_LOCK, load_book
 
     with request_context(channel="admin", workflow="INGEST"):
         # Весь путь целиком в try/except: если упадёт даже самая первая отметка
         # статуса (например, БД моргнула на секунду), задача не должна тихо
         # исчезнуть, оставив запись висеть в "pending" без объяснений.
         try:
-            await _set_job(job_id, status="running", stage="parsing")
-            _book_id, chunks = await load_book(
-                file_path,
-                subject,
-                author,
-                title,
-                source_type=source_type,
-                section=section,
-                topic=topic,
-                edition=edition,
-                year=year,
-                authority_level=authority_level,
-                verification_status=verification_status,
-                language=language,
-            )
+            # Батч 15: несколько загрузок подряд не должны разбираться разом —
+            # OCR/эмбеддинги одного источника уже нагружают процесс, где
+            # заодно живёт Telegram-бот. Job остаётся в статусе "pending"
+            # (проставлен при создании), пока ждёт своей очереди — меняем
+            # только stage, чтобы в таблице было видно, что она не забыта.
+            await _set_job(job_id, stage="queued")
+            async with SOURCE_INGEST_LOCK:
+                await _set_job(job_id, status="running", stage="parsing")
+                _book_id, chunks = await load_book(
+                    file_path,
+                    subject,
+                    author,
+                    title,
+                    source_type=source_type,
+                    section=section,
+                    topic=topic,
+                    edition=edition,
+                    year=year,
+                    authority_level=authority_level,
+                    verification_status=verification_status,
+                    language=language,
+                )
             await _set_job(
                 job_id,
                 status="done",

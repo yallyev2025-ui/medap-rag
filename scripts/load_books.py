@@ -19,6 +19,15 @@ from rag.processor import chunk_text, extract_document
 
 BATCH_SIZE = 32
 
+# Батч 15: очередь на загрузку ИСТОЧНИКА (учебник/клинрек) в общий корпус —
+# веб-админка (app/admin/routes.py::_run_ingest) и Telegram /addbook
+# оборачивают им СВОЙ вызов load_book(), не саму функцию. Осознанно НЕ внутри
+# load_book(): личные документы студента (ingest_user_document(),
+# app/workflows/user_documents.py) тоже вызывают load_book(), и должны
+# оставаться отзывчивыми для студента независимо от того, что в этот момент
+# грузит админ — общий лок внутри самой функции придавил бы и их тоже.
+SOURCE_INGEST_LOCK: asyncio.Lock = asyncio.Lock()
+
 
 async def load_book(
     file_path: str,
