@@ -10,6 +10,7 @@ Fusion — Reciprocal Rank Fusion (RRF), стандартный способ о�
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, select
@@ -57,7 +58,7 @@ def _base_filters(
     source_type: str | None,
     subject: str | None,
     title: str | None,
-    book_id: int | None = None,
+    book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
 ):
     # Отключённые/архивные источники не участвуют в поиске (§8 ТЗ, раздел 3
@@ -70,11 +71,15 @@ def _base_filters(
         stmt = stmt.where(BookChunk.subject == subject)
     if title is not None:
         stmt = stmt.where(BookChunk.title == title)
-    # Личный документ студента (§18, этап 4A.5): оба фильтра вместе — book_id сужает
-    # до одного документа, user_id не даёт отдать чужие чанки, даже если book_id
-    # угадан/подставлен ошибочно выше по стеку.
+    # Личный документ(ы) студента (§18, этап 4A.5, батч 13): оба фильтра вместе —
+    # book_id сужает до выбранных документов (один — равенством, несколько —
+    # IN, объединённый поиск по всем сразу), user_id не даёт отдать чужие чанки,
+    # даже если book_id угадан/подставлен ошибочно выше по стеку.
     if book_id is not None:
-        stmt = stmt.where(BookChunk.book_id == book_id)
+        if isinstance(book_id, int):
+            stmt = stmt.where(BookChunk.book_id == book_id)
+        else:
+            stmt = stmt.where(BookChunk.book_id.in_(book_id))
     if user_id is not None:
         stmt = stmt.where(BookChunk.user_id == user_id)
     return stmt
@@ -86,7 +91,7 @@ async def _fetch_dense(
     source_type: str | None,
     subject: str | None,
     title: str | None,
-    book_id: int | None = None,
+    book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
 ) -> list[ChunkResult]:
     query_embedding = embed_query(question)
@@ -136,7 +141,7 @@ async def _fetch_bm25(
     source_type: str | None,
     subject: str | None,
     title: str | None,
-    book_id: int | None = None,
+    book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
 ) -> list[ChunkResult]:
     # websearch_to_tsquery терпимо к обычному пользовательскому вводу (кавычки,
@@ -221,7 +226,7 @@ async def _fetch_candidates(
     source_type: str | None = None,
     subject: str | None = None,
     title: str | None = None,
-    book_id: int | None = None,
+    book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
 ) -> list[ChunkResult]:
     dense, bm25 = await asyncio.gather(
@@ -265,7 +270,7 @@ async def retrieve(
     source_type: str | None = None,
     subject: str | None = None,
     focus_document: bool = False,
-    book_id: int | None = None,
+    book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
 ) -> list[ChunkResult]:
     """Возвращает top_k фрагментов, переупорядоченных реранкером (rerank_score проставлен).
@@ -277,9 +282,11 @@ async def retrieve(
     релевантную рекомендацию и глубоко добирает материал строго из неё. Это убирает
     «мешанину» из разных рекомендаций и даёт врачу точный ответ из одного документа.
 
-    book_id/user_id (§18, этап 4A.5, личный документ студента): сужают поиск до ровно
-    одного документа И проверяют владельца прямо в SQL — используются вместе, никогда
-    по отдельности (см. app/workflows/user_documents.py).
+    book_id/user_id (§18, этап 4A.5, личный документ студента): сужают поиск до одного
+    документа (int) или сразу до нескольких (список — батч 13, объединённый поиск по
+    всем подключённым документам одним retrieval+генерацией) И проверяют владельца
+    прямо в SQL — используются вместе, никогда по отдельности (см.
+    app/workflows/user_documents.py).
 
     Кандидаты собираются гибридно (BM25 + вектор → RRF), поэтому находится и то,
     что раньше терялось из-за редкой терминологии, плохо ложащейся в эмбеддинг.

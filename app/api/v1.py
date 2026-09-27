@@ -28,6 +28,7 @@ from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outli
 from app.workflows.user_documents import (
     UserDocument,
     ask_user_document,
+    ask_user_documents,
     delete_user_document,
     ingest_user_document,
     list_user_documents,
@@ -599,6 +600,15 @@ class DocumentAskRequest(BaseModel):
     context: StudentAIContext
 
 
+class DocumentsAskRequest(BaseModel):
+    """Батч 13: вопрос по НЕСКОЛЬКИМ документам сразу — тело, не путь, потому
+    что список id не ложится в path-параметр."""
+
+    question: str = Field(..., min_length=1)
+    documentIds: list[int] = Field(..., min_length=1)
+    context: StudentAIContext
+
+
 class DocumentAskResponse(BaseModel):
     answer: str
     verified: bool | None = None
@@ -663,6 +673,30 @@ async def documents_ask(document_id: int, payload: DocumentAskRequest, request: 
             payload.question,
             user_id=payload.context.userId,
             document_id=document_id,
+            exam_id=payload.context.examId,
+        )
+    return DocumentAskResponse(
+        answer=result.answer,
+        verified=result.verified,
+        citations=[Citation(**c) for c in result.evidence_references],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+@router.post("/documents/ask", response_model=DocumentAskResponse)
+async def documents_ask_many(payload: DocumentsAskRequest, request: Request) -> DocumentAskResponse:
+    """Вопрос сразу по НЕСКОЛЬКИМ личным документам пользователя (батч 13) —
+    один retrieval+генерация по объединённому набору чанков, а не отдельный
+    ответ на каждый документ. Чужой/несуществующий id в списке молча
+    отбрасывается — не даёт чужих данных и не роняет запрос целиком, если
+    остальные id принадлежат пользователю."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="DOCUMENT_QA"):
+        result = await ask_user_documents(
+            payload.question,
+            user_id=payload.context.userId,
+            document_ids=payload.documentIds,
             exam_id=payload.context.examId,
         )
     return DocumentAskResponse(

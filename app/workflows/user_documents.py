@@ -14,6 +14,11 @@ embed → private collection/namespace → retrieval
 
 `BookChunk.user_id`/`exam_id` были зарезервированы под эту задачу ещё на этапе 2 —
 здесь они наконец заполняются и используются как фильтр.
+
+Батч 13: `ask_user_documents()` (во множественном числе) отвечает по НЕСКОЛЬКИМ
+документам сразу — один `retrieve()`/один `generate_answer()` на объединённый
+набор чанков, а не отдельный вызов на каждый документ. `ask_user_document()`
+(один документ) остаётся без изменений для обратной совместимости.
 """
 
 import logging
@@ -81,6 +86,29 @@ async def _owns_document(user_id: str, document_id: int) -> bool:
         )
         row = (await session.execute(stmt)).first()
         return row is not None
+
+
+async def _owned_document_ids(user_id: str, document_ids: list[int]) -> list[int]:
+    """Из запрошенных id оставляет только те, что реально принадлежат user_id.
+
+    Одним батч-запросом, а не циклом по `_owns_document()` — id может быть
+    много (батч 13, объединённый поиск). Чужой/несуществующий id молча
+    выпадает из выдачи — тот же принцип «чужое = не найдено», что и у
+    одиночного `ask_user_document()`, не ошибка на весь запрос.
+    """
+    if not document_ids:
+        return []
+    async with async_session() as session:
+        stmt = (
+            select(BookChunk.book_id)
+            .where(BookChunk.book_id.in_(document_ids), BookChunk.user_id == user_id)
+            .distinct()
+        )
+        rows = (await session.execute(stmt)).all()
+    owned = {row.book_id for row in rows}
+    # Порядок исходного списка сохраняется — пригодится, если вызывающая
+    # сторона придаёт значение порядку документов (например, для отображения)
+    return [doc_id for doc_id in document_ids if doc_id in owned]
 
 
 async def ingest_user_document(
@@ -163,6 +191,46 @@ async def ask_user_document(
         return UserDocumentAskResult(answer="", error=_NOT_FOUND_MESSAGE, request_id=current_request_id())
 
     chunks = await retrieve(question, source_type=SOURCE_USER_DOCUMENT, book_id=document_id, user_id=user_id)
+    relevant = relevant_chunks(chunks)
+    if not relevant:
+        return UserDocumentAskResult(answer=_NO_MATERIAL_MESSAGE, request_id=current_request_id())
+
+    generated = await generate_answer(question, chunks, source_type=SOURCE_USER_DOCUMENT, task=Task.DOCUMENT_QA)
+
+    citations: list[dict[str, Any]] = []
+    if generated.verified is not False:
+        cited_chunks = extract_cited_chunks(generated.text, relevant)
+        citations = [c.to_dict() for c in build_citations(cited_chunks)]
+
+    return UserDocumentAskResult(
+        answer=generated.text,
+        verified=generated.verified,
+        evidence_references=citations,
+        request_id=current_request_id(),
+    )
+
+
+async def ask_user_documents(
+    question: str,
+    user_id: str,
+    document_ids: list[int],
+    exam_id: str | None = None,
+) -> UserDocumentAskResult:
+    """Вопрос по НЕСКОЛЬКИМ документам студента сразу (батч 13).
+
+    В отличие от `ask_user_document()` (ровно один документ), здесь один
+    `retrieve()` ищет по объединённому набору чанков всех выбранных
+    документов, и один `generate_answer()` строит по ним ОДИН ответ —
+    не N отдельных ответов, склеенных текстом. Это и честнее (реранкер
+    видит все чанки сразу и выбирает по-настоящему лучшие, а не лучшие
+    внутри каждого документа по отдельности), и дешевле (одна генерация
+    вместо N, независимо от того, сколько документов подключено).
+    """
+    owned_ids = await _owned_document_ids(user_id, document_ids)
+    if not owned_ids:
+        return UserDocumentAskResult(answer="", error=_NOT_FOUND_MESSAGE, request_id=current_request_id())
+
+    chunks = await retrieve(question, source_type=SOURCE_USER_DOCUMENT, book_id=owned_ids, user_id=user_id)
     relevant = relevant_chunks(chunks)
     if not relevant:
         return UserDocumentAskResult(answer=_NO_MATERIAL_MESSAGE, request_id=current_request_id())
