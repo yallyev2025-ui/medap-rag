@@ -51,6 +51,7 @@ class LLMResult:
     latency_ms: int
     retry_count: int
     fallback_from: str | None
+    truncated: bool = False
 
 
 @lru_cache(maxsize=4)
@@ -143,6 +144,9 @@ async def complete(
             break
 
         text = response.choices[0].message.content or ""
+        truncated = getattr(response.choices[0], "finish_reason", None) == "length"
+        if truncated:
+            logger.warning("Ответ %s упёрся в лимит max_tokens=%s — текст обрезан", task.value, request["max_tokens"])
         input_tokens, cached_tokens, output_tokens = _usage_tokens(response)
         latency_ms = int((time.monotonic() - started) * 1000)
 
@@ -193,6 +197,7 @@ async def complete(
             latency_ms=latency_ms,
             retry_count=attempt,
             fallback_from=fallback_from,
+            truncated=truncated,
         )
 
     latency_ms = int((time.monotonic() - started) * 1000)

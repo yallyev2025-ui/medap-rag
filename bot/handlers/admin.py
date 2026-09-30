@@ -60,6 +60,8 @@ SUBJECTS = [
     ("anatomy", "Анатомия"),
     ("biochemistry", "Биохимия"),
     ("pharmacology", "Фармакология"),
+    ("histology", "Гистология"),
+    ("internal_medicine", "Внутренние болезни"),
     ("other", "Другой"),
 ]
 

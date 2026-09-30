@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     RETRIEVAL_VERSION: str = "v2-hybrid-bm25-rrf"
 
     # --- Бюджеты вывода по workflow (§57) ----------------------------------------
-    MAX_OUTPUT_TOKENS: int = 1500
+    MAX_OUTPUT_TOKENS: int = 2200
     # «Помощник на паре»: ответ должен быть коротким (§53.1).
     CLASS_QUICK_MAX_OUTPUT_TOKENS: int = 350
 

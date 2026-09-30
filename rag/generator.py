@@ -13,10 +13,12 @@ from typing import Awaitable, Callable, Literal
 from app.llm import provider as llm
 from app.llm.prompts import get_prompt
 from app.llm.task_map import Task
+from app.verification.numeric import extract_numeric_claims
 from app.verification.verify import verify_answer
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
+from rag.subject_profiles import SUBJECT_PROFILES, default_profile_text, profile_key
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +84,10 @@ SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот Me
 ОБЯЗАТЕЛЬНО при ответе на учебные вопросы:
 - В конце указывай источник(и) ровно в том виде, в котором они даны в квадратных скобках перед фрагментами контекста (например, [Автор, Название учебника, стр. N] или [Автор, Название учебника, стр. N-M]). Не придумывай и не меняй номера страниц.
 - Отвечать на русском языке
-- Отвечать МАКСИМАЛЬНО подробно, как для подготовки к экзамену: выжимай из контекста ВСЮ относящуюся к вопросу информацию до последней детали. Раскрывай определение, причины/этиологию, механизмы/патогенез, стадии, классификации, проявления, осложнения, исходы — всё, что есть в контексте по теме. Приводи конкретику из контекста: названия, цифры, примеры, термины. Не сокращай, не обобщай и не пропускай ни одной детали, которая есть в контексте.
-- При этом без воды и канцеляризмов: каждое предложение должно нести конкретный факт из контекста, а не общие фразы. Подробность = больше фактов из материала, а НЕ больше общих слов.
-- Перед тем как выдать финальный ответ, обязательно перечитай контекст и проверь себя: раскрыты ли ВСЕ части вопроса и использована ли КАЖДАЯ относящаяся к вопросу деталь из контекста? Если в контексте осталась хоть какая-то значимая информация по вопросу, которую ты не включил — дополни ответ ей перед выводом
+- Глубину и объём ответа задаёт строка «Глубина» в инструкции к вопросу (кратко / по существу / развёрнуто) — строго следуй ей. Отвечай на то, о чём спросили, а не пересказывай всё, что есть в контексте по теме.
+- Без воды и канцеляризмов: каждое предложение несёт конкретный факт из контекста (названия, цифры, термины, механизмы), а не общие фразы. Подробность = больше фактов по вопросу, а не больше слов.
+- Раскрой все части вопроса, если их несколько. Не повторяйся и не заканчивай ответ обрывком — лучше короче, но законченно.
+- Источники укажи в самом конце одной строкой, даже если ответ короткий.
 
 РАБОТА С НЕСКОЛЬКИМИ ИСТОЧНИКАМИ:
 В контексте могут быть фрагменты из разных учебников по одной теме. Это нормально и ожидаемо.
@@ -95,9 +98,8 @@ SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот Me
 - В конце укажи ВСЕ источники, которые реально использовал в ответе (каждый фрагмент, чьи факты вошли в ответ), а не только один
 
 ФОРМАТИРОВАНИЕ ДЛЯ TELEGRAM:
-- Используй Markdown: **жирный** для терминов и заголовков, "-" для списков
-- Не используй заголовки через "#" — только **жирный**
-- Структурируй развёрнутый ответ по смысловым блокам (определение, этиология, патогенез, стадии и т.д.), используй списки и подзаголовки **жирным**. Полнота важнее краткости, но не повторяйся."""
+- Разрешена ТОЛЬКО такая разметка: **жирный** (термины, подзаголовки) и списки через "-" в начале строки. Никаких "#", "*" как маркера списка, *курсива*, "_", "`", таблиц и линий "---".
+- Пиши короткими абзацами (2–4 строки) и списками, отделяй блоки пустой строкой — не сплошным полотном текста. Структуру (блоки) давай только там, где ответ развёрнутый."""
 
 # --- Клинический промпт для врачей (режим «Клин. рекомендации») ---
 # Отличия от студенческого: профессиональный тон, клиническая структура ответа,
@@ -263,13 +265,8 @@ REASONING_USER_TEMPLATE = """Контекст из клинических рек
 Запрос врача: {question}"""
 
 MODE_INSTRUCTIONS = {
-    "question": (
-        "Дай максимально подробный и исчерпывающий ответ — на уровне подготовки к экзамену. "
-        "Раскрой тему со всех сторон, опираясь на контекст: определение, причины, "
-        "механизмы, стадии, классификации, проявления, осложнения, исходы — всё, что есть "
-        "в контексте по теме. Используй весь относящийся к вопросу материал из контекста, "
-        "не ограничивайся одним абзацем."
-    ),
+    # Глубина «question» определяется по самому вопросу — см. depth_instruction().
+    "question": "",
     "conspect": (
         "Сделай «схему для тетради»: компактный каркас, который студент читает 1-3 минуты, "
         "закрывает и восстанавливает по памяти — это НЕ пересказ и не сокращённая лекция. "
@@ -293,6 +290,49 @@ MODE_INSTRUCTIONS = {
 # detect_mode(question) — отдельной regex-эвристике, независимой от роутера — и
 # всегда вызывал модель с Task.GROUNDED_QA, поэтому CLASS_QUICK_MAX_OUTPUT_TOKENS
 # никогда не применялся. Теперь режим приходит явно параметром `task`.
+# Батч 19: глубина ответа по самому вопросу. Раньше режим «вопрос» ВСЕГДА требовал
+# «максимально подробно, ни одной детали» — на «что такое воспаление» это давало
+# стену текста, которая не влезала в лимит токенов и обрывалась на полуслове.
+_DEEP_CUES = re.compile(
+    r"полностью|подробно|детально|во всех деталях|исчерпывающе|разбери|как для экзамена|"
+    r"всё о|все о|вс[её] про",
+    re.IGNORECASE,
+)
+_BRIEF_CUES = re.compile(r"кратко|коротко|в двух словах|одним предложением|определение", re.IGNORECASE)
+_SHORT_DEFINITION = re.compile(r"^\s*(что\s+так(ое|ие)|кто\s+так(ой|ие)|что\s+значит)\b", re.IGNORECASE)
+
+DEPTH_INSTRUCTIONS = {
+    "brief": (
+        "Глубина: КРАТКО. Один абзац из 2–4 предложений — суть и самое важное из контекста. "
+        "Без разделов, списков и перечисления всего подряд."
+    ),
+    "standard": (
+        "Глубина: ПО СУЩЕСТВУ вопроса (≈150–300 слов). Сначала 1–2 предложения-суть, затем "
+        "ключевые пункты списком «-» (обычно 4–7), каждый — конкретный факт из контекста. "
+        "Отвечай на то, о чём спросили; не пересказывай весь раздел и не перечисляй всё подряд."
+    ),
+    "deep": (
+        "Глубина: РАЗВЁРНУТЫЙ РАЗБОР, как для экзамена (до ≈450 слов): смысловые блоки с "
+        "**жирными** подзаголовками, в каждом — конкретные факты из контекста. Только то, что "
+        "есть в контексте; не повторяйся и не растягивай."
+    ),
+}
+
+
+def detect_depth(question: str) -> Literal["brief", "standard", "deep"]:
+    if _DEEP_CUES.search(question):
+        return "deep"
+    if _BRIEF_CUES.search(question):
+        return "brief"
+    if _SHORT_DEFINITION.match(question) and len(question.split()) <= 6:
+        return "brief"
+    return "standard"
+
+
+def depth_instruction(question: str) -> str:
+    return DEPTH_INSTRUCTIONS[detect_depth(question)]
+
+
 EXPLAIN_MODE_INSTRUCTION = (
     "Объясни причинно-следственно, с учётом уровня студента: начни со структуры "
     "(что это и где место в теме), затем раскрой механизм по шагам. Без "
@@ -321,95 +361,6 @@ DOCUMENT_QA_MODE_INSTRUCTION = (
     "знания молча — если нужного ответа в документе нет, прямо скажи, что в загруженном "
     "документе это не покрыто, вместо того чтобы отвечать по общим знаниям без пометки."
 )
-
-# Шаблоны структуры ответа по предметам (subject из db/models.Book.subject,
-# совпадает с кодами из bot/handlers/admin.SUBJECTS). Подставляются один раз
-# в промпт по предмету найденных чанков — не генерируются заново на каждый вопрос.
-SUBJECT_STRUCTURES: dict[str, tuple[str, list[str]]] = {
-    "pathanatomy": (
-        "патанатомии",
-        [
-            "Определение",
-            "Классификация (виды/формы)",
-            "Этиология",
-            "Патогенез",
-            "Морфологические изменения (макро- и микроскопическая картина)",
-            "Осложнения и исходы",
-        ],
-    ),
-    "pathphys": (
-        "патофизиологии",
-        [
-            "Определение",
-            "Этиология",
-            "Патогенез (стадии, механизмы)",
-            "Виды/классификация",
-            "Клинические проявления и их механизмы",
-            "Исходы и значение для организма",
-        ],
-    ),
-    "physiology": (
-        "физиологии",
-        [
-            "Определение и функция",
-            "Анатомический субстрат (где происходит)",
-            "Механизм процесса",
-            "Регуляция",
-            "Значение для организма",
-        ],
-    ),
-    "anatomy": (
-        "анатомии",
-        [
-            "Определение и расположение",
-            "Классификация (виды/типы)",
-            "Строение (отделы/слои/части)",
-            "Кровоснабжение и иннервация (если применимо)",
-            "Функция",
-            "Топографические соотношения с соседними структурами",
-        ],
-    ),
-    "biochemistry": (
-        "биохимии",
-        [
-            "Определение/структура вещества или процесса",
-            "Классификация (класс/группа)",
-            "Локализация в клетке/организме",
-            "Этапы и реакции (с ключевыми ферментами)",
-            "Регуляция",
-            "Биологическое значение",
-        ],
-    ),
-    "pharmacology": (
-        "фармакологии",
-        [
-            "Группа и классификация препарата",
-            "Механизм действия",
-            "Фармакологические эффекты",
-            "Показания к применению",
-            "Побочные эффекты и противопоказания",
-        ],
-    ),
-}
-
-
-def _structure_hint(subject: str | None) -> str:
-    """Подсказка по структуре ответа для предмета. Пустая строка, если для
-    предмета нет шаблона (например, "other" или кастомный предмет)."""
-    entry = SUBJECT_STRUCTURES.get(subject or "")
-    if entry is None:
-        return ""
-
-    subject_name, sections = entry
-    sections_text = "\n".join(f"- {s}" for s in sections)
-    return (
-        f"\n\nЕсли вопрос — про конкретную нозологию/процесс/тему по {subject_name} "
-        f"и в контексте достаточно материала, структурируй ответ по схеме:\n{sections_text}\n"
-        "Если вопрос не укладывается в эту схему (общий вопрос, термин, сравнение, "
-        "вопрос не по этой теме и т.п.) или в контексте нет материала для каких-то пунктов — "
-        "не подгоняй искусственно: просто ответь по существу вопроса, опустив неприменимые пункты."
-    )
-
 
 GENERATION_TEMPERATURE = 0.2
 
@@ -499,7 +450,17 @@ async def _complete(
         result = await llm.complete(task, messages, temperature=temperature)
     except llm.LLMError as e:
         raise RuntimeError(llm.PROVIDER_ERROR_MESSAGE) from e
-    return result.text
+    return trim_to_sentence(result.text) if result.truncated else result.text
+
+
+def trim_to_sentence(text: str) -> str:
+    """Ответ упёрся в лимит токенов: режем по последнему законченному предложению/
+    строке, чтобы студент не видел обрыв на полуслове и висящий `**`. Если законченной
+    границы нет в хвосте (последние 60%) — оставляем как есть, не выбрасывая ответ."""
+    cut = max(text.rfind(ch) for ch in (".", "!", "?", "…", "\n"))
+    if cut < int(len(text) * 0.4):
+        return text
+    return text[: cut + 1].rstrip()
 
 
 @dataclass
@@ -516,13 +477,22 @@ async def _verify_and_repair(
     context: str,
     answer: str,
     correct: Callable[[str], Awaitable[str]],
+    *,
+    always_check: bool = True,
 ) -> GeneratedAnswer:
     """Общий цикл Verification Layer для generate_answer/_reasoning_answer
     (app/verification/verify.py): PASS сразу; при проблеме — один корректирующий
     проход (`correct(issues)`) и повторная проверка; если проблема осталась —
     честный отказ вместо недостоверного ответа, а не молчаливая выдача как есть.
+
+    Батч 19: проверка — отдельный LLM-вызов на весь контекст, самая долгая часть
+    после генерации. `always_check=False` (обычный учебный ответ) пропускает её,
+    если в ответе нет чисел с единицами (дозы, проценты, сроки) — тогда verified=None
+    («не проверялся»), а не ложное «проверен».
     """
     if not settings.VERIFY_GROUNDING:
+        return GeneratedAnswer(answer, verified=None)
+    if not always_check and not extract_numeric_claims(answer):
         return GeneratedAnswer(answer, verified=None)
 
     result = await verify_answer(context, answer)
@@ -585,11 +555,18 @@ async def generate_answer(
         system_prompt = await get_prompt("CLINREK_SYSTEM_PROMPT", CLINREK_SYSTEM_PROMPT)
     else:
         system_prompt = await get_prompt("SYSTEM_PROMPT", SYSTEM_PROMPT)
+        # Universal Core + Subject Profile: профиль по предмету найденных чанков.
+        # Нет профиля у предмета («other», документ студента) — ядро как есть.
+        subject = detect_subject(chunks)
+        default_profile = default_profile_text(subject) if subject else None
+        if default_profile is not None:
+            profile = await get_prompt(profile_key(subject), default_profile)
+            system_prompt = f"{system_prompt}\n\n{profile}"
 
     if is_clinrek:
         mode_instruction = CLINREK_MODE_INSTRUCTION
     elif task is Task.EXPLAIN:
-        mode_instruction = EXPLAIN_MODE_INSTRUCTION
+        mode_instruction = f"{EXPLAIN_MODE_INSTRUCTION}\n\n{depth_instruction(question)}"
     elif task is Task.CLASS_QUICK:
         mode_instruction = CLASS_QUICK_MODE_INSTRUCTION
     elif task is Task.TEST_SOLVE_TEXT:
@@ -598,9 +575,7 @@ async def generate_answer(
         mode_instruction = DOCUMENT_QA_MODE_INSTRUCTION
     else:
         mode = detect_mode(question)
-        mode_instruction = MODE_INSTRUCTIONS[mode]
-        if mode in ("question", "conspect"):
-            mode_instruction += _structure_hint(detect_subject(chunks))
+        mode_instruction = depth_instruction(question) if mode == "question" else MODE_INSTRUCTIONS[mode]
 
     user_prompt = USER_PROMPT_TEMPLATE.format(
         mode_instruction=mode_instruction,
@@ -623,7 +598,7 @@ async def generate_answer(
         )
         return await _complete(system_prompt, correction_prompt, GENERATION_TEMPERATURE, task, history)
 
-    return await _verify_and_repair(context, answer, correct)
+    return await _verify_and_repair(context, answer, correct, always_check=is_clinrek)
 
 
 async def _reasoning_answer(
@@ -741,4 +716,5 @@ PROMPT_DEFAULTS: dict[str, str] = {
     "DIFFERENTIAL_SYSTEM_PROMPT": DIFFERENTIAL_SYSTEM_PROMPT,
     "MULTI_SYSTEM_PROMPT": MULTI_SYSTEM_PROMPT,
     "REPAIR_SYSTEM_PROMPT": REPAIR_SYSTEM_PROMPT,
+    **{profile_key(code): default_profile_text(code) for code in SUBJECT_PROFILES},
 }

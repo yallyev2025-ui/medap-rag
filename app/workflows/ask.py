@@ -226,10 +226,14 @@ async def ask(
         # Явное бытовое сообщение распознаётся без обращения к модели (§5).
         if decision.workflow is Workflow.SMALL_TALK:
             intent = "CHITCHAT"
-        else:
-            # Иначе нужен тип клинического запроса: одна тема, дифдиагноз или
-            # сочетание состояний — от него зависит стратегия поиска.
+        elif source_type == SOURCE_CLINREK:
+            # Тип клинического запроса (одна тема / дифдиагноз / сочетание) влияет
+            # на стратегию поиска и промпт ТОЛЬКО у клинреков.
             intent = await detect_intent(search_query)
+        else:
+            # У учебников intent ни на что не влияет (DIFFERENTIAL/MULTI там
+            # игнорируются, бытовое уже поймал route()) — платный вызов модели зря.
+            intent = "SINGLE"
         details["intent"] = intent
 
     if intent == "CHITCHAT":
