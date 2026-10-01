@@ -2,6 +2,7 @@
 дифдиагноз / сочетание / приветствие), поиск под стратегию и генерация. Плюс
 согласие на общие знания, режим «Разбор по симптомам» и статус-индикатор «думает»."""
 
+import asyncio
 import logging
 import time
 
@@ -22,6 +23,7 @@ from app.workflows.ask import ask
 from app.workflows.pubmed import search_pubmed
 from app.workflows.web_search import search_and_answer
 from bot.formatting import split_for_telegram, to_telegram_html
+from bot.waiting_phrases import FIRST_PHRASE, rotate_status
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
 from bot.handlers.user_documents import handle_document_question
 from constants import SOURCE_CLINREK
@@ -204,7 +206,7 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         usage_ctx["count"] = False
         return
 
-    status = await message.answer("🔎 Определяю тип вопроса…")
+    status = await message.answer(FIRST_PHRASE)
 
     try:
         start_time = time.monotonic()
@@ -215,18 +217,22 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
                 session, db_user.id, db_user.chat_started_at, HISTORY_TURNS
             )
 
-        await _set_status(status, "📚 Ищу в материалах и готовлю ответ…")
+        # Пока идёт генерация — бесплатные «думаю»-фразы в статус-сообщении (без LLM).
+        rotator = asyncio.create_task(rotate_status(lambda text: _set_status(status, text)))
         # Весь конвейер (роутинг интента, переписывание запроса, поиск, генерация)
         # живёт в общем workflow — том же, что обслуживает образовательный сайт
         # через /v1. Здесь остаётся только телеграмный UI.
-        with request_context(user_id=f"telegram:{db_user.id}", channel="telegram"):
-            result = await ask(
-                question,
-                source_type=source_type,
-                subject=subject,
-                turns=turns,
-                symptom_mode=db_user.clinrek_symptom_mode,
-            )
+        try:
+            with request_context(user_id=f"telegram:{db_user.id}", channel="telegram"):
+                result = await ask(
+                    question,
+                    source_type=source_type,
+                    subject=subject,
+                    turns=turns,
+                    symptom_mode=db_user.clinrek_symptom_mode,
+                )
+        finally:
+            rotator.cancel()
 
         # Приветствие / small talk — дружелюбный ответ, лимит не тратим.
         if result.intent == "CHITCHAT":

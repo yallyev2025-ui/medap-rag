@@ -22,6 +22,14 @@ from app.observability.context import current, current_request_id, set_workflow
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
+from app.workflows.dialog import (
+    AFFIRM,
+    ASK_TOPIC_TEXT,
+    DIALOG_CHANNELS,
+    continuation_from_turns,
+    finalize_dialog_answer,
+    needs_rewrite,
+)
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from db.models import AnswerLog
@@ -210,6 +218,33 @@ async def ask(
     stages = StageLog()
     turns = turns or []
 
+    # Диалог (Telegram/админка): «да» продолжает прошлый ответ, в конце ответа — вопрос-
+    # приглашение. Сайт (/v1, channel api) получает один максимально полный ответ.
+    ctx = current()
+    dialog = bool(ctx and ctx.channel in DIALOG_CHANNELS)
+    gen_question = question
+    continuation_search: str | None = None
+    if dialog and AFFIRM.match(question):
+        if turns:
+            gen_question, continuation_search = continuation_from_turns(turns)
+        elif route(question, requested_workflow).workflow is not Workflow.SMALL_TALK:
+            return await _log_and_return(
+                AskResult(
+                    answer=ASK_TOPIC_TEXT,
+                    workflow=Workflow.SMALL_TALK.value,
+                    intent="CHITCHAT",
+                    has_relevant=False,
+                    citations=[],
+                    diagnostics=stages.as_dict(),
+                    request_id=current_request_id(),
+                    versions=_versions(),
+                    source_mode=_derive_source_mode(source_type),
+                    evidence_status="SUFFICIENT",
+                    verification_status="UNVERIFIED",
+                ),
+                question,
+            )
+
     with stages.measure("routing") as details:
         decision: RoutingDecision = route(question, requested_workflow)
         details["workflow"] = decision.workflow.value
@@ -219,7 +254,13 @@ async def ask(
     # Уточняющий вопрос («а какие дозы?») превращаем в самостоятельный поисковый
     # запрос по истории диалога — и тип запроса определяем уже по нему.
     with stages.measure("query_rewrite") as details:
-        search_query = await rewrite_query(question, turns) if turns else question
+        if continuation_search is not None:
+            search_query = continuation_search
+            details["continuation"] = True
+        elif turns and needs_rewrite(question):
+            search_query = await rewrite_query(question, turns)
+        else:
+            search_query = question
         details["rewritten"] = search_query != question
 
     with stages.measure("intent") as details:
@@ -306,11 +347,13 @@ async def ask(
         # вопрос студента, который detect_intent() ошибочно принял за разбор
         # симптомов, ушёл бы во врачебный тон на чанках из учебника.
         if intent == "DIFFERENTIAL" and source_type == SOURCE_CLINREK:
-            generated = await generate_differential(question, chunks, source_type, history)
+            generated = await generate_differential(gen_question, chunks, source_type, history)
         elif intent == "MULTI" and source_type == SOURCE_CLINREK:
-            generated = await generate_multi(question, chunks, source_type, history)
+            generated = await generate_multi(gen_question, chunks, source_type, history)
         else:
-            generated = await generate_answer(question, chunks, source_type, history, task=decision.task)
+            generated = await generate_answer(
+                gen_question, chunks, source_type, history, task=decision.task, dialog=dialog
+            )
         details["chars"] = len(generated.text if generated else "")
         details["verified"] = generated.verified if generated else None
 
@@ -344,7 +387,7 @@ async def ask(
         conflicts: list[dict[str, Any]] = []
     else:
         with stages.measure("evidence") as details:
-            citations, conflicts = await _build_evidence(question, generated.text, relevant)
+            citations, conflicts = await _build_evidence(gen_question, generated.text, relevant)
             details["cited"] = len(citations)
             details["conflicts"] = len(conflicts)
 
@@ -355,9 +398,12 @@ async def ask(
         verified=generated.verified,
         conflicts=conflicts,
     )
+    final_text = generated.text
+    if dialog and generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
+        final_text = finalize_dialog_answer(final_text, citations, generated.truncated)
     return await _log_and_return(
         AskResult(
-            answer=generated.text,
+            answer=final_text,
             workflow=decision.workflow.value,
             intent=intent,
             has_relevant=True,

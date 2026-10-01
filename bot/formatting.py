@@ -38,7 +38,7 @@ def _normalize_lines(text: str) -> str:
         if heading:
             line = f"**{heading.group(1)}**"
         else:
-            line = _BULLET.sub(lambda m: f"{m.group(1)}• ", line)
+            line = _BULLET.sub(lambda m: "    ◦ " if len(m.group(1)) >= 2 else "• ", line)
         out.append(line)
     return "\n".join(out)
 
