@@ -238,13 +238,30 @@ async def _fetch_candidates(
     return _rrf_fuse(dense, bm25)[:limit]
 
 
+# Батч 23: очередь на реранк. Реранкер занимает все ядра процессора; если несколько
+# вопросов реранкаются одновременно, они делят ядра и тормозят ВСЕ разом. Не больше
+# RERANK_CONCURRENCY одновременно, остальные ждут своей очереди.
+_rerank_sem: asyncio.Semaphore | None = None
+_rerank_sem_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _rerank_semaphore() -> asyncio.Semaphore:
+    global _rerank_sem, _rerank_sem_loop
+    loop = asyncio.get_running_loop()
+    if _rerank_sem is None or _rerank_sem_loop is not loop:
+        _rerank_sem = asyncio.Semaphore(max(1, settings.RERANK_CONCURRENCY))
+        _rerank_sem_loop = loop
+    return _rerank_sem
+
+
 async def _rerank(question: str, chunks: list[ChunkResult]) -> list[ChunkResult]:
     """Переупорядочивает чанки cross-encoder реранкером (проставляет rerank_score).
     При недоступности реранкера мягко деградирует до порядка после RRF-фьюжна."""
     try:
-        scores = await asyncio.to_thread(
-            rerank_scores, question, [c.content for c in chunks]
-        )
+        async with _rerank_semaphore():
+            scores = await asyncio.to_thread(
+                rerank_scores, question, [c.content for c in chunks]
+            )
         for chunk, score in zip(chunks, scores):
             chunk.rerank_score = score
         chunks.sort(key=lambda c: c.rerank_score, reverse=True)

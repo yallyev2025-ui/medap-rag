@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.llm.registry import model_registry
 from app.storage import s3
+from app.workflows.pubmed import SourceProbe, probe_sources
 from db.models import IngestJob
 from db.session import async_session
 
@@ -36,6 +37,7 @@ class SystemHealth:
     s3_configured: bool = False
     jobs_by_status: dict[str, int] = field(default_factory=dict)
     stuck_jobs: int = 0
+    literature: list[SourceProbe] = field(default_factory=list)
 
 
 async def system_health() -> SystemHealth:
@@ -61,4 +63,8 @@ async def system_health() -> SystemHealth:
         for key, prof in model_registry().items()
     ]
     health.s3_configured = s3.is_configured()
+    try:
+        health.literature = await probe_sources()
+    except Exception:
+        logger.exception("System Health: проба PubMed/Europe PMC не выполнена")
     return health

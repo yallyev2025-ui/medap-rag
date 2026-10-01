@@ -21,6 +21,8 @@ _BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _ITALIC_STAR = re.compile(r"(?<![\*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\*\w])")
 _ITALIC_UNDERSCORE = re.compile(r"(?<![_\w])_(?!\s)([^_\n]+?)(?<!\s)_(?![_\w])")
 _CODE = re.compile(r"`([^`\n]+)`")
+# [текст](https://…) → кликабельная ссылка. Только http/https (никаких javascript: и т.п.).
+_LINK = re.compile(r"\[([^\[\]\n]+)\]\((https?://[^\s()<>\"]+)\)")
 
 
 def _normalize_lines(text: str) -> str:
@@ -45,12 +47,22 @@ def _normalize_lines(text: str) -> str:
 
 def to_telegram_html(text: str) -> str:
     escaped = html.escape(_normalize_lines(text), quote=False)
+    # Ссылки прячем за метками до обработки жирного/курсива: «_» и «*» внутри URL
+    # не должны превратиться в разметку.
+    links: list[str] = []
+
+    def _stash(match: re.Match) -> str:
+        links.append(f'<a href="{match.group(2)}">{match.group(1)}</a>')
+        return f"\x00{len(links) - 1}\x00"
+
+    escaped = _LINK.sub(_stash, escaped)
     escaped = _CODE.sub(r"<code>\1</code>", escaped)
     escaped = _BOLD.sub(r"<b>\1</b>", escaped)
     escaped = _ITALIC_STAR.sub(r"<i>\1</i>", escaped)
     escaped = _ITALIC_UNDERSCORE.sub(r"<i>\1</i>", escaped)
     # Незакрытый/потерянный «**» (например, ответ оборвался) не должен светиться в чате.
     escaped = escaped.replace("**", "")
+    escaped = re.sub("\x00(\\d+)\x00", lambda m: links[int(m.group(1))], escaped)
     return re.sub(r"\n{3,}", "\n\n", escaped).strip()
 
 

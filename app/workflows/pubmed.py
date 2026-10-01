@@ -10,8 +10,12 @@
 """
 
 import asyncio
+import html
 import logging
+import re
+import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import httpx
@@ -56,6 +60,8 @@ class PubMedResult:
     articles: list[PubMedArticle] = field(default_factory=list)
     error: str | None = None
     request_id: str | None = None
+    # «PubMed» — данные напрямую из NCBI; «Europe PMC» — запасной вход (те же статьи MEDLINE).
+    source: str | None = None
 
 
 def _eutils_params(**kwargs) -> dict:
@@ -70,30 +76,71 @@ def _eutils_params(**kwargs) -> dict:
 
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 
+SOURCE_PUBMED = "PubMed"
+SOURCE_EUROPEPMC = "Europe PMC"
+_EUROPEPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+
+def _client(timeout: float) -> httpx.AsyncClient:
+    """Всегда IPv4: у Timeweb App Platform сбоит исходящий IPv6, а у NCBI/EBI есть
+    AAAA-записи — без принудительного IPv4 соединение падает с «нет соединения»."""
+    return httpx.AsyncClient(timeout=timeout, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"))
+
 
 def _reason(exc: Exception) -> str:
-    """Короткая причина сбоя для сообщения пользователю и лога (а не просто «недоступен»)."""
+    """Короткая причина сбоя для сообщения и лога: вид сбоя + исходный текст ошибки
+    (DNS, «Network is unreachable», «Connection refused», ошибка сертификата и т.п.)."""
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code}"
     if isinstance(exc, httpx.TimeoutException):
-        return "таймаут"
-    if isinstance(exc, httpx.ConnectError):
-        return "нет соединения"
-    if isinstance(exc, ET.ParseError):
-        return "некорректный ответ"
-    return type(exc).__name__
+        kind = "таймаут"
+    elif isinstance(exc, httpx.ConnectError):
+        kind = "нет соединения"
+    elif isinstance(exc, (ET.ParseError, ValueError)):
+        kind = "некорректный ответ"
+    else:
+        kind = type(exc).__name__
+    detail = str(exc.__cause__ or exc).strip()
+    return f"{kind}: {detail[:100]}" if detail else kind
 
 
-def _unavailable(exc: Exception) -> str:
-    return f"PubMed сейчас недоступен ({_reason(exc)}), попробуй позже."
+class _RateGate:
+    """Общий для процесса ограничитель частоты запросов к NCBI: не чаще N в секунду,
+    сколько бы пользователей ни искали одновременно (с ключом NCBI разрешает 10/с,
+    без ключа 3/с — держимся ниже)."""
+
+    def __init__(self) -> None:
+        self._next = 0.0
+        self._lock: asyncio.Lock | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._loop is not loop:
+            self._lock, self._loop = asyncio.Lock(), loop
+        return self._lock
+
+    async def wait(self) -> None:
+        interval = 1.0 / (8 if settings.PUBMED_API_KEY else 2.5)
+        async with self._get_lock():
+            now = time.monotonic()
+            if self._next > now:
+                await asyncio.sleep(self._next - now)
+                now = self._next
+            self._next = now + interval
 
 
-async def _get(path: str, params: dict, timeout: float) -> httpx.Response:
-    """GET к E-utilities с одним повтором при временной ошибке (429/5xx/таймаут/обрыв)."""
+_ncbi_gate = _RateGate()
+
+
+async def _get_url(url: str, params: dict, timeout: float, gate: _RateGate | None = None) -> httpx.Response:
+    """GET с одним повтором при временной ошибке (429/5xx/таймаут/обрыв)."""
     for attempt in range(2):
+        if gate is not None:
+            await gate.wait()
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(_EUTILS_BASE + path, params=params)
+            async with _client(timeout) as client:
+                response = await client.get(url, params=params)
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as exc:
@@ -107,6 +154,10 @@ async def _get(path: str, params: dict, timeout: float) -> httpx.Response:
                 continue
             raise
     raise RuntimeError("unreachable")
+
+
+async def _get(path: str, params: dict, timeout: float) -> httpx.Response:
+    return await _get_url(_EUTILS_BASE + path, params, timeout, gate=_ncbi_gate)
 
 
 async def _esearch(query: str, retmax: int) -> list[str]:
@@ -170,21 +221,130 @@ async def _efetch(pmids: list[str]) -> list[PubMedArticle]:
     return _parse_efetch_xml(response.text)
 
 
+# --- Europe PMC: запасной вход к тем же статьям ---------------------------------
+# EMBL-EBI, бесплатно, без ключа. `SRC:MED` — только записи MEDLINE/PubMed (тот же
+# рецензируемый корпус, что у NCBI): без препринтов, патентов и прочих источников.
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _clean(text) -> str:
+    if not text:
+        return ""
+    return " ".join(html.unescape(_TAG.sub(" ", str(text))).split())
+
+
+def _parse_europepmc(data: dict) -> list[PubMedArticle]:
+    articles: list[PubMedArticle] = []
+    for record in (data.get("resultList") or {}).get("result") or []:
+        pmid = str(record.get("pmid") or "").strip()
+        title = _clean(record.get("title"))
+        abstract = _clean(record.get("abstractText"))
+        if not pmid or not title or not abstract:
+            continue
+        journal_info = record.get("journalInfo") or {}
+        journal = record.get("journalTitle") or (journal_info.get("journal") or {}).get("title")
+        year = record.get("pubYear") or journal_info.get("yearOfPublication")
+        articles.append(
+            PubMedArticle(
+                pmid=pmid,
+                title=title,
+                abstract=abstract,
+                journal=journal,
+                year=str(year) if year else None,
+                url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            )
+        )
+    return articles
+
+
+async def _europepmc_articles(query: str, retmax: int) -> list[PubMedArticle]:
+    response = await _get_url(
+        _EUROPEPMC_SEARCH,
+        {"query": f"({query}) AND SRC:MED", "resultType": "core", "format": "json", "pageSize": retmax},
+        20.0,
+    )
+    return _parse_europepmc(response.json())
+
+
+# --- Кеш статей на сутки ---------------------------------------------------------
+# Одинаковые запросы разных студентов не бьют в NCBI повторно. Кешируются только
+# найденные статьи; анализ моделью делается на каждый вопрос.
+
+_CACHE_TTL_SECONDS = 24 * 3600
+_CACHE_MAX = 500
+_cache: "OrderedDict[str, tuple[float, list[PubMedArticle], str]]" = OrderedDict()
+
+
+def _cache_key(query: str, retmax: int) -> str:
+    return f"{' '.join(query.lower().split())}|{retmax}"
+
+
+def _cache_get(key: str) -> tuple[list[PubMedArticle], str] | None:
+    item = _cache.get(key)
+    if item is None:
+        return None
+    expires, articles, source = item
+    if expires < time.monotonic():
+        _cache.pop(key, None)
+        return None
+    _cache.move_to_end(key)
+    return articles, source
+
+
+def _cache_put(key: str, articles: list[PubMedArticle], source: str) -> None:
+    _cache[key] = (time.monotonic() + _CACHE_TTL_SECONDS, articles, source)
+    _cache.move_to_end(key)
+    while len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)
+
+
+class _SourcesUnavailable(Exception):
+    def __init__(self, ncbi_reason: str, europepmc_reason: str) -> None:
+        super().__init__(ncbi_reason)
+        self.ncbi_reason = ncbi_reason
+        self.europepmc_reason = europepmc_reason
+
+
+async def _find_articles(query: str, retmax: int) -> tuple[list[PubMedArticle], str]:
+    """Статьи и источник: сначала NCBI; при ЛЮБОМ сбое NCBI — Europe PMC. Пустая
+    выдача NCBI («по запросу ничего нет») — честный результат, не повод для фолбэка."""
+    key = _cache_key(query, retmax)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        pmids = await _esearch(query, retmax)
+        if not pmids:
+            return [], SOURCE_PUBMED
+        articles, source = await _efetch(pmids), SOURCE_PUBMED
+    except (httpx.HTTPError, ET.ParseError, ValueError) as exc:
+        ncbi_reason = _reason(exc)
+        logger.warning("PubMed (NCBI) недоступен (%s) — пробую Europe PMC", ncbi_reason)
+        try:
+            articles, source = await _europepmc_articles(query, retmax), SOURCE_EUROPEPMC
+        except (httpx.HTTPError, ValueError) as exc2:
+            logger.exception("Europe PMC тоже недоступен (%s)", _reason(exc2))
+            raise _SourcesUnavailable(ncbi_reason, _reason(exc2)) from exc2
+
+    if articles:
+        _cache_put(key, articles, source)
+    return articles, source
+
+
 async def search_pubmed(query: str, question: str | None = None) -> PubMedResult:
     try:
-        pmids = await _esearch(query, settings.PUBMED_MAX_RESULTS)
-    except httpx.HTTPError as exc:
-        logger.exception("PubMed: сбой esearch (%s)", _reason(exc))
-        return PubMedResult(query=query, error=_unavailable(exc), request_id=current_request_id())
-
-    if not pmids:
-        return PubMedResult(query=query, error=_NO_RESULTS_MESSAGE, request_id=current_request_id())
-
-    try:
-        articles = await _efetch(pmids)
-    except (httpx.HTTPError, ET.ParseError) as exc:
-        logger.exception("PubMed: сбой efetch (%s)", _reason(exc))
-        return PubMedResult(query=query, error=_unavailable(exc), request_id=current_request_id())
+        articles, source = await _find_articles(query, settings.PUBMED_MAX_RESULTS)
+    except _SourcesUnavailable as exc:
+        return PubMedResult(
+            query=query,
+            error=(
+                f"PubMed сейчас недоступен (PubMed: {exc.ncbi_reason}; Europe PMC: {exc.europepmc_reason}), "
+                "попробуй позже."
+            ),
+            request_id=current_request_id(),
+        )
 
     if not articles:
         return PubMedResult(query=query, error=_NO_RESULTS_MESSAGE, request_id=current_request_id())
@@ -203,7 +363,51 @@ async def search_pubmed(query: str, question: str | None = None) -> PubMedResult
         logger.exception("PubMed: сбой провайдера")
         return PubMedResult(
             query=query, articles=articles, error="Анализ статей сейчас недоступен, попробуй позже.",
-            request_id=current_request_id(),
+            request_id=current_request_id(), source=source,
         )
 
-    return PubMedResult(query=query, answer=result.text, articles=articles, request_id=current_request_id())
+    return PubMedResult(
+        query=query, answer=result.text, articles=articles, request_id=current_request_id(), source=source
+    )
+
+
+# --- Проба доступности для админки (System Health) -------------------------------
+
+@dataclass
+class SourceProbe:
+    name: str
+    ok: bool
+    latency_ms: float | None = None
+    error: str | None = None
+
+
+_PROBE_TTL_SECONDS = 60
+_probe_cache: tuple[float, list[SourceProbe]] | None = None
+
+
+async def _probe(name: str, call) -> SourceProbe:
+    started = time.monotonic()
+    try:
+        await call()
+    except Exception as exc:
+        return SourceProbe(name=name, ok=False, error=_reason(exc))
+    return SourceProbe(name=name, ok=True, latency_ms=round((time.monotonic() - started) * 1000, 1))
+
+
+async def probe_sources() -> list[SourceProbe]:
+    """Доступны ли NCBI и Europe PMC прямо сейчас (результат кешируется на минуту,
+    чтобы обновление страницы админки не превращалось в поток запросов)."""
+    global _probe_cache
+    if _probe_cache is not None and _probe_cache[0] > time.monotonic():
+        return _probe_cache[1]
+    probes = list(
+        await asyncio.gather(
+            _probe("PubMed (NCBI)", lambda: _get("einfo.fcgi", _eutils_params(db="pubmed", retmode="json"), 8.0)),
+            _probe(
+                "Europe PMC",
+                lambda: _get_url(_EUROPEPMC_SEARCH, {"query": "aspirin AND SRC:MED", "format": "json", "pageSize": 1}, 8.0),
+            ),
+        )
+    )
+    _probe_cache = (time.monotonic() + _PROBE_TTL_SECONDS, probes)
+    return probes

@@ -35,6 +35,24 @@
 </div>
 
 <section>
+  <h1 style="font-size:18px">Научные статьи (PubMed)</h1>
+  <table>
+    <tr><th>Источник</th><th>Статус</th><th>Подробности</th></tr>
+    {% for src in health.literature %}
+    <tr>
+      <td>{{ src.name }}</td>
+      <td class="{{ 'status-done' if src.ok else 'status-error' }}">{{ 'Доступен' if src.ok else 'Недоступен' }}</td>
+      <td>{% if src.ok %}{{ src.latency_ms }} мс{% else %}{{ src.error }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="margin-top:8px">
+    Бот сначала идёт в PubMed (NCBI), при сбое — в Europe PMC (те же статьи MEDLINE).
+    Если недоступны оба — поиск по статьям не работает. Статус обновляется раз в минуту.
+  </p>
+</section>
+
+<section>
   <h1 style="font-size:18px">Провайдеры</h1>
   <table>
     <tr><th>Провайдер</th><th>Модель</th><th>Статус</th></tr>

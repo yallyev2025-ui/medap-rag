@@ -828,6 +828,8 @@ class PubMedSearchResponse(BaseModel):
     articles: list[PubMedArticleModel]
     error: str | None = None
     requestId: str | None = None
+    # «PubMed» — напрямую из NCBI; «Europe PMC» — запасной вход к тем же статьям MEDLINE.
+    source: str | None = None
 
 
 def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
@@ -840,6 +842,7 @@ def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
         ],
         error=result.error,
         requestId=result.request_id,
+        source=result.source,
     )
 
 
