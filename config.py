@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     PUBMED_MAX_RESULTS: int = 5
     # Рекомендуется NCBI (не обязательно) — добавляется в запросы, если задано.
     PUBMED_CONTACT_EMAIL: str = ""
+    # Необязательный бесплатный ключ NCBI (аккаунт на ncbi.nlm.nih.gov → Settings → API Key):
+    # лимит 3 → 10 запросов/сек и меньше шансов на отказ 429/403 для облачных IP.
+    PUBMED_API_KEY: str = ""
 
     # --- Цены провайдеров (§59, §64). Доллары за 1M токенов, с версией и датой -----
     PRICING_VERSION: str = "2026-09-19"
