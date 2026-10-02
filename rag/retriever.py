@@ -13,7 +13,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 
 from config import settings
 from constants import ACTIVE_SOURCE_STATUSES
@@ -51,6 +51,9 @@ class ChunkResult:
     book_id: int | None = None
     authority_level: str | None = None
     verification_status: str | None = None
+    # Порядковый номер фрагмента внутри источника — нужен, чтобы подтянуть соседей
+    # найденного фрагмента (батч 27, поиск по личному документу).
+    chunk_index: int | None = None
 
 
 def _base_filters(
@@ -108,6 +111,7 @@ async def _fetch_dense(
         BookChunk.section,
         BookChunk.authority_level,
         BookChunk.verification_status,
+        BookChunk.chunk_index,
         distance,
     ).order_by(distance).limit(limit)
     stmt = _base_filters(stmt, source_type, subject, title, book_id, user_id)
@@ -129,6 +133,7 @@ async def _fetch_dense(
             section=row.section,
             authority_level=row.authority_level,
             verification_status=row.verification_status,
+            chunk_index=row.chunk_index,
             found_by={"dense"},
         )
         for row in rows
@@ -161,6 +166,7 @@ async def _fetch_bm25(
             BookChunk.section,
             BookChunk.authority_level,
             BookChunk.verification_status,
+            BookChunk.chunk_index,
             rank,
         )
         .where(BookChunk.content_tsv.op("@@")(tsquery))
@@ -191,6 +197,7 @@ async def _fetch_bm25(
             section=row.section,
             authority_level=row.authority_level,
             verification_status=row.verification_status,
+            chunk_index=row.chunk_index,
             bm25_score=row.bm25_score,
             found_by={"bm25"},
         )
@@ -335,6 +342,158 @@ async def retrieve(
     )
     doc_chunks = await _rerank(question, doc_chunks)
     return doc_chunks[: settings.CLINREK_TOP_K]
+
+
+# --- Личные документы студента (батч 27) ------------------------------------------------
+# Конспект/документ студента небольшой и пишется кратко — обычный порог релевантности и
+# буквальный поиск по словам вопроса теряли ответы, которые в документе были. Поэтому:
+# маленький документ отдаётся целиком, большой — ищется по нескольким формулировкам,
+# с мягким порогом и соседними фрагментами. Фильтры book_id + user_id остаются ВМЕСТЕ
+# в каждом запросе (изоляция §18).
+
+_CHUNK_COLUMNS = (
+    BookChunk.id,
+    BookChunk.book_id,
+    BookChunk.content,
+    BookChunk.subject,
+    BookChunk.author,
+    BookChunk.title,
+    BookChunk.page_from,
+    BookChunk.page_to,
+    BookChunk.section,
+    BookChunk.authority_level,
+    BookChunk.verification_status,
+    BookChunk.chunk_index,
+)
+
+
+def _row_to_chunk(row, found_by: str, rerank_score: float | None = None) -> ChunkResult:
+    return ChunkResult(
+        id=row.id,
+        book_id=row.book_id,
+        content=row.content,
+        subject=row.subject,
+        author=row.author,
+        title=row.title,
+        page_from=row.page_from,
+        page_to=row.page_to,
+        section=row.section,
+        authority_level=row.authority_level,
+        verification_status=row.verification_status,
+        chunk_index=row.chunk_index,
+        rerank_score=rerank_score,
+        found_by={found_by},
+    )
+
+
+async def count_document_chunks(book_ids: Sequence[int], user_id: str) -> int:
+    stmt = select(func.count(BookChunk.id)).where(
+        BookChunk.book_id.in_(list(book_ids)), BookChunk.user_id == user_id
+    )
+    stmt = stmt.join(Book, Book.id == BookChunk.book_id).where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+    async with async_session() as session:
+        return int((await session.execute(stmt)).scalar_one() or 0)
+
+
+async def fetch_document_chunks(book_ids: Sequence[int], user_id: str) -> list[ChunkResult]:
+    """ВСЕ фрагменты выбранных документов студента в порядке документа. rerank_score
+    выставлен в 1.0: фрагмент «дан как есть», пороги релевантности к нему не применяются."""
+    stmt = (
+        select(*_CHUNK_COLUMNS)
+        .where(BookChunk.book_id.in_(list(book_ids)), BookChunk.user_id == user_id)
+        .join(Book, Book.id == BookChunk.book_id)
+        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+        .order_by(BookChunk.book_id, BookChunk.chunk_index)
+    )
+    async with async_session() as session:
+        rows = (await session.execute(stmt)).all()
+    return [_row_to_chunk(row, "full", rerank_score=1.0) for row in rows]
+
+
+async def fetch_neighbors(chunks: list[ChunkResult], user_id: str, score: float) -> list[ChunkResult]:
+    """Соседние фрагменты (±1 по chunk_index) найденных — связность ответа, когда мысль
+    в конспекте продолжается в следующем куске. Уже имеющиеся не дублируются."""
+    have = {c.id for c in chunks}
+    pairs = {
+        (c.book_id, c.chunk_index + delta)
+        for c in chunks
+        if c.book_id is not None and c.chunk_index is not None
+        for delta in (-1, 1)
+        if c.chunk_index + delta >= 0
+    }
+    if not pairs:
+        return []
+    stmt = (
+        select(*_CHUNK_COLUMNS)
+        .where(tuple_(BookChunk.book_id, BookChunk.chunk_index).in_(sorted(pairs)), BookChunk.user_id == user_id)
+        .join(Book, Book.id == BookChunk.book_id)
+        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+    )
+    async with async_session() as session:
+        rows = (await session.execute(stmt)).all()
+    return [_row_to_chunk(row, "neighbor", rerank_score=score) for row in rows if row.id not in have]
+
+
+async def retrieve_union(
+    queries: list[str],
+    rerank_with: str,
+    candidates: int,
+    top_k: int,
+    source_type: str | None = None,
+    subject: str | None = None,
+    book_id: int | Sequence[int] | None = None,
+    user_id: str | None = None,
+) -> list[ChunkResult]:
+    """Поиск по нескольким формулировкам одного вопроса: кандидаты всех формулировок
+    объединяются (без дублей), реранкер запускается ОДИН раз — по исходному вопросу
+    (CPU — главный ресурс, реранк на каждую формулировку был бы втрое дороже)."""
+    batches = await asyncio.gather(
+        *[
+            _fetch_candidates(q, candidates, source_type, subject, book_id=book_id, user_id=user_id)
+            for q in queries
+        ]
+    )
+    merged: dict[int, ChunkResult] = {}
+    # Чередуем кандидатов формулировок по рангу, чтобы обрезка по лимиту не выбросила
+    # целиком вторую/третью формулировку.
+    for rank in range(max((len(b) for b in batches), default=0)):
+        for batch in batches:
+            if rank < len(batch):
+                chunk = batch[rank]
+                if chunk.id in merged:
+                    merged[chunk.id].found_by |= chunk.found_by
+                else:
+                    merged[chunk.id] = chunk
+    union = list(merged.values())[: candidates * 2]
+    if not union:
+        return []
+    union = await _rerank(rerank_with, union)
+    return union[:top_k]
+
+
+async def retrieve_per_question(
+    questions: list[str],
+    per_question: int,
+    candidates: int = 15,
+    source_type: str | None = None,
+    subject: str | None = None,
+    book_id: int | Sequence[int] | None = None,
+    user_id: str | None = None,
+) -> list[list[ChunkResult]]:
+    """Для каждого вопроса — его лучшие `per_question` фрагментов (гибридный поиск,
+    мало кандидатов, реранк под очередью RERANK_CONCURRENCY). Деньги не тратятся —
+    это CPU; генерация потом одна на всю порцию (батч 27)."""
+
+    async def one(question: str) -> list[ChunkResult]:
+        found = await _fetch_candidates(
+            question, candidates, source_type, subject, book_id=book_id, user_id=user_id
+        )
+        if not found:
+            return []
+        found = await _rerank(question, found)
+        return found[:per_question]
+
+    return list(await asyncio.gather(*[one(q) for q in questions]))
 
 
 async def retrieve_with_diagnostics(

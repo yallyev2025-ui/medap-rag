@@ -19,6 +19,7 @@ from typing import Any
 from app.evidence.citations import extract_cited_chunks
 from app.evidence.pack import build_citations
 from app.observability.context import current, current_request_id, set_workflow
+from app.llm.task_map import Task
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
@@ -30,8 +31,10 @@ from app.workflows.dialog import (
     finalize_dialog_answer,
     needs_rewrite,
 )
+from app.workflows.multi import answer_questions, split_questions
+from app.workflows.scope import Scope, retrieve_documents
 from config import settings
-from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
+from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK, SOURCE_USER_DOCUMENT
 from db.models import AnswerLog
 from db.session import async_session
 from rag.generator import (
@@ -41,7 +44,9 @@ from rag.generator import (
     build_history_messages,
     detect_intent,
     detect_subject,
+    document_threshold,
     generate_answer,
+    generate_combined,
     generate_differential,
     generate_fallback,
     generate_multi,
@@ -59,6 +64,8 @@ _CLINICAL_WARNING_KEYWORDS = ("🚩", "противопоказан", "осто�
 
 
 def _derive_source_mode(source_type: str) -> str:
+    if source_type == SOURCE_USER_DOCUMENT:
+        return "USER_DOCUMENT"
     return "CLINICAL_RECOMMENDATION" if source_type == SOURCE_CLINREK else "MEDAP"
 
 
@@ -208,8 +215,15 @@ async def ask(
     symptom_mode: bool = False,
     requested_workflow: str | None = None,
     top_k: int | None = None,
+    scope: Scope | None = None,
+    budget_ok=None,
 ) -> AskResult:
     """Отвечает на вопрос по материалам MedAP и возвращает ответ с диагностикой.
+
+    `scope` (батч 27) — откуда отвечать: учебники / документы студента / оба. Без него —
+    как раньше (учебники или клинреки по source_type/subject). Несколько вопросов в одном
+    сообщении отвечаются порциями (app/workflows/multi.py), `budget_ok` — проверка
+    месячного лимита между порциями.
 
     `turns` — последние обмены текущего чата (лёгкая память диалога): по ним
     уточняющий вопрос вроде «а какие дозы?» превращается в самостоятельный
@@ -303,21 +317,81 @@ async def ask(
         intent = "DIFFERENTIAL"
     reasoning = source_type == SOURCE_CLINREK and intent in ("DIFFERENTIAL", "MULTI")
 
+    # Откуда отвечать (батч 27). Без scope — прежнее поведение. Режим документов/смешанный
+    # без включённых документов безопасно сводится к учебникам (клиент обязан сам
+    # попросить включить документ раньше, см. bot/handlers/query.py).
+    doc_scope = scope is not None and scope.uses_documents
+    both_scope = doc_scope and scope.mode == SCOPE_BOTH
+    docs_only = doc_scope and scope.mode == SCOPE_DOCUMENTS
+    effective_scope = scope if scope is not None else Scope(source_type=source_type, subject=subject)
+    gen_task = decision.task
+
+    # Несколько вопросов в одном сообщении: порциями, одна генерация на порцию.
+    # Только в диалоговых каналах (Telegram/админка): сайт (/v1) по-прежнему получает один полный ответ.
+    if dialog and source_type != SOURCE_CLINREK and continuation_search is None and not reasoning:
+        items = split_questions(question)
+        if len(items) >= 2:
+            with stages.measure("multi_questions") as details:
+                multi = await answer_questions(
+                    items,
+                    effective_scope,
+                    task=Task.DOCUMENT_QA if docs_only else Task.GROUNDED_QA,
+                    budget_ok=budget_ok,
+                )
+                details["questions"] = len(items)
+                details["batches"] = multi.batches
+            return await _log_and_return(
+                AskResult(
+                    answer=multi.text,
+                    workflow=decision.workflow.value,
+                    intent="MULTI_QUESTION",
+                    has_relevant=True,
+                    citations=multi.citations,
+                    diagnostics=stages.as_dict(),
+                    request_id=current_request_id(),
+                    versions=_versions(),
+                    source_mode=_derive_source_mode(SOURCE_USER_DOCUMENT if docs_only else source_type),
+                    evidence_status="SUFFICIENT",
+                    verification_status="UNVERIFIED",
+                ),
+                question,
+            )
+
+    book_chunks: list[ChunkResult] = []
+    doc_chunks: list[ChunkResult] = []
     with stages.measure("retrieval") as details:
-        chunks = await retrieve(
-            search_query,
-            source_type=source_type,
-            subject=subject,
-            # Обычный клинический вопрос отвечается строго из одной рекомендации,
-            # разбор симптомов — наоборот, по многим.
-            focus_document=(source_type == SOURCE_CLINREK and not reasoning),
-            top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else settings.RERANK_TOP_K),
-        )
-        relevant = relevant_chunks(chunks)
-        details["candidates"] = len(chunks)
+        if doc_scope:
+            chunks, doc_details = await retrieve_documents(
+                search_query, scope.document_ids, scope.owner_id, turns
+            )
+            doc_chunks = chunks
+            details.update({f"doc_{k}": v for k, v in doc_details.items()})
+            if both_scope:
+                book_chunks = await retrieve(
+                    search_query,
+                    source_type=source_type,
+                    subject=subject,
+                    top_k=top_k or settings.RERANK_TOP_K // 2,
+                )
+            relevant = relevant_chunks(chunks, document_threshold()) + relevant_chunks(book_chunks)
+            all_chunks = chunks + book_chunks
+        else:
+            chunks = await retrieve(
+                search_query,
+                source_type=source_type,
+                subject=subject,
+                # Обычный клинический вопрос отвечается строго из одной рекомендации,
+                # разбор симптомов — наоборот, по многим.
+                focus_document=(source_type == SOURCE_CLINREK and not reasoning),
+                top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else settings.RERANK_TOP_K),
+            )
+            relevant = relevant_chunks(chunks)
+            all_chunks = chunks
+        details["candidates"] = len(all_chunks)
         details["relevant"] = len(relevant)
         # Реранкер мог быть недоступен — это важно видеть в диагностике (§36).
-        details["reranked"] = any(c.rerank_score is not None for c in chunks)
+        details["reranked"] = any(c.rerank_score is not None for c in all_chunks)
+    chunks = all_chunks
 
     if not relevant:
         stages.note("no_evidence", policy="решение о фолбэке принимает клиент")
@@ -346,7 +420,19 @@ async def ask(
         # SYSTEM_PROMPT/MULTI_SYSTEM_PROMPT). Гейт по source_type — иначе учебный
         # вопрос студента, который detect_intent() ошибочно принял за разбор
         # симптомов, ушёл бы во врачебный тон на чанках из учебника.
-        if intent == "DIFFERENTIAL" and source_type == SOURCE_CLINREK:
+        if both_scope:
+            generated = await generate_combined(
+                gen_question,
+                doc_chunks,
+                book_chunks,
+                history,
+                dialog=dialog,
+            )
+        elif docs_only:
+            generated = await generate_answer(
+                gen_question, chunks, SOURCE_USER_DOCUMENT, history, task=Task.DOCUMENT_QA, dialog=dialog
+            )
+        elif intent == "DIFFERENTIAL" and source_type == SOURCE_CLINREK:
             generated = await generate_differential(gen_question, chunks, source_type, history)
         elif intent == "MULTI" and source_type == SOURCE_CLINREK:
             generated = await generate_multi(gen_question, chunks, source_type, history)
@@ -415,7 +501,7 @@ async def ask(
             chunks=chunks,
             verified=generated.verified,
             conflicts=conflicts,
-            source_mode=_derive_source_mode(source_type),
+            source_mode=_derive_source_mode(SOURCE_USER_DOCUMENT if docs_only else source_type),
             evidence_status=evidence_status,
             verification_status=verification_status,
             unsupported_areas=unsupported_areas,

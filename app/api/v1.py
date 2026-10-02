@@ -225,9 +225,19 @@ class VisionAnalyzeRequest(BaseModel):
     context: StudentAIContext
 
 
-class VisionAnalyzeResponse(BaseModel):
+class VisionQuestion(BaseModel):
+    number: int
     question: str
     options: list[str]
+    diagramDescription: str | None = None
+
+
+class VisionAnalyzeResponse(BaseModel):
+    # question/options — ПЕРВЫЙ вопрос на изображении (обратная совместимость);
+    # все вопросы — в questions (батч 27: на одном скрине их может быть много).
+    question: str
+    options: list[str]
+    questions: list[VisionQuestion] = []
     diagramDescription: str | None
     confidence: float
     # True — распознавание неуверенное, нужно попросить переснять; answer в
@@ -246,6 +256,10 @@ def _vision_response(result: TestSolveResult) -> VisionAnalyzeResponse:
     return VisionAnalyzeResponse(
         question=result.extraction.question,
         options=result.extraction.options,
+        questions=[
+            VisionQuestion(number=q.number, question=q.question, options=q.options, diagramDescription=q.diagram)
+            for q in result.extraction.questions
+        ],
         diagramDescription=result.extraction.diagram_description,
         confidence=result.extraction.confidence,
         needsRetake=result.needs_retake,

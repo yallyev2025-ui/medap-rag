@@ -15,6 +15,12 @@ SOURCE_USER_DOCUMENT = "документ_студента"
 # так и личного документа студента (§18). Общее место вместо дублирования.
 ALLOWED_UPLOAD_EXTENSIONS = (".pdf", ".docx", ".txt")
 
+# Откуда отвечать (батч 27): учебники / мои документы / мои документы и учебники.
+SCOPE_TEXTBOOK = "textbook"
+SCOPE_DOCUMENTS = "documents"
+SCOPE_BOTH = "both"
+ANSWER_SCOPES = (SCOPE_TEXTBOOK, SCOPE_DOCUMENTS, SCOPE_BOTH)
+
 # Категории клинреков: (код для callback_data, человекочитаемая метка, значение subject в БД).
 # Значение None у "Все категории" означает поиск без фильтра по subject.
 CLINREK_CATEGORIES: list[tuple[str, str, str | None]] = [

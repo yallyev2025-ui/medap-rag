@@ -7,7 +7,7 @@ USER_COMMANDS = [
     BotCommand(command="new", description="Новая тема (забыть контекст диалога)"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="limit", description="Сколько запросов осталось сегодня"),
-    BotCommand(command="exitdocument", description="Выйти из режима «свой документ»"),
+    BotCommand(command="sources", description="Панель: откуда отвечать, мои документы"),
     BotCommand(command="selfcheck", description="Проверить свой ответ (текст или голосом)"),
     BotCommand(command="websearch", description="Найти в интернете"),
     BotCommand(command="pubmed", description="Искать в PubMed"),

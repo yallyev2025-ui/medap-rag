@@ -29,24 +29,26 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.evidence.citations import extract_cited_chunks
-from app.evidence.pack import build_citations
-from app.llm.task_map import Task
 from app.observability.context import current_request_id
 from app.security.audit import audit
+from app.workflows.ask import ask
+from app.workflows.scope import Scope
 from config import settings
-from constants import ALLOWED_UPLOAD_EXTENSIONS, SOURCE_USER_DOCUMENT
+from constants import (
+    ALLOWED_UPLOAD_EXTENSIONS,
+    SCOPE_DOCUMENTS,
+    SOURCE_TEXTBOOK,
+    SOURCE_USER_DOCUMENT,
+)
 from db.crud import delete_book
 from db.models import Book, BookChunk
 from db.session import async_session
-from rag.generator import generate_answer, relevant_chunks
-from rag.retriever import retrieve
 from scripts.load_books import load_book
 
 logger = logging.getLogger(__name__)
 
 _NO_MATERIAL_MESSAGE = (
-    "В этом документе не нашлось материала по вопросу — попробуй переформулировать "
+    "В твоём документе по этому вопросу ничего нет — попробуй переформулировать "
     "или уточнить, о какой части документа речь."
 )
 _NOT_FOUND_MESSAGE = "Документ не найден."
@@ -128,6 +130,14 @@ async def ingest_user_document(
             request_id=current_request_id(),
         )
 
+    if len(await list_user_documents(user_id)) >= settings.USER_DOCUMENTS_MAX:
+        return UserDocumentIngestResult(
+            document=None,
+            error=f"Достигнут предел — {settings.USER_DOCUMENTS_MAX} документов. "
+            "Удали ненужный в панели «📄 Мои документы» и загрузи этот снова.",
+            request_id=current_request_id(),
+        )
+
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
     if size_mb > settings.USER_DOCUMENT_MAX_MB:
         return UserDocumentIngestResult(
@@ -181,33 +191,33 @@ async def ingest_user_document(
     )
 
 
+async def resolve_scope(
+    user_id: str,
+    mode: str,
+    document_ids: list[int],
+    source_type: str | None = SOURCE_TEXTBOOK,
+    subject: str | None = None,
+) -> Scope:
+    """Режим ответа студента → `Scope`. Из включённых документов остаются только реально
+    принадлежащие user_id (удалённые/чужие id молча отбрасываются)."""
+    owned = await _owned_document_ids(user_id, document_ids)
+    return Scope(
+        mode=mode,
+        source_type=source_type,
+        subject=subject,
+        document_ids=tuple(owned),
+        owner_id=user_id,
+    )
+
+
 async def ask_user_document(
     question: str,
     user_id: str,
     document_id: int,
     exam_id: str | None = None,
+    turns: list[tuple[str, str]] | None = None,
 ) -> UserDocumentAskResult:
-    if not await _owns_document(user_id, document_id):
-        return UserDocumentAskResult(answer="", error=_NOT_FOUND_MESSAGE, request_id=current_request_id())
-
-    chunks = await retrieve(question, source_type=SOURCE_USER_DOCUMENT, book_id=document_id, user_id=user_id)
-    relevant = relevant_chunks(chunks)
-    if not relevant:
-        return UserDocumentAskResult(answer=_NO_MATERIAL_MESSAGE, request_id=current_request_id())
-
-    generated = await generate_answer(question, chunks, source_type=SOURCE_USER_DOCUMENT, task=Task.DOCUMENT_QA)
-
-    citations: list[dict[str, Any]] = []
-    if generated.verified is not False:
-        cited_chunks = extract_cited_chunks(generated.text, relevant)
-        citations = [c.to_dict() for c in build_citations(cited_chunks)]
-
-    return UserDocumentAskResult(
-        answer=generated.text,
-        verified=generated.verified,
-        evidence_references=citations,
-        request_id=current_request_id(),
-    )
+    return await ask_user_documents(question, user_id, [document_id], exam_id=exam_id, turns=turns)
 
 
 async def ask_user_documents(
@@ -215,38 +225,34 @@ async def ask_user_documents(
     user_id: str,
     document_ids: list[int],
     exam_id: str | None = None,
+    turns: list[tuple[str, str]] | None = None,
 ) -> UserDocumentAskResult:
-    """Вопрос по НЕСКОЛЬКИМ документам студента сразу (батч 13).
+    """Вопрос по одному или НЕСКОЛЬКИМ документам студента (батч 13, 27).
 
-    В отличие от `ask_user_document()` (ровно один документ), здесь один
-    `retrieve()` ищет по объединённому набору чанков всех выбранных
-    документов, и один `generate_answer()` строит по ним ОДИН ответ —
-    не N отдельных ответов, склеенных текстом. Это и честнее (реранкер
-    видит все чанки сразу и выбирает по-настоящему лучшие, а не лучшие
-    внутри каждого документа по отдельности), и дешевле (одна генерация
-    вместо N, независимо от того, сколько документов подключено).
+    Идёт через общий конвейер `ask()` (память диалога, переписывание запроса, «да»-продолжение,
+    несколько вопросов порциями, AnswerLog), а не отдельным коротким путём: один поиск по
+    объединённому набору чанков всех выбранных документов и одна генерация. Изоляция:
+    фильтры book_id + user_id остаются вместе в каждом SQL-запросе.
     """
     owned_ids = await _owned_document_ids(user_id, document_ids)
     if not owned_ids:
         return UserDocumentAskResult(answer="", error=_NOT_FOUND_MESSAGE, request_id=current_request_id())
 
-    chunks = await retrieve(question, source_type=SOURCE_USER_DOCUMENT, book_id=owned_ids, user_id=user_id)
-    relevant = relevant_chunks(chunks)
-    if not relevant:
-        return UserDocumentAskResult(answer=_NO_MATERIAL_MESSAGE, request_id=current_request_id())
-
-    generated = await generate_answer(question, chunks, source_type=SOURCE_USER_DOCUMENT, task=Task.DOCUMENT_QA)
-
-    citations: list[dict[str, Any]] = []
-    if generated.verified is not False:
-        cited_chunks = extract_cited_chunks(generated.text, relevant)
-        citations = [c.to_dict() for c in build_citations(cited_chunks)]
+    scope = Scope(
+        mode=SCOPE_DOCUMENTS,
+        source_type=SOURCE_USER_DOCUMENT,
+        document_ids=tuple(owned_ids),
+        owner_id=user_id,
+    )
+    result = await ask(question, source_type=SOURCE_USER_DOCUMENT, scope=scope, turns=turns)
+    if result.answer is None:
+        return UserDocumentAskResult(answer=_NO_MATERIAL_MESSAGE, request_id=result.request_id)
 
     return UserDocumentAskResult(
-        answer=generated.text,
-        verified=generated.verified,
-        evidence_references=citations,
-        request_id=current_request_id(),
+        answer=result.answer,
+        verified=result.verified,
+        evidence_references=result.citations if result.verified is not False else [],
+        request_id=result.request_id,
     )
 
 

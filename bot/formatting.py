@@ -11,6 +11,9 @@ import re
 TELEGRAM_MESSAGE_LIMIT = 4096
 
 _FENCE = re.compile(r"^\s*```.*$")
+# Огороженный блок ```…``` (схема-дерево, сравнение колонками): выводится моноширинно,
+# как есть, без обработки жирного/курсива/маркеров внутри.
+_FENCED_BLOCK = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _BULLET = re.compile(r"^(\s*)[-*•+]\s+(?=\S)")
 _RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
@@ -46,6 +49,14 @@ def _normalize_lines(text: str) -> str:
 
 
 def to_telegram_html(text: str) -> str:
+    # Схемы в ``` прячем за метками, чтобы разметка внутри них не трогалась.
+    blocks: list[str] = []
+
+    def _stash_block(match: re.Match) -> str:
+        blocks.append(f"<pre>{html.escape(match.group(1).rstrip(), quote=False)}</pre>")
+        return f"\n\x01{len(blocks) - 1}\x01\n"
+
+    text = _FENCED_BLOCK.sub(_stash_block, text.replace("\r\n", "\n"))
     escaped = html.escape(_normalize_lines(text), quote=False)
     # Ссылки прячем за метками до обработки жирного/курсива: «_» и «*» внутри URL
     # не должны превратиться в разметку.
@@ -63,11 +74,12 @@ def to_telegram_html(text: str) -> str:
     # Незакрытый/потерянный «**» (например, ответ оборвался) не должен светиться в чате.
     escaped = escaped.replace("**", "")
     escaped = re.sub("\x00(\\d+)\x00", lambda m: links[int(m.group(1))], escaped)
+    escaped = re.sub("\x01(\\d+)\x01", lambda m: blocks[int(m.group(1))], escaped)
     return re.sub(r"\n{3,}", "\n\n", escaped).strip()
 
 
 def split_for_telegram(html_text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
-    """Разбивает HTML-текст на части по лимиту Telegram, не разрывая теги <b>/<i>."""
+    """Разбивает HTML-текст на части по лимиту Telegram, не разрывая теги <b>/<i>/<pre>."""
     chunks = []
     while len(html_text) > limit:
         split_at = html_text.rfind("\n", 0, limit)
@@ -77,7 +89,7 @@ def split_for_telegram(html_text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> l
         chunk = html_text[:split_at]
         rest = html_text[split_at:].lstrip("\n")
 
-        for tag in ("b", "i"):
+        for tag in ("b", "i", "pre"):
             unclosed = chunk.count(f"<{tag}>") - chunk.count(f"</{tag}>")
             if unclosed > 0:
                 chunk += f"</{tag}>" * unclosed

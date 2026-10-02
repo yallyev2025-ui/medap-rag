@@ -25,14 +25,16 @@ from app.workflows.web_search import search_and_answer
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.waiting_phrases import FIRST_PHRASE, rotate_status
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
-from bot.handlers.user_documents import handle_document_question
-from constants import SOURCE_CLINREK
+from bot.handlers.panel import explain_problem, prepare_scope
+from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK
 from db.crud import (
     get_or_create_user,
     get_recent_turns,
     increment_usage,
+    is_limit_exceeded,
     log_query,
     reset_chat,
+    user_scope,
 )
 from db.models import User
 from db.session import async_session
@@ -55,6 +57,9 @@ NOT_FOUND_ASK = (
 # Для клинреков fallback (общие знания/интернет/PubMed) запрещён полностью —
 # никаких вариантов не предлагается, в отличие от учебников выше.
 CLINREK_NOT_FOUND_TEXT = "Этой информации нет в представленных клинических рекомендациях."
+# Режимы с документами: только выбранные источники, общие знания не предлагаются.
+DOCUMENT_NOT_FOUND_TEXT = "📄 В твоих документах по этому вопросу ничего нет. Переформулируй вопрос или включи другой документ."
+BOTH_NOT_FOUND_TEXT = "📄📚 Ни в твоих документах, ни в учебниках по этому вопросу ничего нет. Переформулируй вопрос."
 
 CONSENT_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -182,20 +187,23 @@ async def pubmed_run(message: Message, state: FSMContext, db_user: User, usage_c
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
-    # Режим «свой документ» (§18) приоритетнее выбора учебник/клинрек.
-    if db_user.current_document_id is not None:
-        await handle_document_question(message, db_user, usage_ctx)
+    # Откуда отвечать (батч 27): учебники / мои документы / мои и учебники вместе.
+    mode = user_scope(db_user)
+    scope, problem = await prepare_scope(db_user)
+    if problem is not None:
+        await explain_problem(message, db_user, problem)
+        usage_ctx["count"] = False
         return
 
     # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
-    if db_user.current_source_type is None:
+    if mode != SCOPE_DOCUMENTS and db_user.current_source_type is None:
         await message.answer(CHOOSE_MODE_TEXT)
         await send_main_menu(message)
         usage_ctx["count"] = False
         return
 
-    source_type = db_user.current_source_type
-    subject = db_user.current_subject
+    source_type = db_user.current_source_type or SOURCE_TEXTBOOK
+    subject = db_user.current_subject if mode != SCOPE_DOCUMENTS else None
     question = message.text
 
     # Клинреки — только премиум/админ (режим мог быть выбран до отзыва премиума).
@@ -204,6 +212,12 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         await send_main_menu(message)
         usage_ctx["count"] = False
         return
+
+    async def budget_ok() -> bool:
+        # Много вопросов порциями: перед каждой следующей порцией проверяем месячный лимит.
+        async with async_session() as session:
+            user = await get_or_create_user(session, message.from_user)
+            return not await is_limit_exceeded(session, user)
 
     status = await message.answer(FIRST_PHRASE)
 
@@ -229,6 +243,8 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
                     subject=subject,
                     turns=turns,
                     symptom_mode=db_user.clinrek_symptom_mode,
+                    scope=scope,
+                    budget_ok=budget_ok,
                 )
         finally:
             rotator.cancel()
@@ -246,7 +262,11 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             # Клинреки: fallback (общие знания/интернет/PubMed) запрещён полностью —
             # не просто под кнопкой согласия, а вообще не предлагается (§ клинического
             # промпта). Учебники — как раньше, три варианта на выбор.
-            if source_type == SOURCE_CLINREK:
+            if mode == SCOPE_DOCUMENTS:
+                await message.answer(DOCUMENT_NOT_FOUND_TEXT)
+            elif mode == SCOPE_BOTH:
+                await message.answer(BOTH_NOT_FOUND_TEXT)
+            elif source_type == SOURCE_CLINREK:
                 await message.answer(CLINREK_NOT_FOUND_TEXT)
             else:
                 _pending_general[db_user.id] = question

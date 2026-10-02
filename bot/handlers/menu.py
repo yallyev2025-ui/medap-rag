@@ -54,12 +54,14 @@ def _main_menu_keyboard(show_clinrek: bool) -> InlineKeyboardMarkup:
 
 
 async def send_main_menu(message: Message) -> None:
+    """Главное меню — постоянная нижняя панель (батч 27). Старые inline-кнопки ниже
+    остаются рабочими только для сообщений, отправленных до обновления."""
+    from bot.handlers.panel import show_main  # поздний импорт: panel.py импортирует этот модуль
+
     async with async_session() as session:
         user = await get_or_create_user(session, message.from_user)
         await session.commit()
-    await message.answer(
-        MAIN_MENU_TEXT, reply_markup=_main_menu_keyboard(has_clinrek_access(user))
-    )
+    await show_main(message, user, "Привет! Я медицинский ассистент MedAP. Выбери, откуда отвечать, кнопками внизу:")
 
 
 def _subjects_keyboard(subjects: list[str]) -> InlineKeyboardMarkup:

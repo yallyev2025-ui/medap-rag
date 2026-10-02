@@ -116,10 +116,10 @@ def _merge_pages(pages: list[tuple[int, int]]) -> str:
     return ", ".join(str(a) if a == b else f"{a}–{b}" for a, b in merged)
 
 
-def compact_sources(citations: list[dict]) -> str:
-    """«📚 Источники: Аляутдин, Фармакология — стр. 227–228, 248–255; Харкевич — стр. 140–141».
-    Собирается из реальных цитат (то, что модель указала и что совпало с найденными
-    фрагментами), а не выдумывается моделью."""
+USER_MATERIAL = "user_material"
+
+
+def _group_sources(citations: list[dict]) -> list[str]:
     grouped: dict[str, list[tuple[int, int]]] = {}
     for citation in citations:
         name = _source_name(citation)
@@ -127,11 +127,22 @@ def compact_sources(citations: list[dict]) -> str:
         page = citation.get("page")
         if page is not None:
             pages.append((page, citation.get("pageTo") or page))
+    return [f"{name} — стр. {_merge_pages(pages)}" if pages else name for name, pages in grouped.items()]
 
-    parts = []
-    for name, pages in grouped.items():
-        parts.append(f"{name} — стр. {_merge_pages(pages)}" if pages else name)
-    return "📚 Источники: " + "; ".join(parts) if parts else ""
+
+def compact_sources(citations: list[dict]) -> str:
+    """«📚 Источники: Аляутдин, Фармакология — стр. 227–228, 248–255; Харкевич — стр. 140–141».
+    Собирается из реальных цитат (то, что модель указала и что совпало с найденными
+    фрагментами), а не выдумывается моделью. Документ студента помечается 📄 и идёт
+    отдельной строкой — источники учебника и личного документа не смешиваются (батч 27)."""
+    own = [c for c in citations if c.get("authorityLevel") == USER_MATERIAL]
+    books = [c for c in citations if c.get("authorityLevel") != USER_MATERIAL]
+    lines = []
+    if own:
+        lines.append("📄 Твой документ: " + "; ".join(_group_sources(own)))
+    if books:
+        lines.append("📚 Источники: " + "; ".join(_group_sources(books)))
+    return "\n".join(lines)
 
 
 def strip_source_brackets(text: str) -> str:

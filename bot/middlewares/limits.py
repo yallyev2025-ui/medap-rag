@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import Message
 
+from bot.panel import is_panel_text
 from config import settings
 from db.crud import get_or_create_user, increment_usage, is_limit_exceeded
 from db.models import User
@@ -37,6 +38,9 @@ class LimitsMiddleware(BaseMiddleware):
         if event.from_user is None:
             return await handler(event, data)
         if event.text and event.text.startswith("/"):
+            return await handler(event, data)
+        # Нажатия кнопок нижней панели — не вопросы: лимит не тратят и db_user не требуют.
+        if is_panel_text(event.text):
             return await handler(event, data)
         if not event.text and not event.photo and not event.document and not event.voice:
             return await handler(event, data)

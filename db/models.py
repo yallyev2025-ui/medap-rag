@@ -160,6 +160,12 @@ class User(Base):
     # Режим «спрашиваю по своему документу» (§18, этап 4A.5) — переключается независимо
     # от current_source_type/current_subject; id — это Book.id личного документа.
     current_document_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Откуда отвечать (батч 27): 'textbook' (только учебники) / 'documents' (только мои
+    # документы) / 'both' (мои + учебники двумя блоками). None = как раньше: учебники,
+    # а при старом current_document_id — 'documents' (см. db.crud.user_scope).
+    answer_scope: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # Включённые документы — JSON-список Book.id (кнопки-галочки в панели «Мои документы»).
+    active_document_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Usage(Base):

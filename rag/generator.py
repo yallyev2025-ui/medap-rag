@@ -37,16 +37,24 @@ PARTIAL_EVIDENCE_MARKER = "Это не указано в представлен�
 CLINREK_PARTIAL_EVIDENCE_MARKER = "Это не указано в представленной клинической рекомендации."
 
 
-def _is_relevant(chunk: ChunkResult) -> bool:
+def _is_relevant(chunk: ChunkResult, threshold: float | None = None) -> bool:
     """Релевантен ли фрагмент. Основной сигнал — скор реранкера; если реранкер был
-    недоступен (rerank_score=None) — падаем на запасной косинусный порог."""
+    недоступен (rerank_score=None) — падаем на запасной косинусный порог.
+    `threshold` — свой порог (для личных документов он мягче, чем у учебников)."""
     if chunk.rerank_score is not None:
-        return chunk.rerank_score >= settings.RERANK_SCORE_THRESHOLD
+        return chunk.rerank_score >= (settings.RERANK_SCORE_THRESHOLD if threshold is None else threshold)
+    if chunk.distance is None:
+        # Найден только лексическим поиском, реранкера нет — порога нет, берём как есть.
+        return True
     return chunk.distance <= settings.MAX_DISTANCE_THRESHOLD
 
 
-def relevant_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
-    return [c for c in chunks if _is_relevant(c)]
+def relevant_chunks(chunks: list[ChunkResult], threshold: float | None = None) -> list[ChunkResult]:
+    return [c for c in chunks if _is_relevant(c, threshold)]
+
+
+def document_threshold() -> float:
+    return settings.DOC_RERANK_SCORE_THRESHOLD
 
 SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот MedAP. Помогаешь студентам медицинских вузов разбираться в учебном материале, готовиться к занятиям и экзаменам, проверять знания, разбирать ошибки.
 
@@ -101,7 +109,14 @@ SYSTEM_PROMPT = f"""Ты — медицинский ассистент-бот Me
 - Разрешена ТОЛЬКО такая разметка: **жирный**, *курсив* и списки через "-" в начале строки; подпункт — тот же "-" с отступом в 2 пробела. Никаких "#", "*" как маркера списка, "_", "`", таблиц и линий "---".
 - Текст должен читаться легко, не сплошным полотном: в абзацах и пунктах выделяй **жирным** 1–3 ключевых понятия (термины, названия, определяющие признаки — то, что студенту нужно запомнить), а *курсивом* — пояснения, латинские и синонимичные названия, примеры, оговорки в скобках. Не выделяй целые предложения и не превращай в выделение половину текста.
 - Заголовок раздела — отдельной строкой **жирным**, в начале ОДИН подходящий эмодзи (например **🔹 Классификация**, **🧠 Механизм действия**, **💊 Препараты**, **⚠️ Нежелательные эффекты**). Эмодзи больше нигде, кроме заголовков и финального вопроса.
-- Короткие абзацы (2–4 строки), блоки отделяй пустой строкой — не сплошным полотном текста."""
+- Короткие абзацы (2–4 строки), блоки отделяй пустой строкой — не сплошным полотном текста.
+
+ПОДАЧА ПО ПРОСЬБЕ СТУДЕНТА (уровень «формат/стиль» — НИЖЕ правил 2 и 3 про источник): форму ответа выбирает студент своей формулировкой, а ты подбираешь лучший способ её выполнить: кратко / подробно / схема / сравнение / по шагам / «на пальцах» / аналогия / история / мнемоника / «чтобы запомнить» / повторить. Если просьбы о форме нет — выбери форму сам, так, чтобы студент лучше понял и запомнил.
+- Схема — текстом: стрелки «→», дерево вложенными пунктами, сравнение «A | B | отличие»; не сплошным абзацем. Схему-дерево или сравнение колонками можно оформить блоком из трёх обратных кавычек (```) — внутри только текст схемы без **разметки**; это единственное исключение из запрета на «`».
+- Все медицинские факты, определения, цифры, дозы и названия — ТОЛЬКО из контекста, даже когда объясняешь образно.
+- Образы, аналогии, истории и мнемоники ты вправе придумывать сам, но ТОЛЬКО отдельным блоком **💡 Образ для запоминания** *(придуман, не из учебника)* — без новых медицинских фактов, цифр и названий, которых нет в контексте. Образ должен точно отражать смысл из контекста, а не искажать его.
+- Если студент просит конкретную форму, правила режима ответа (деление на разделы, вопрос-приглашение в конце) сохраняются: форма выполняется внутри них.
+- Если в сообщении несколько вопросов — ответь на КАЖДЫЙ по порядку, с нумерацией."""
 
 # --- Клинический промпт для врачей (режим «Клин. рекомендации») ---
 # Отличия от студенческого: профессиональный тон, клиническая структура ответа,
@@ -299,7 +314,11 @@ MODE_INSTRUCTIONS = {
         "рецепторы, ферменты, направления изменений должны остаться. Без вступлений («в этой теме мы "
         "рассмотрим...»), без мотивационных фраз, без одного сплошного абзаца — только структура."
     ),
-    "explanation": "Объясни простыми словами, используй аналогии и примеры ТОЛЬКО из контекста ниже.",
+    "explanation": (
+        "Объясни простыми словами, «на пальцах». Факты, цифры и названия — только из контекста ниже; "
+        "аналогию, образ или короткую историю для запоминания придумай сам, но отдельным блоком "
+        "**💡 Образ для запоминания** *(придуман, не из учебника)*, без новых медицинских фактов."
+    ),
 }
 
 # --- Tutor/EXPLAIN и «на паре» (§24, §53.1 ТЗ, этап 4A.1) -----------------------
@@ -355,8 +374,9 @@ def full_mode_instruction(question: str, dialog: bool) -> str:
 
 EXPLAIN_MODE_INSTRUCTION = (
     "Объясняй причинно-следственно: почему и как, шаг за шагом, структурно. Без "
-    "AI-воды и общих фраз — только конкретика из контекста. Примеры и аналогии "
-    "добавляй только там, где они реально помогают понять механизм, и только из контекста."
+    "AI-воды и общих фраз — только конкретика из контекста. Образ или аналогию для запоминания "
+    "добавляй, где они реально помогают понять механизм, — отдельным блоком "
+    "**💡 Образ для запоминания** *(придуман, не из учебника)*, без новых медицинских фактов."
 )
 CLASS_QUICK_MODE_INSTRUCTION = (
     "Режим «на паре»: отвечай МАКСИМАЛЬНО коротко и по существу — 2–4 предложения "
@@ -375,10 +395,31 @@ TEST_SOLVE_MODE_INSTRUCTION = (
 # --- Документ пользователя (§18 ТЗ, этап 4A.5) — контекст состоит ровно из ОДНОГО
 # личного файла студента, а не из общего корпуса учебников. ---
 DOCUMENT_QA_MODE_INSTRUCTION = (
-    "Материалы ниже — это личный документ студента (конспект, старый экзамен и т.п.), "
-    "не учебник. Отвечай СТРОГО по этому документу, не подмешивай общие медицинские "
-    "знания молча — если нужного ответа в документе нет, прямо скажи, что в загруженном "
-    "документе это не покрыто, вместо того чтобы отвечать по общим знаниям без пометки."
+    "Материалы ниже — личный документ студента (конспект, лекция, экзаменационные вопросы и т.п.), "
+    "а не учебник. Отвечай ТОЛЬКО по нему: содержание документа можно объяснять другими словами, "
+    "раскрывать, структурировать и сопоставлять его части, но нельзя добавлять медицинские факты, "
+    "которых в нём нет. Документ часто написан сжато — раскрывай смысл написанного и не отказывай, "
+    "пока ответ прямо или косвенно следует из текста. Если нужного в документе действительно нет — "
+    "прямо скажи «в твоём документе этого нет», без дополнений из общих знаний. Источник — название "
+    "документа и страница."
+)
+
+# --- Смешанный режим: документ студента + учебники двумя отдельными блоками (батч 27) ---
+COMBINED_MODE_INSTRUCTION = (
+    "Контекст разделён на два источника: «📄 ДОКУМЕНТ СТУДЕНТА» и «📚 УЧЕБНИКИ». Построй ответ ДВУМЯ "
+    "блоками: **📄 Из твоего документа** — только по документу студента; **📚 Из учебников** — только "
+    "по учебникам. Не смешивай источники и не переноси факты из одного блока в другой. Если по вопросу "
+    "в одном из источников ничего нет — в его блоке одна строка: «в документе по этому вопросу ничего нет» "
+    "или «в учебниках по этому вопросу ничего нет». Источники — в конце, в обычном формате скобок."
+)
+
+# --- Несколько вопросов в одном сообщении/на одном скрине (батч 27) ---
+MULTI_QUESTION_INSTRUCTION = (
+    "Режим ответа: НЕСКОЛЬКО ВОПРОСОВ (они пронумерованы). Ответь на КАЖДЫЙ по порядку, не пропуская "
+    "номеров, строго по контексту. Формат: «N) **Правильный ответ: X** — одна строка почему», когда "
+    "даны варианты ответа, или «N) краткий ответ в 1–2 предложения». Если по контексту нельзя уверенно "
+    "ответить — «N) в материалах не найдено», не угадывай. Без вступлений и заключений, без вопроса в "
+    "конце. Подробный разбор — только если студент прямо просил."
 )
 
 GENERATION_TEMPERATURE = 0.2
@@ -391,6 +432,17 @@ USER_PROMPT_TEMPLATE = """{mode_instruction}
 Вопрос: {question}
 
 Напоминание: используй ТОЛЬКО контекст выше. Если ответа в контексте нет — ответь ровно "{no_context_answer}", без пояснений и догадок."""
+
+# Несколько вопросов / два источника: часть вопросов или один из источников может быть пуст,
+# поэтому «ответь ровно NO_CONTEXT» здесь не подходит — отказ даётся по каждому пункту отдельно.
+USER_PROMPT_TEMPLATE_PARTIAL = """{mode_instruction}
+
+Контекст:
+{context}
+
+Вопрос: {question}
+
+Напоминание: используй ТОЛЬКО контекст выше; чего в нём нет — прямо так и напиши по этому пункту, не угадывай."""
 
 # --- Проверочный проход (groundedness) — см. app/verification/verify.py -----
 
@@ -435,15 +487,15 @@ def _format_source(chunk: ChunkResult) -> str:
     return f"{head}, стр. {chunk.page_from}-{chunk.page_to}"
 
 
-def build_context(chunks: list[ChunkResult]) -> str:
-    relevant = relevant_chunks(chunks)
+def build_context(chunks: list[ChunkResult], threshold: float | None = None) -> str:
+    relevant = relevant_chunks(chunks, threshold)
     if not relevant:
         return NO_CONTEXT_PLACEHOLDER
     return "\n---\n".join(f"[{_format_source(c)}]\n{c.content}" for c in relevant)
 
 
-def detect_subject(chunks: list[ChunkResult]) -> str | None:
-    relevant = relevant_chunks(chunks)
+def detect_subject(chunks: list[ChunkResult], threshold: float | None = None) -> str | None:
+    relevant = relevant_chunks(chunks, threshold)
     if not relevant:
         return None
     return Counter(c.subject for c in relevant).most_common(1)[0][0]
@@ -557,8 +609,12 @@ async def generate_answer(
     history: list[dict] | None = None,
     task: Task = Task.GROUNDED_QA,
     dialog: bool = False,
+    mode_override: str | None = None,
 ) -> GeneratedAnswer:
     """Генерирует ответ с учётом режима.
+
+    `mode_override` — готовая инструкция режима (несколько вопросов, батч 27); заменяет
+    выбор режима по задаче/тексту вопроса.
 
     `dialog=True` (Telegram/админка) — режим «полно по крупным разделам + вопрос в конце»;
     False (сайт, /v1) — один максимально полный ответ без деления и без вопроса.
@@ -577,7 +633,9 @@ async def generate_answer(
         source_label = "личного документа"
     else:
         source_label = "учебников"
-    context = build_context(chunks)
+    # Личный документ: порог релевантности мягче, чем у учебников (конспект пишут сжато).
+    threshold = document_threshold() if task is Task.DOCUMENT_QA else None
+    context = build_context(chunks, threshold)
 
     # Материалов по вопросу нет: либо приветствие/small talk, либо общий вопрос —
     # уводим в гибкий фолбэк (общие знания с честной пометкой). Верификация не нужна.
@@ -597,13 +655,15 @@ async def generate_answer(
         system_prompt = await get_prompt("SYSTEM_PROMPT", SYSTEM_PROMPT)
         # Universal Core + Subject Profile: профиль по предмету найденных чанков.
         # Нет профиля у предмета («other», документ студента) — ядро как есть.
-        subject = detect_subject(chunks)
+        subject = detect_subject(chunks, threshold)
         default_profile = default_profile_text(subject) if subject else None
         if default_profile is not None:
             profile = await get_prompt(profile_key(subject), default_profile)
             system_prompt = f"{system_prompt}\n\n{profile}"
 
-    if is_clinrek:
+    if mode_override is not None:
+        mode_instruction = mode_override
+    elif is_clinrek:
         mode_instruction = clinrek_mode_instruction(question, dialog)
     elif task is Task.EXPLAIN:
         mode_instruction = f"{EXPLAIN_MODE_INSTRUCTION}\n\n{full_mode_instruction(question, dialog)}"
@@ -612,7 +672,7 @@ async def generate_answer(
     elif task is Task.TEST_SOLVE_TEXT:
         mode_instruction = TEST_SOLVE_MODE_INSTRUCTION
     elif task is Task.DOCUMENT_QA:
-        mode_instruction = DOCUMENT_QA_MODE_INSTRUCTION
+        mode_instruction = f"{DOCUMENT_QA_MODE_INSTRUCTION}\n\n{full_mode_instruction(question, dialog)}"
     else:
         mode = detect_mode(question)
         if mode == "question":
@@ -622,13 +682,18 @@ async def generate_answer(
         else:
             mode_instruction = MODE_INSTRUCTIONS[mode]
 
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        mode_instruction=mode_instruction,
-        source_label=source_label,
-        context=context,
-        question=question,
-        no_context_answer=NO_CONTEXT_ANSWER,
-    )
+    if mode_override is not None:
+        user_prompt = USER_PROMPT_TEMPLATE_PARTIAL.format(
+            mode_instruction=mode_instruction, context=context, question=question
+        )
+    else:
+        user_prompt = USER_PROMPT_TEMPLATE.format(
+            mode_instruction=mode_instruction,
+            source_label=source_label,
+            context=context,
+            question=question,
+            no_context_answer=NO_CONTEXT_ANSWER,
+        )
 
     answer, truncated = await _complete_ex(system_prompt, user_prompt, GENERATION_TEMPERATURE, task, history)
     state = {"truncated": truncated}
@@ -650,6 +715,90 @@ async def generate_answer(
     result = await _verify_and_repair(context, answer, correct, always_check=is_clinrek)
     result.truncated = state["truncated"] and result.verified is not False
     return result
+
+
+async def generate_combined(
+    question: str,
+    doc_chunks: list[ChunkResult],
+    book_chunks: list[ChunkResult],
+    history: list[dict] | None = None,
+    dialog: bool = False,
+    mode_override: str | None = None,
+) -> GeneratedAnswer:
+    """Смешанный режим (батч 27): ОДИН вызов модели с двумя размеченными блоками контекста
+    (документ студента / учебники) — дешевле двух вызовов, а ответ строго разделён
+    на «📄 Из твоего документа» и «📚 Из учебников»."""
+    doc_relevant = relevant_chunks(doc_chunks, document_threshold())
+    book_relevant = relevant_chunks(book_chunks)
+    if not doc_relevant and not book_relevant:
+        return GeneratedAnswer(NO_CONTEXT_ANSWER, verified=None)
+
+    def block(chunks: list[ChunkResult]) -> str:
+        if not chunks:
+            return "(по этому вопросу в этом источнике ничего не найдено)"
+        return "\n---\n".join(f"[{_format_source(c)}]\n{c.content}" for c in chunks)
+
+    context = (
+        "=== 📄 ДОКУМЕНТ СТУДЕНТА ===\n" + block(doc_relevant)
+        + "\n\n=== 📚 УЧЕБНИКИ ===\n" + block(book_relevant)
+    )
+    base = await get_prompt("SYSTEM_PROMPT", SYSTEM_PROMPT)
+    instruction = (
+        mode_override
+        if mode_override is not None
+        else f"{COMBINED_MODE_INSTRUCTION}\n\n{full_mode_instruction(question, dialog)}"
+    )
+    user_prompt = USER_PROMPT_TEMPLATE_PARTIAL.format(
+        mode_instruction=instruction, context=context, question=question
+    )
+    answer, truncated = await _complete_ex(base, user_prompt, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history)
+
+    async def correct(issues: str) -> str:
+        fixed, _t = await _complete_ex(
+            base,
+            user_prompt + "\n\nУбери из ответа все утверждения, которых нет в контексте. Проблемы:\n" + issues,
+            GENERATION_TEMPERATURE,
+            Task.GROUNDED_QA,
+            history,
+        )
+        return fixed
+
+    result = await _verify_and_repair(context, answer, correct, always_check=False)
+    result.truncated = truncated and result.verified is not False
+    return result
+
+
+EXPAND_SYSTEM_PROMPT = """Тебе дан вопрос студента по его личному документу (конспект, лекция). Дай до 3 РАЗНЫХ поисковых формулировок для поиска по документу: (1) вопрос своими словами, (2) ключевые медицинские термины/названия, включая латинские и сокращения, (3) синонимы и смежные понятия, под которыми это могло быть записано. Ничего не выдумывай — только переформулировки того, о чём спросили.
+Верни ТОЛЬКО JSON: {"queries": ["...", "..."]}"""
+
+
+async def expand_queries(question: str, turns: list[tuple[str, str]] | None = None) -> list[str]:
+    """Несколько формулировок поиска для личного документа (батч 27): буквальный поиск по
+    словам вопроса пропускал места, записанные другими словами. Один дешёвый вызов
+    (Task.QUERY_REWRITE); при любом сбое — исходный вопрос, поиск не ломается."""
+    context = ""
+    if turns:
+        context = "Контекст диалога:\n" + "\n".join(f"Вопрос: {q}" for q, _a in turns[-2:]) + "\n\n"
+    try:
+        result = await llm.complete(
+            Task.QUERY_REWRITE,
+            [
+                {"role": "system", "content": EXPAND_SYSTEM_PROMPT},
+                {"role": "user", "content": f"{context}Вопрос: {question}"},
+            ],
+            temperature=0.0,
+            max_output_tokens=300,
+            json_schema={"required": ["queries"]},
+        )
+    except llm.LLMError:
+        return [question]
+    raw = (result.data or {}).get("queries")
+    extra = [q.strip() for q in raw if isinstance(q, str) and q.strip()] if isinstance(raw, list) else []
+    queries = [question]
+    for q in extra:
+        if q.lower() != question.lower() and q not in queries and len(q) <= 300:
+            queries.append(q)
+    return queries[:4]
 
 
 async def _reasoning_answer(

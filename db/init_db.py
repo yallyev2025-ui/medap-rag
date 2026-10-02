@@ -77,6 +77,9 @@ async def init_db() -> None:
 
         # Этап 4A.5: режим «спрашиваю по своему документу» у пользователя Telegram (§18 ТЗ).
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_document_id VARCHAR(64);"))
+        # Батч 27: режим ответа (учебники / мои документы / вместе) и включённые документы.
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS answer_scope VARCHAR(12);"))
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_document_ids TEXT;"))
 
         # Батч 9: синхронизация клинреков с Рубрикатором Минздрава ("{код}_{версия}").
         await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS external_ref VARCHAR(32);"))

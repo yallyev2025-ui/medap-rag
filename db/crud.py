@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from constants import SOURCE_TEXTBOOK
+from constants import ANSWER_SCOPES, SCOPE_DOCUMENTS, SCOPE_TEXTBOOK, SOURCE_TEXTBOOK
 from db.models import (
     AIUsageEvent,
     AnswerLog,
@@ -160,6 +160,71 @@ async def set_active_document(session: AsyncSession, user_id: int, document_id: 
     if user is None:
         return
     user.current_document_id = document_id
+
+
+def user_scope(user: User) -> str:
+    """Откуда отвечать: явный выбор, иначе по старому полю current_document_id
+    (был включён документ → 'documents'), иначе учебники."""
+    scope = getattr(user, "answer_scope", None)
+    if scope in ANSWER_SCOPES:
+        return scope
+    if getattr(user, "current_document_id", None):
+        return SCOPE_DOCUMENTS
+    return SCOPE_TEXTBOOK
+
+
+def user_active_document_ids(user: User) -> list[int]:
+    """Включённые документы пользователя (JSON-список id; старое поле — как запасное)."""
+    raw = getattr(user, "active_document_ids", None)
+    if raw:
+        try:
+            return [int(x) for x in json.loads(raw)]
+        except (ValueError, TypeError):
+            return []
+    legacy = getattr(user, "current_document_id", None)
+    if legacy and str(legacy).isdigit():
+        return [int(legacy)]
+    return []
+
+
+def _store_active_ids(user: User, ids: list[int]) -> None:
+    user.active_document_ids = json.dumps(sorted(set(ids)))
+    # Старое поле больше не источник правды — иначе удалённый документ «воскреснет».
+    user.current_document_id = None
+
+
+async def set_answer_scope(session: AsyncSession, user_id: int, scope: str) -> None:
+    user = await session.get(User, user_id)
+    if user is None or scope not in ANSWER_SCOPES:
+        return
+    # Старое поле переносим в новый список, пока оно ещё единственный источник правды.
+    _store_active_ids(user, user_active_document_ids(user))
+    user.answer_scope = scope
+
+
+async def toggle_active_document(session: AsyncSession, user_id: int, document_id: int) -> list[int]:
+    """✅/⬜ в панели «Мои документы»: переключает документ, возвращает новый список."""
+    user = await session.get(User, user_id)
+    if user is None:
+        return []
+    ids = user_active_document_ids(user)
+    ids = [i for i in ids if i != document_id] if document_id in ids else ids + [document_id]
+    _store_active_ids(user, ids)
+    return sorted(set(ids))
+
+
+async def add_active_document(session: AsyncSession, user_id: int, document_id: int) -> None:
+    user = await session.get(User, user_id)
+    if user is None:
+        return
+    _store_active_ids(user, user_active_document_ids(user) + [document_id])
+
+
+async def remove_active_document(session: AsyncSession, user_id: int, document_id: int) -> None:
+    user = await session.get(User, user_id)
+    if user is None:
+        return
+    _store_active_ids(user, [i for i in user_active_document_ids(user) if i != document_id])
 
 
 async def reset_chat(session: AsyncSession, user_id: int) -> None:
