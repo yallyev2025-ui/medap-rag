@@ -8,7 +8,9 @@ FROM python:3.12-slim
 # - tesseract-ocr + rus/eng — распознавание текста со сканов учебников
 # - poppler-utils — pdf2image конвертирует страницы PDF в картинки (pdftoppm)
 # - curl — healthcheck контейнера
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Повторы при скачивании: DNS сборщика Timeweb периодически не отвечает, одна
+# неудачная попытка не должна валить весь деплой.
+RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-rus \
         tesseract-ocr-eng \
@@ -29,17 +31,20 @@ ENV PYTHONUNBUFFERED=1 \
 # torch по умолчанию тянет CUDA-колёса (~2.5 ГБ лишнего веса в образе), а GPU
 # на App Platform нет — ставим CPU-сборку с отдельного индекса.
 COPY requirements.txt .
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+RUN pip install --retries 10 --timeout 60 --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
 # Прогрев весов на этапе сборки: эмбеддер (~2.2 ГБ) и реранкер (~2.3 ГБ) попадают
 # в слой образа, и старт контейнера не зависит от доступности huggingface.co.
 # Если сборщик до HF не достучится — задать HF_ENDPOINT (например, зеркало) и пересобрать.
 ARG EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
 ARG RERANKER_MODEL_NAME=BAAI/bge-reranker-v2-m3
-RUN python -c "\
+RUN for attempt in 1 2 3; do \
+        python -c "\
 from sentence_transformers import SentenceTransformer, CrossEncoder; \
 SentenceTransformer('${EMBEDDING_MODEL_NAME}'); \
-CrossEncoder('${RERANKER_MODEL_NAME}')"
+CrossEncoder('${RERANKER_MODEL_NAME}')" && exit 0; \
+        echo "Загрузка моделей не удалась (попытка $attempt), повтор через 20 с"; sleep 20; \
+    done; exit 1
 
 COPY . .
 

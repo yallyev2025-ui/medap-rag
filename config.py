@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # лимит 3 → 10 запросов/сек и меньше шансов на отказ 429/403 для облачных IP.
     PUBMED_API_KEY: str = ""
 
+    # Запасной DNS (DNS-over-HTTPS к 1.1.1.1 / 8.8.8.8), если системный DNS хостинга
+    # не ответил (`Temporary failure in name resolution`). Включается только при сбое.
+    DNS_FALLBACK_ENABLED: bool = True
+
     # --- Цены провайдеров (§59, §64). Доллары за 1M токенов, с версией и датой -----
     PRICING_VERSION: str = "2026-09-19"
     DEEPSEEK_INPUT_PRICE_USD: float = 0.30
@@ -278,3 +282,10 @@ settings = Settings()
 os.environ.setdefault("OMP_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
 os.environ.setdefault("MKL_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
 os.environ.setdefault("OPENBLAS_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
+
+# Батч 24: запасной DNS (DoH 1.1.1.1 / 8.8.8.8) на случай, когда системный DNS
+# Timeweb не отвечает. config.py импортируется первым — подключаем до любых сетевых вызовов.
+if settings.DNS_FALLBACK_ENABLED:
+    from app.net import dns_fallback
+
+    dns_fallback.install()
