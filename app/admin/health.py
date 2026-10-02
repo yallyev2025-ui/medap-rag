@@ -7,9 +7,11 @@
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
+from app.llm import provider as llm
 from app.llm.registry import model_registry
 from app.storage import s3
 from app.workflows.pubmed import SourceProbe, probe_sources
@@ -26,6 +28,13 @@ class ProviderHealth:
     provider: str
     model_id: str
     enabled: bool
+    probe_ok: bool = False
+    probe_model: str | None = None
+    probe_latency_ms: int = 0
+    probe_reason: str | None = None
+    last_error: str | None = None
+    last_error_time: str | None = None
+    last_error_task: str | None = None
 
 
 @dataclass
@@ -58,10 +67,21 @@ async def system_health() -> SystemHealth:
         health.db_error = str(exc)
 
     health.stuck_jobs = health.jobs_by_status.get("error", 0)
-    health.providers = [
-        ProviderHealth(provider=key, model_id=prof.model_id, enabled=prof.enabled)
-        for key, prof in model_registry().items()
-    ]
+    for key, prof in model_registry().items():
+        item = ProviderHealth(provider=key, model_id=prof.model_id, enabled=prof.enabled)
+        try:
+            probe = await llm.probe_provider(key)
+            item.probe_ok, item.probe_model = probe.ok, probe.model
+            item.probe_latency_ms, item.probe_reason = probe.latency_ms, probe.reason
+        except Exception as exc:
+            logger.exception("System Health: проба провайдера %s не выполнена", key)
+            item.probe_reason = str(exc)[:150]
+        err = llm.last_error(key)
+        if err:
+            item.last_error = err["reason"]
+            item.last_error_task = err["task"]
+            item.last_error_time = datetime.fromtimestamp(err["time"], timezone.utc).strftime("%d.%m %H:%M UTC")
+        health.providers.append(item)
     health.s3_configured = s3.is_configured()
     try:
         health.literature = await probe_sources()

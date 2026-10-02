@@ -12,6 +12,7 @@ from app.observability.context import request_context
 from app.workflows.vision import solve_from_image
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.handlers.menu import send_main_menu
+from config import settings
 from db.models import User
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,15 @@ async def handle_photo(message: Message, db_user: User, usage_ctx: dict) -> None
     except Exception:
         logger.exception("Ошибка при разборе фото")
         await _set_status(status, ERROR_TEXT)
+        usage_ctx["count"] = False
+        return
+
+    if result.service_error:
+        # Сбой сервиса, а не фото: переснимать не нужно. Настоящую причину видит админ.
+        text = "⚠️ Сервис распознавания фото сейчас недоступен — дело не в снимке, попробуй позже."
+        if db_user.id in settings.ADMIN_IDS:
+            text += f"\n\nПричина (видно только админу): {result.service_error}"
+        await _set_status(status, text)
         usage_ctx["count"] = False
         return
 

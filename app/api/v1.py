@@ -234,6 +234,8 @@ class VisionAnalyzeResponse(BaseModel):
     # этом случае всегда null.
     needsRetake: bool
     qualityIssue: str | None
+    # Сбой сервиса распознавания (не вина фото; needsRetake при этом false).
+    serviceError: str | None = None
     answer: str | None
     verified: bool | None
     citations: list[Citation]
@@ -248,6 +250,7 @@ def _vision_response(result: TestSolveResult) -> VisionAnalyzeResponse:
         confidence=result.extraction.confidence,
         needsRetake=result.needs_retake,
         qualityIssue=result.extraction.quality_issue,
+        serviceError=result.service_error,
         answer=result.answer,
         verified=result.verified,
         citations=[Citation(**c) for c in result.citations],

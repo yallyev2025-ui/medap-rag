@@ -196,14 +196,15 @@ async def effective_task_model_map() -> dict[Task, tuple[str, str]]:
     return result
 
 
-async def resolve_provider(task: Task) -> tuple[str, str | None]:
+async def resolve_provider(task: Task, needs_vision: bool = False) -> tuple[str, str | None]:
     """Провайдер для вызова: принудительный (только в benchmark) → админка →
-    окружение → код; затем та же подмена недоступного провайдера, что в provider_for."""
+    окружение → код; затем та же подмена недоступного провайдера, что в provider_for.
+    `needs_vision` — запрос с картинкой: подходит только провайдер со зрением."""
     forced = _forced_providers.get()
     if forced and task in forced:
-        return _with_fallback(task, forced[task])
+        return _with_fallback(task, forced[task], needs_vision)
     admin = await admin_overrides()
-    return _with_fallback(task, admin.get(task) or task_model_map()[task])
+    return _with_fallback(task, admin.get(task) or task_model_map()[task], needs_vision)
 
 
 def provider_for(task: Task) -> tuple[str, str | None]:
@@ -211,27 +212,34 @@ def provider_for(task: Task) -> tuple[str, str | None]:
     return _with_fallback(task, task_model_map()[task])
 
 
-def _with_fallback(task: Task, chosen: str) -> tuple[str, str | None]:
+def _with_fallback(task: Task, chosen: str, needs_vision: bool = False) -> tuple[str, str | None]:
     """Возвращает (провайдер, провайдер-источник фолбэка).
 
-    Если закреплённый за задачей провайдер не сконфигурирован (нет ключа), берётся
-    любой доступный, а исходный возвращается вторым элементом — он попадёт в
-    `fallbackFrom` записи о расходе (§59), чтобы подмена не осталась незамеченной.
+    Если закреплённый за задачей провайдер не сконфигурирован (нет ключа) или не
+    умеет читать картинки, а запрос с картинкой — берётся любой подходящий, а
+    исходный возвращается вторым элементом: он попадёт в `fallbackFrom` записи о
+    расходе (§59), чтобы подмена не осталась незамеченной.
     """
     registry = model_registry()
-    if registry[chosen].enabled:
+
+    def usable(prof) -> bool:
+        return prof.enabled and (prof.supports_vision or not needs_vision)
+
+    if usable(registry[chosen]):
         return chosen, None
 
     for key, prof in registry.items():
-        if prof.enabled:
+        if usable(prof):
             logger.warning(
-                "Провайдер %s для задачи %s не сконфигурирован, временно использую %s",
+                "Провайдер %s для задачи %s не подходит (нет ключа или зрения), временно использую %s",
                 chosen,
                 task.value,
                 key,
             )
             return key, chosen
 
+    if needs_vision:
+        raise RuntimeError("Для чтения фото нужен рабочий ключ OpenAI (OPENAI_API_KEY не задан)")
     raise RuntimeError(
         "Не сконфигурирован ни один LLM-провайдер: задайте DEEPSEEK_API_KEY и/или OPENAI_API_KEY"
     )

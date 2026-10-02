@@ -55,17 +55,27 @@
 <section>
   <h1 style="font-size:18px">Провайдеры</h1>
   <table>
-    <tr><th>Провайдер</th><th>Модель</th><th>Статус</th></tr>
+    <tr><th>Провайдер</th><th>Модель</th><th>Статус</th><th>Живая проверка</th><th>Последняя ошибка</th></tr>
     {% for p in health.providers %}
     <tr>
       <td>{{ p.provider }}</td>
-      <td>{{ p.model_id }}</td>
+      <td>{{ p.probe_model or p.model_id }}</td>
       <td class="{{ 'status-done' if p.enabled else 'status-error' }}">
         {{ 'Настроен' if p.enabled else 'Нет ключа' }}
+      </td>
+      <td class="{{ 'status-done' if p.probe_ok else 'status-error' }}">
+        {% if p.probe_ok %}работает, {{ p.probe_latency_ms }} мс{% else %}не отвечает: {{ p.probe_reason or '—' }}{% endif %}
+      </td>
+      <td>
+        {% if p.last_error %}{{ p.last_error_time }} · {{ p.last_error_task }}: {{ p.last_error }}{% else %}—{% endif %}
       </td>
     </tr>
     {% endfor %}
   </table>
+  <p class="note" style="margin-top:8px">
+    «Живая проверка» — крошечный реальный запрос к провайдеру (раз в минуту); если основной модели нет,
+    сервис сам переходит на запасную (OPENAI_MODEL_FALLBACKS) — здесь видна та, что реально отвечает.
+  </p>
   <p class="note" style="margin-top:8px">Соответствие задач моделям — на <a href="/admin/models">странице Models</a>.</p>
 </section>
 

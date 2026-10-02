@@ -10,8 +10,12 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = ""
     OPENAI_API_KEY: str = ""
-    # Модель для учебников и служебных задач (роутер интентов). Можно дешёвую (mini).
-    OPENAI_MODEL: str = "gpt-4.1"
+    # Модель OpenAI: Vision (фото тестов), оценка ответов студента. По ТЗ — GPT-5.4 Mini
+    # (дешёвая и хорошо читает изображения). Если OpenAI ответит «модели нет», сервис
+    # сам попробует запасные из OPENAI_MODEL_FALLBACKS и запомнит рабочую.
+    OPENAI_MODEL: str = "gpt-5.4-mini"
+    # Запасные модели через запятую, пробуются по порядку при 404 / model_not_found.
+    OPENAI_MODEL_FALLBACKS: str = "gpt-5-mini,gpt-4.1-mini"
     # УСТАРЕЛО: выбор модели теперь делает TaskModelMap (app/llm/task_map.py).
     # Поле оставлено, чтобы не падал старый .env; значение больше не используется.
     CLINREK_OPENAI_MODEL: str = "gpt-4.1"

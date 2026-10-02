@@ -43,10 +43,33 @@ VISION_EXTRACT_SYSTEM_PROMPT = """Ты распознаёшь фото или с
 options — пустой массив [], если вопрос открытый (без вариантов ответа). Не выдумывай текст,
 которого не видно: если что-то нечитаемо, снижай confidence и укажи qualityIssue."""
 
-_VISION_SCHEMA = {"required": ["question", "options", "confidence"]}
+# Обязателен только текст вопроса: у открытого вопроса нет вариантов, а оценку
+# уверенности модель может опустить — это не повод считать прочитанное фото сбоем.
+_VISION_SCHEMA = {"required": ["question"]}
 
 # Ниже этого порога честно просим переснять, а не угадываем нечитаемый текст.
 MIN_CONFIDENCE = 0.5
+# Если модель не назвала уверенность, но вопрос прочитан — умеренное значение выше порога.
+DEFAULT_CONFIDENCE = 0.6
+
+
+def _confidence(value: Any, has_question: bool) -> float:
+    """Число 0..1 из того, что вернула модель (число, строка «0,85», проценты)."""
+    number: float | None = None
+    if isinstance(value, bool):
+        number = None
+    elif isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip().replace(",", ".").rstrip("%"))
+        except ValueError:
+            number = None
+    if number is None:
+        return DEFAULT_CONFIDENCE if has_question else 0.0
+    if number > 1:
+        number /= 100.0
+    return max(0.0, min(number, 1.0))
 
 
 @dataclass
@@ -68,6 +91,9 @@ class TestSolveResult:
     verified: bool | None = None
     citations: list[dict[str, Any]] = field(default_factory=list)
     request_id: str | None = None
+    # Сбой самого сервиса распознавания (провайдер недоступен) — причина по-русски.
+    # Это НЕ вина фото: просить переснять в этом случае нельзя.
+    service_error: str | None = None
 
 
 async def extract_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> VisionExtraction:
@@ -89,11 +115,17 @@ async def extract_from_image(image_bytes: bytes, mime_type: str = "image/jpeg") 
         Task.VISION_EXTRACT, messages, temperature=0.0, json_schema=_VISION_SCHEMA, image_units=1
     )
     data = result.data or {}
+    question = str(data.get("question") or "").strip()
+    raw_options = data.get("options")
+    options = [
+        o.strip() for o in (raw_options if isinstance(raw_options, list) else [])
+        if isinstance(o, str) and o.strip()
+    ]
     return VisionExtraction(
-        question=(data.get("question") or "").strip(),
-        options=[o for o in (data.get("options") or []) if isinstance(o, str) and o.strip()],
+        question=question,
+        options=options,
         diagram_description=data.get("diagramDescription") or None,
-        confidence=float(data.get("confidence") or 0.0),
+        confidence=_confidence(data.get("confidence"), bool(question)),
         quality_issue=data.get("qualityIssue") or None,
     )
 
@@ -106,15 +138,15 @@ async def solve_from_image(
 ) -> TestSolveResult:
     try:
         extraction = await extract_from_image(image_bytes, mime_type)
-    except llm.LLMError:
+    except llm.LLMError as exc:
         logger.exception("Vision недоступен (сбой провайдера)")
         return TestSolveResult(
             extraction=VisionExtraction(
-                question="", options=[], diagram_description=None, confidence=0.0,
-                quality_issue="Распознавание фото сейчас недоступно, попробуй позже.",
+                question="", options=[], diagram_description=None, confidence=0.0, quality_issue=None,
             ),
-            needs_retake=True,
+            needs_retake=False,
             request_id=current_request_id(),
+            service_error=exc.reason or "сервис распознавания не ответил",
         )
 
     if extraction.confidence < MIN_CONFIDENCE or not extraction.question:

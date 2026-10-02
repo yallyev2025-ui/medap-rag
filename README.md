@@ -177,7 +177,7 @@ curl -X POST https://<домен>/v1/chat \
    cp .env.example .env
    ```
    - `TELEGRAM_BOT_TOKEN` — токен бота от [@BotFather](https://t.me/BotFather)
-   - `OPENAI_API_KEY`, `OPENAI_MODEL` — доступ к OpenAI API
+   - `OPENAI_API_KEY` — доступ к OpenAI API (модель по умолчанию `gpt-5.4-mini`, запасные — `OPENAI_MODEL_FALLBACKS`)
    - `DATABASE_URL` — строка подключения к PostgreSQL с `pgvector`
    - `ADMIN_IDS_RAW` — Telegram ID администраторов через запятую
 3. Создать расширение `vector` и таблицы:

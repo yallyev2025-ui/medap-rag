@@ -45,7 +45,8 @@ def _deepseek() -> ModelProfile:
         provider=DEEPSEEK,
         model_id=settings.DEEPSEEK_MODEL,
         base_url=settings.DEEPSEEK_BASE_URL,
-        supports_vision=True,
+        # У deepseek-chat нет зрения: картинки уходят только провайдеру со зрением (OpenAI).
+        supports_vision=False,
         supports_structured_output=True,
         supports_tools=True,
         context_window=1_000_000,
@@ -57,10 +58,33 @@ def _deepseek() -> ModelProfile:
     )
 
 
+# Модель, на которой провайдер реально ответил (после перебора запасных). Живёт в
+# памяти процесса: после рестарта цепочка проходится заново.
+_working_model: dict[str, str] = {}
+
+
+def primary_model(provider_key: str) -> str:
+    if provider_key == OPENAI:
+        return settings.OPENAI_EVAL_MODEL or settings.OPENAI_MODEL
+    return settings.DEEPSEEK_MODEL
+
+
+def model_candidates(provider_key: str) -> list[str]:
+    """Основная модель и запасные (только у OpenAI), без повторов."""
+    chain = [primary_model(provider_key)]
+    if provider_key == OPENAI:
+        chain += [m.strip() for m in settings.OPENAI_MODEL_FALLBACKS.split(",") if m.strip()]
+    return list(dict.fromkeys(chain))
+
+
+def remember_working_model(provider_key: str, model_id: str) -> None:
+    _working_model[provider_key] = model_id
+
+
 def _openai() -> ModelProfile:
     return ModelProfile(
         provider=OPENAI,
-        model_id=settings.OPENAI_EVAL_MODEL or settings.OPENAI_MODEL,
+        model_id=_working_model.get(OPENAI) or primary_model(OPENAI),
         base_url=settings.OPENAI_BASE_URL or None,
         supports_vision=True,
         supports_structured_output=True,
