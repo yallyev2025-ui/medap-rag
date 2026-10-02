@@ -42,6 +42,8 @@ class Task(str, Enum):
     WEB_SEARCH = "WEB_SEARCH"
     # PubMed (сверх исходного ТЗ, батч 8) — заземлённый ответ по абстрактам статей.
     PUBMED_SEARCH = "PUBMED_SEARCH"
+    # Перевод русского запроса студента в английскую поисковую строку PubMed.
+    PUBMED_QUERY = "PUBMED_QUERY"
     # Quick Outline (раздел "Quick Outline" дополнения к ТЗ) — заземлённая генерация
     # строго типизированной схемы по учебникам для сайта владельца, не студенческий Q&A.
     QUICK_OUTLINE = "QUICK_OUTLINE"
@@ -72,6 +74,7 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.WEB_RESEARCH: DEEPSEEK,
     Task.WEB_SEARCH: DEEPSEEK,
     Task.PUBMED_SEARCH: DEEPSEEK,
+    Task.PUBMED_QUERY: DEEPSEEK,
     Task.QUICK_OUTLINE: DEEPSEEK,
     Task.CONTENT_RECALL: DEEPSEEK,
     Task.CONTENT_TEST: DEEPSEEK,

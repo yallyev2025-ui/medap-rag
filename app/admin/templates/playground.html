@@ -392,13 +392,8 @@
     <p class="note status-error">{{ websearch_result.error }}</p>
     {% else %}
     <p class="note">⚠️ Веб-источники, не проверено</p>
+    <p class="note">Формат как в Telegram: ссылка стоит сразу под описанием каждого источника (Markdown).</p>
     <p style="margin:8px 0 0; white-space:pre-wrap">{{ websearch_result.answer }}</p>
-    {% if websearch_result.sources %}
-    <div style="margin-top:10px">
-      <div class="label">Источники</div>
-      <ul>{% for s in websearch_result.sources %}<li><a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title or s.url }}</a></li>{% endfor %}</ul>
-    </div>
-    {% endif %}
     {% endif %}
   </div>
   {% endif %}
@@ -412,7 +407,7 @@
   </p>
   <form method="post" action="/admin/playground/pubmed" class="card">
     <div>
-      <label for="pubmed_query">Запрос (на английском — PubMed индексирует статьи на английском)</label>
+      <label for="pubmed_query">Запрос (можно по-русски — бот сам переведёт на английский)</label>
       <input id="pubmed_query" name="pubmed_query" value="{{ pubmed_query }}" style="width:100%" required>
     </div>
     <button style="margin-top:12px">Искать в PubMed</button>
@@ -423,13 +418,8 @@
     {% if pubmed_result.error %}
     <p class="note status-error">{{ pubmed_result.error }}</p>
     {% else %}
+    {% if pubmed_result.source %}<p class="note">Источник данных: {{ pubmed_result.source }}</p>{% endif %}
     <p style="margin:8px 0 0; white-space:pre-wrap">{{ pubmed_result.answer }}</p>
-    {% if pubmed_result.articles %}
-    <div style="margin-top:10px">
-      <div class="label">Статьи</div>
-      <ul>{% for a in pubmed_result.articles %}<li><a href="{{ a.url }}" target="_blank" rel="noopener">{{ a.title }}</a> — {{ a.journal or '—' }}, {{ a.year or '—' }}</li>{% endfor %}</ul>
-    </div>
-    {% endif %}
     {% endif %}
   </div>
   {% endif %}

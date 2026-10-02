@@ -81,16 +81,6 @@ class SearchStates(StatesGroup):
     waiting_pubmed_query = State()
 
 
-def _link_text(text: str) -> str:
-    """Текст ссылки без квадратных скобок — иначе ломается разметка [текст](url)."""
-    return " ".join(str(text).replace("[", "(").replace("]", ")").split())
-
-
-def _link_url(url: str) -> str:
-    """Скобки и пробелы в адресе кодируем — иначе разметка [текст](url) обрывается на них."""
-    return str(url).strip().replace(" ", "%20").replace("(", "%28").replace(")", "%29")
-
-
 async def _send_answer(message: Message, answer: str) -> None:
     for part in split_for_telegram(to_telegram_html(answer)):
         await message.answer(part, parse_mode=ParseMode.HTML)
@@ -129,11 +119,8 @@ async def _run_web_search(message: Message, user_id: int, query: str) -> None:
         return
 
     await _clear_status(status)
-    answer = result.answer
-    if result.sources:
-        links = "\n".join(f"- [{_link_text(s['title'] or s['url'])}]({_link_url(s['url'])})" for s in result.sources)
-        answer = f"{answer}\n\n**🔗 Источники:**\n{links}"
-    await _send_answer(message, answer)
+    # Ссылка каждого источника уже стоит под его описанием (собрано в app/workflows/web_search.py).
+    await _send_answer(message, result.answer)
 
 
 async def _run_pubmed_search(message: Message, user_id: int, query: str) -> None:
@@ -151,13 +138,8 @@ async def _run_pubmed_search(message: Message, user_id: int, query: str) -> None
         return
 
     await _clear_status(status)
+    # Ссылка каждой статьи уже стоит под её описанием (собрано в app/workflows/pubmed.py).
     answer = result.answer
-    if result.articles:
-        links = "\n".join(
-            f"- [{_link_text(a.title)}]({_link_url(a.url)}) — {a.journal or 'журнал не указан'}, {a.year or 'год не указан'}"
-            for a in result.articles
-        )
-        answer = f"{answer}\n\n**🔗 Статьи (нажми на название):**\n{links}"
     if result.source == SOURCE_EUROPEPMC:
         answer = f"{answer}\n\n*Источник данных: Europe PMC — те же статьи PubMed/MEDLINE (PubMed напрямую сейчас недоступен).*"
     await _send_answer(message, answer)
@@ -187,7 +169,9 @@ async def websearch_run(message: Message, state: FSMContext, db_user: User, usag
 @router.message(Command("pubmed"))
 async def cmd_pubmed(message: Message, state: FSMContext) -> None:
     await state.set_state(SearchStates.waiting_pubmed_query)
-    await message.answer("Что искать в PubMed? (на английском — так PubMed индексирует статьи)")
+    await message.answer(
+        "Что искать в PubMed? Пиши по-русски — я сам переведу запрос на английский и найду исследования."
+    )
 
 
 @router.message(SearchStates.waiting_pubmed_query, F.text)

@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # --- PubMed (сверх исходного ТЗ, добавлено по запросу) — NCBI E-utilities,
     # бесплатный публичный API, ключ не обязателен (лимит 3 запроса/сек без ключа).
     PUBMED_MAX_RESULTS: int = 5
+    # Сколько кандидатов достаём из PubMed, прежде чем отобрать PUBMED_MAX_RESULTS лучших
+    # по уровню доказательности (мета-анализы/РКИ/обзоры выше) и свежести.
+    PUBMED_CANDIDATES: int = 15
     # Рекомендуется NCBI (не обязательно) — добавляется в запросы, если задано.
     PUBMED_CONTACT_EMAIL: str = ""
     # Необязательный бесплатный ключ NCBI (аккаунт на ncbi.nlm.nih.gov → Settings → API Key):

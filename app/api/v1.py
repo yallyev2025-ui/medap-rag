@@ -771,6 +771,8 @@ async def web_research_endpoint(payload: WebResearchRequest, request: Request) -
 class WebSearchSource(BaseModel):
     title: str
     url: str
+    # Что именно сообщает этот источник (описание; ссылка в `answer` стоит сразу под ним).
+    finding: str = ""
 
 
 class WebSearchRequest(BaseModel):
@@ -784,15 +786,20 @@ class WebSearchResponse(BaseModel):
     sources: list[WebSearchSource]
     error: str | None = None
     requestId: str | None = None
+    summary: str = ""
 
 
 def _web_search_response(result: WebSearchResult) -> WebSearchResponse:
     return WebSearchResponse(
         query=result.query,
         answer=result.answer,
-        sources=[WebSearchSource(**s) for s in result.sources],
+        sources=[
+            WebSearchSource(title=s.get("title", ""), url=s.get("url", ""), finding=s.get("finding", ""))
+            for s in result.sources
+        ],
         error=result.error,
         requestId=result.request_id,
+        summary=result.summary,
     )
 
 
@@ -814,6 +821,9 @@ class PubMedArticleModel(BaseModel):
     journal: str | None = None
     year: str | None = None
     url: str
+    # Тип исследования из данных PubMed и описание результата (на русском).
+    design: str | None = None
+    finding: str = ""
 
 
 class PubMedSearchRequest(BaseModel):
@@ -830,6 +840,11 @@ class PubMedSearchResponse(BaseModel):
     requestId: str | None = None
     # «PubMed» — напрямую из NCBI; «Europe PMC» — запасной вход к тем же статьям MEDLINE.
     source: str | None = None
+    # Английский запрос, по которому искали (если студент писал не по-английски).
+    queryEn: str | None = None
+    summary: str = ""
+    # strong | moderate | limited | conflicting
+    evidenceStrength: str | None = None
 
 
 def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
@@ -837,12 +852,22 @@ def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
         query=result.query,
         answer=result.answer,
         articles=[
-            PubMedArticleModel(pmid=a.pmid, title=a.title, journal=a.journal, year=a.year, url=a.url)
+            PubMedArticleModel(
+                pmid=card["pmid"], title=card["title"], journal=card["journal"], year=card["year"],
+                url=card["url"], design=card["design"], finding=card["finding"],
+            )
+            for card in result.studies
+        ]
+        or [
+            PubMedArticleModel(pmid=a.pmid, title=a.title, journal=a.journal, year=a.year, url=a.url, design=a.design)
             for a in result.articles
         ],
         error=result.error,
         requestId=result.request_id,
         source=result.source,
+        queryEn=result.query_en,
+        summary=result.summary,
+        evidenceStrength=result.evidence_strength,
     )
 
 
