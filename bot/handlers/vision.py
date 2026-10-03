@@ -11,6 +11,7 @@ from aiogram.types import Message
 from app.observability.context import request_context
 from app.workflows.vision import solve_from_image
 from bot.formatting import split_for_telegram, to_telegram_html
+from bot.fragments import citation_buttons
 from bot.handlers.menu import send_main_menu
 from bot.handlers.panel import explain_problem, prepare_scope
 from config import settings
@@ -109,8 +110,12 @@ async def handle_photo(message: Message, db_user: User, usage_ctx: dict) -> None
         return
 
     await _clear_status(status)
-    for part in split_for_telegram(to_telegram_html(result.answer or "")):
-        await message.answer(part, parse_mode=ParseMode.HTML)
+    parts = split_for_telegram(to_telegram_html(result.answer or ""))
+    buttons = citation_buttons(result.citations)
+    for index, part in enumerate(parts):
+        await message.answer(
+            part, parse_mode=ParseMode.HTML, reply_markup=buttons if index == len(parts) - 1 else None
+        )
 
     # Память диалога: «разбери №3 подробнее» после скрина должно знать, что на нём было.
     questions = result.extraction.questions

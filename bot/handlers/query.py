@@ -23,6 +23,7 @@ from app.workflows.ask import ask
 from app.workflows.pubmed import SOURCE_EUROPEPMC, search_pubmed
 from app.workflows.web_search import search_and_answer
 from bot.formatting import split_for_telegram, to_telegram_html
+from bot.fragments import citation_buttons
 from bot.waiting_phrases import FIRST_PHRASE, rotate_status
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
 from bot.handlers.panel import explain_problem, prepare_scope
@@ -86,9 +87,12 @@ class SearchStates(StatesGroup):
     waiting_pubmed_query = State()
 
 
-async def _send_answer(message: Message, answer: str) -> None:
-    for part in split_for_telegram(to_telegram_html(answer)):
-        await message.answer(part, parse_mode=ParseMode.HTML)
+async def _send_answer(message: Message, answer: str, reply_markup=None) -> None:
+    """`reply_markup` (кнопки «📖 источник») крепится к ПОСЛЕДНЕЙ части ответа."""
+    parts = split_for_telegram(to_telegram_html(answer))
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        await message.answer(part, parse_mode=ParseMode.HTML, reply_markup=reply_markup if is_last else None)
 
 
 async def _set_status(status: Message | None, text: str) -> None:
@@ -283,7 +287,8 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         return
 
     await _clear_status(status)
-    await _send_answer(message, answer)
+    # Кнопки «📖 источник · стр.» по реально процитированным источникам (проверенные id из базы).
+    await _send_answer(message, answer, citation_buttons(result.citations))
 
     async with async_session() as session:
         await log_query(

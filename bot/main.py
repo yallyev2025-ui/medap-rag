@@ -20,7 +20,7 @@ from aiogram.types import BotCommandScopeDefault
 
 from api.main import app as api_app
 from bot.commands import USER_COMMANDS
-from bot.handlers import admin, menu, panel, query, recall, start, user_documents, vision
+from bot.handlers import admin, fragments, menu, panel, query, recall, start, user_documents, vision
 from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 from db.init_db import init_db
@@ -41,6 +41,7 @@ async def _run_bot() -> None:
     dp.include_router(menu.router)
     # Нижняя панель: кнопки — обычные тексты, поэтому раньше общих текстовых хендлеров.
     dp.include_router(panel.router)
+    dp.include_router(fragments.router)
     dp.include_router(start.router)
     # recall.router до query.router: RecallStates-фильтрованные хендлеры должны
     # перехватывать текст/голос раньше, чем сработает общий catch-all в query.py.

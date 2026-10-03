@@ -31,6 +31,9 @@ class EvidenceDetail:
     # None — S3 не настроен (мягкая деградация, см. app/storage/s3.py) или у
     # источника ещё нет file_path.
     url: str | None = None
+    # Владелец приватного фрагмента (личный документ студента); None у общих источников.
+    # Клиенты, показывающие фрагмент конкретному человеку, обязаны сверить владельца.
+    owner_id: str | None = None
 
 
 async def fetch_evidence(evidence_id: int) -> EvidenceDetail | None:
@@ -59,4 +62,5 @@ async def fetch_evidence(evidence_id: int) -> EvidenceDetail | None:
         authority_level=chunk.authority_level,
         verification_status=chunk.verification_status,
         url=url,
+        owner_id=chunk.user_id,
     )
