@@ -13,7 +13,7 @@ import base64
 import logging
 import os
 import tempfile
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -70,6 +70,10 @@ class ChatRequest(BaseModel):
     workflow: str | None = None
     # Лёгкая память диалога: пары (вопрос, ответ) в хронологическом порядке.
     history: list[tuple[str, str]] | None = None
+    # Формат текста ответа (батч 29): "plain" — чистый текст-конспект (абзацы через пустую строку,
+    # без разметки и эмодзи) — по умолчанию, для сайта, который рисует ответ как обычный текст;
+    # "markdown" — конспект с заголовками «## », списками и таблицами для клиента, умеющего их рисовать.
+    outputFormat: Literal["plain", "markdown"] = "plain"
 
 
 class Citation(BaseModel):
@@ -325,6 +329,7 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
             subject=payload.context.subjectId,
             turns=payload.history,
             requested_workflow=forced_workflow or payload.workflow,
+            output_format=payload.outputFormat,
         )
 
     logger.info(

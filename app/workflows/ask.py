@@ -30,8 +30,10 @@ from app.workflows.dialog import (
     continuation_from_turns,
     finalize_dialog_answer,
     needs_rewrite,
+    strip_source_brackets,
 )
 from app.workflows.multi import answer_questions, split_questions
+from app.workflows.plain_text import to_plain_text
 from app.workflows.scope import Scope, retrieve_documents
 from config import settings
 from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK, SOURCE_USER_DOCUMENT
@@ -40,6 +42,8 @@ from db.session import async_session
 from rag.generator import (
     CLINREK_PARTIAL_EVIDENCE_MARKER,
     NO_CONTEXT_ANSWER,
+    OUTPUT_FORMATS,
+    OUTPUT_PLAIN,
     PARTIAL_EVIDENCE_MARKER,
     build_history_messages,
     detect_intent,
@@ -217,8 +221,12 @@ async def ask(
     top_k: int | None = None,
     scope: Scope | None = None,
     budget_ok=None,
+    output_format: str | None = None,
 ) -> AskResult:
     """Отвечает на вопрос по материалам MedAP и возвращает ответ с диагностикой.
+
+    `output_format` (батч 29): 'plain' | 'markdown' — формат вывода для сайта. Не задан в канале
+    api ⇒ 'plain' (сайт рисует ответ как обычный текст); в Telegram/админке не используется.
 
     `scope` (батч 27) — откуда отвечать: учебники / документы студента / оба. Без него —
     как раньше (учебники или клинреки по source_type/subject). Несколько вопросов в одном
@@ -236,6 +244,9 @@ async def ask(
     # приглашение. Сайт (/v1, channel api) получает один максимально полный ответ.
     ctx = current()
     dialog = bool(ctx and ctx.channel in DIALOG_CHANNELS)
+    fmt = output_format if output_format in OUTPUT_FORMATS else None
+    if fmt is None and not dialog and ctx is not None and ctx.channel == "api":
+        fmt = OUTPUT_PLAIN
     gen_question = question
     continuation_search: str | None = None
     if dialog and AFFIRM.match(question):
@@ -430,7 +441,8 @@ async def ask(
             )
         elif docs_only:
             generated = await generate_answer(
-                gen_question, chunks, SOURCE_USER_DOCUMENT, history, task=Task.DOCUMENT_QA, dialog=dialog
+                gen_question, chunks, SOURCE_USER_DOCUMENT, history, task=Task.DOCUMENT_QA, dialog=dialog,
+                output_format=fmt,
             )
         elif intent == "DIFFERENTIAL" and source_type == SOURCE_CLINREK:
             generated = await generate_differential(gen_question, chunks, source_type, history)
@@ -438,7 +450,8 @@ async def ask(
             generated = await generate_multi(gen_question, chunks, source_type, history)
         else:
             generated = await generate_answer(
-                gen_question, chunks, source_type, history, task=decision.task, dialog=dialog
+                gen_question, chunks, source_type, history, task=decision.task, dialog=dialog,
+                output_format=fmt,
             )
         details["chars"] = len(generated.text if generated else "")
         details["verified"] = generated.verified if generated else None
@@ -487,6 +500,12 @@ async def ask(
     final_text = generated.text
     if dialog and generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
         final_text = finalize_dialog_answer(final_text, citations, generated.truncated)
+    elif generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
+        # Сайт (api): источники отдаются структурно в citations — скобки из текста убираем;
+        # в режиме plain дополнительно вычищаем разметку (страховка поверх инструкции модели).
+        final_text = strip_source_brackets(final_text)
+        if fmt == OUTPUT_PLAIN:
+            final_text = to_plain_text(final_text)
     return await _log_and_return(
         AskResult(
             answer=final_text,
@@ -518,6 +537,7 @@ async def ask_grounded(
     subject: str | None = None,
     turns: list[tuple[str, str]] | None = None,
     requested_workflow: str | None = None,
+    output_format: str | None = None,
 ) -> AskResult:
     """Вариант для API: при отсутствии подтверждения — честный отказ (§15).
 
@@ -531,6 +551,7 @@ async def ask_grounded(
         subject=subject,
         turns=turns,
         requested_workflow=requested_workflow,
+        output_format=output_format,
     )
     if result.answer is None:
         result.answer = NO_CONTEXT_ANSWER
