@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.evidence.viewer import fetch_evidence
 from app.llm import provider as llm
+from app.llm.registry import cost_usd, profile, to_rub
 from app.llm.task_map import Task
 from app.observability.context import request_context
 from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
@@ -695,6 +696,10 @@ class ConspectWriteResponse(BaseModel):
     inputTokens: int = 0
     cachedInputTokens: int = 0
     outputTokens: int = 0
+    # Сколько стоил вызов по ценам бота (формула §65): сайт показывает это
+    # владельцу рядом с конспектом
+    costUsd: float = 0.0
+    costRub: float = 0.0
     error: str | None = None
     requestId: str | None = None
 
@@ -721,6 +726,8 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
             # Настоящая причина (`reason`) — сайту, чтобы владелец видел её на экране
             return ConspectWriteResponse(text="", error=exc.reason or str(exc))
 
+    usd = cost_usd(profile(result.provider), result.input_tokens, result.cached_input_tokens, result.output_tokens)
+
     return ConspectWriteResponse(
         text=result.text,
         provider=result.provider,
@@ -729,6 +736,8 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
         inputTokens=result.input_tokens,
         cachedInputTokens=result.cached_input_tokens,
         outputTokens=result.output_tokens,
+        costUsd=round(usd, 6),
+        costRub=round(to_rub(usd), 4),
     )
 
 
