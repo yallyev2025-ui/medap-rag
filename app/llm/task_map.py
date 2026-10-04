@@ -52,6 +52,8 @@ class Task(str, Enum):
     CONTENT_RECALL = "CONTENT_RECALL"
     CONTENT_TEST = "CONTENT_TEST"
     CONTENT_CASE = "CONTENT_CASE"
+    # Конспект по пунктам темы для сайта владельца (батч 30): КРАТКИЙ и ПОДРОБНЫЙ.
+    CONSPECT_WRITE = "CONSPECT_WRITE"
     # Восприятие и оценка студента — GPT-5.4 Mini (§56.2).
     VISION_EXTRACT = "VISION_EXTRACT"
     RECALL_EVALUATE = "RECALL_EVALUATE"
@@ -79,6 +81,7 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.CONTENT_RECALL: DEEPSEEK,
     Task.CONTENT_TEST: DEEPSEEK,
     Task.CONTENT_CASE: DEEPSEEK,
+    Task.CONSPECT_WRITE: DEEPSEEK,
     Task.VISION_EXTRACT: OPENAI,
     Task.RECALL_EVALUATE: OPENAI,
     Task.FREE_RECALL_EVALUATE: OPENAI,

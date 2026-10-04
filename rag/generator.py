@@ -18,6 +18,15 @@ from app.verification.verify import verify_answer
 from config import settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
+from rag.conspect_prompts import (
+    CONSPECT_BRIEF_PROMPT,
+    CONSPECT_DETAILED_PROMPT,
+    CONSPECT_FORMAT,
+    CONSPECT_SUBJECT_GENERIC,
+    CONSPECT_SUBJECTS,
+    conspect_subject_key,
+    default_conspect_subject_text,
+)
 from rag.subject_profiles import SUBJECT_PROFILES, default_profile_text, profile_key
 
 logger = logging.getLogger(__name__)
@@ -972,4 +981,10 @@ PROMPT_DEFAULTS: dict[str, str] = {
     "MULTI_SYSTEM_PROMPT": MULTI_SYSTEM_PROMPT,
     "REPAIR_SYSTEM_PROMPT": REPAIR_SYSTEM_PROMPT,
     **{profile_key(code): default_profile_text(code) for code in SUBJECT_PROFILES},
+    # Конспекты для сайта (батч 30): два основных промпта, диалект вывода и надстройки по предметам.
+    "CONSPECT_BRIEF_PROMPT": CONSPECT_BRIEF_PROMPT,
+    "CONSPECT_DETAILED_PROMPT": CONSPECT_DETAILED_PROMPT,
+    "CONSPECT_FORMAT": CONSPECT_FORMAT,
+    conspect_subject_key("generic"): CONSPECT_SUBJECT_GENERIC,
+    **{conspect_subject_key(code): default_conspect_subject_text(code) for code in CONSPECT_SUBJECTS},
 }

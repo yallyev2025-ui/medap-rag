@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     # Потолок вопросов, извлекаемых с одного изображения (страховка расхода).
     VISION_MAX_QUESTIONS: int = 60
     MULTI_QUESTION_CHUNKS_PER_QUESTION: int = 3
+    # Конспект для сайта (батч 30): пунктов темы на одну генерацию (подробный/краткий), фрагментов
+    # на пункт, потолок фрагментов на порцию, параллельных генераций и лимит вывода одной порции.
+    CONSPECT_POINTS_PER_BATCH_DETAILED: int = 5
+    CONSPECT_POINTS_PER_BATCH_BRIEF: int = 8
+    CONSPECT_FRAGMENTS_PER_POINT: int = 6
+    CONSPECT_MAX_FRAGMENTS: int = 36
+    CONSPECT_CONCURRENCY: int = 2
+    CONSPECT_MAX_OUTPUT_TOKENS: int = 8192
     # Модель OpenAI: Vision (фото тестов), оценка ответов студента. По ТЗ — GPT-5.4 Mini
     # (дешёвая и хорошо читает изображения). Если OpenAI ответит «модели нет», сервис
     # сам попробует запасные из OPENAI_MODEL_FALLBACKS и запомнит рабочую.

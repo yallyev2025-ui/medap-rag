@@ -94,7 +94,7 @@ class ContentDraftResult:
     request_id: str | None = None
 
 
-def _numbered_fragments(chunks: list[ChunkResult]) -> str:
+def numbered_fragments(chunks: list[ChunkResult]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
         head = f"{chunk.author}, {chunk.title}" if chunk.author else chunk.title
@@ -102,6 +102,9 @@ def _numbered_fragments(chunks: list[ChunkResult]) -> str:
             head += f", стр. {chunk.page_from}" if chunk.page_from == chunk.page_to else f", стр. {chunk.page_from}-{chunk.page_to}"
         blocks.append(f"[F{index}] ({head})\n{chunk.content}")
     return "\n---\n".join(blocks)
+
+
+_numbered_fragments = numbered_fragments  # прежнее имя — на случай внешних ссылок
 
 
 def _resolve_sources(raw: Any, citations: list[Citation]) -> list[Citation]:
@@ -227,7 +230,7 @@ async def generate_content(
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
-            "content": _USER_TEMPLATE.format(topic=topic, count_line=count_line, fragments=_numbered_fragments(relevant)),
+            "content": _USER_TEMPLATE.format(topic=topic, count_line=count_line, fragments=numbered_fragments(relevant)),
         },
     ]
     try:

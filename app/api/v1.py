@@ -22,6 +22,7 @@ from app.evidence.viewer import fetch_evidence
 from app.observability.context import request_context
 from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
+from app.workflows.conspect import MAX_POINTS, generate_conspect
 from app.workflows.content_studio import CONTENT_CASE, CONTENT_RECALL, CONTENT_TEST, generate_content
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_oral, evaluate_recall
 from app.workflows.quick_outline import QuickOutlineResult, generate_quick_outline
@@ -576,6 +577,89 @@ async def content_test_questions(payload: ContentRequest, request: Request) -> C
 async def content_clinical_case(payload: ContentRequest, request: Request) -> ContentDraftResponse:
     """Учебный клинический кейс с вопросами и разбором — черновик для сайта владельца."""
     return await _generate_content(CONTENT_CASE, payload)
+
+
+# --- Конспект по пунктам темы для сайта владельца (батч 30) ---------------------
+# Поиск по каждому пункту, генерация порциями, промпты КРАТКИЙ/ПОДРОБНЫЙ + предмет.
+# Результат — черновик: сайт показывает его редактору и публикует только после проверки.
+
+
+class ConspectPointIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    # Суть пункта в 1–2 фразах (необязательно): уточняет поиск и подсказывает модели границы пункта.
+    intent: str | None = Field(None, max_length=500)
+
+
+class ConspectRequest(BaseModel):
+    topic: str = Field(..., min_length=1, max_length=300)
+    points: list[ConspectPointIn] = Field(..., min_length=1, max_length=MAX_POINTS)
+    mode: Literal["brief", "detailed"] = "detailed"
+    # context.subjectId — код предмета для поиска и подбора надстройки (пусто — определится сам);
+    # context.sourceMode — 'учебник' (по умолчанию) или 'клинрек'.
+    context: StudentAIContext
+
+
+class ConspectSection(BaseModel):
+    number: int
+    title: str
+    citationIds: list[str]
+
+
+class ConspectMissing(BaseModel):
+    number: int
+    title: str
+    note: str
+
+
+class ConspectWarning(BaseModel):
+    number: int | None = None
+    kind: str
+    message: str
+
+
+class ConspectResponse(BaseModel):
+    topic: str
+    mode: str
+    # Markdown-диалект конспекта: «## N. Пункт», «**Термин** — …», «> Внимание: …»,
+    # «> В клинике: …», таблицы, итоговый «## Нет в источниках». Без эмодзи и скобок с источниками.
+    markdown: str
+    citations: list[Citation]
+    sections: list[ConspectSection]
+    missing: list[ConspectMissing]
+    warnings: list[ConspectWarning]
+    subject: str | None = None
+    batches: int = 0
+    truncated: bool = False
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/conspect/generate", response_model=ConspectResponse)
+async def conspect_generate(payload: ConspectRequest, request: Request) -> ConspectResponse:
+    """Конспект темы по пунктам плана: подробный или краткий, по учебникам MedAP."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="CONSPECT_WRITE"):
+        result = await generate_conspect(
+            payload.topic,
+            [(p.title, p.intent) for p in payload.points],
+            mode=payload.mode,
+            source_type=payload.context.sourceMode or SOURCE_TEXTBOOK,
+            subject=payload.context.subjectId,
+        )
+    return ConspectResponse(
+        topic=result.topic,
+        mode=result.mode,
+        markdown=result.markdown,
+        citations=[Citation(**c) for c in result.citations],
+        sections=[ConspectSection(**s) for s in result.sections],
+        missing=[ConspectMissing(**m) for m in result.missing],
+        warnings=[ConspectWarning(**w) for w in result.warnings],
+        subject=result.subject,
+        batches=result.batches,
+        truncated=result.truncated,
+        error=result.error,
+        requestId=result.request_id,
+    )
 
 
 # --- Документы пользователя (§18 ТЗ, этап 4A.5) --------------------------------

@@ -26,6 +26,11 @@ _CODE = re.compile(r"`([^`\n]*)`")
 _LINK = re.compile(r"\[([^\[\]\n]+)\]\((https?://[^\s()]+)\)")
 
 
+def strip_decor(text: str) -> str:
+    """Убирает эмодзи и значки-украшения, не трогая Markdown (конспект для сайта, батч 30)."""
+    return _DECOR.sub("", text)
+
+
 def _inline(text: str) -> str:
     text = _LINK.sub(r"\1 (\2)", text)
     text = _BOLD.sub(r"\1", text)
