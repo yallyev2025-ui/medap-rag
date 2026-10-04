@@ -81,7 +81,10 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.CONTENT_RECALL: DEEPSEEK,
     Task.CONTENT_TEST: DEEPSEEK,
     Task.CONTENT_CASE: DEEPSEEK,
-    Task.CONSPECT_WRITE: DEEPSEEK,
+    # OpenAI, а не DeepSeek (04.10.2026): на DeepSeek конспект выходил сплошным текстом
+    # без структуры, с пустыми ответами и обрывами. Вернуть можно без выкатки кода:
+    # TASK_MODEL_MAP_OVERRIDES={"CONSPECT_WRITE": "deepseek"} или админка.
+    Task.CONSPECT_WRITE: OPENAI,
     Task.VISION_EXTRACT: OPENAI,
     Task.RECALL_EVALUATE: OPENAI,
     Task.FREE_RECALL_EVALUATE: OPENAI,

@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.evidence.viewer import fetch_evidence
+from app.llm import provider as llm
+from app.llm.task_map import Task
 from app.observability.context import request_context
 from app.security.auth import document_upload_rate_limiter, rate_limiter, require_service_token
 from app.workflows.ask import ask_grounded
@@ -659,6 +661,74 @@ async def conspect_generate(payload: ConspectRequest, request: Request) -> Consp
         truncated=result.truncated,
         error=result.error,
         requestId=result.request_id,
+    )
+
+
+# --- Написание части конспекта по промпту сайта --------------------------------
+# Второй способ конспекта, рядом с /conspect/generate: сайт сам ищет фрагменты,
+# собирает промпт, проверяет структуру и разбирает ответ в блоки; сюда приходит
+# только «напиши по этому». Бот выбирает модель по TaskModelMap (CONSPECT_WRITE —
+# та же задача, что у /conspect/generate: одна настройка на оба пути) и считает
+# расход. Никакой своей логики поверх: правила конспекта живут на сайте, рядом
+# с проверкой ответа. Нужен, потому что сайт стоит в России, откуда OpenAI не
+# отвечает, а бот — в Нидерландах (04.10.2026, владелец: «подключить просто из
+# medap-rag»).
+
+# Потолок длины ответа: страховка расхода от неверного запроса, а не ограничение
+# для нормальной части конспекта (она укладывается в 16 тыс.).
+CONSPECT_WRITE_MAX_TOKENS = 32_000
+
+
+class ConspectWriteRequest(BaseModel):
+    system: str = Field(..., min_length=1)
+    prompt: str = Field(..., min_length=1)
+    maxTokens: int | None = Field(None, ge=256, le=CONSPECT_WRITE_MAX_TOKENS)
+    context: StudentAIContext
+
+
+class ConspectWriteResponse(BaseModel):
+    text: str
+    provider: str | None = None
+    model: str | None = None
+    # Ответ упёрся в лимит длины и оборвался — сайт просит писать короче
+    truncated: bool = False
+    inputTokens: int = 0
+    cachedInputTokens: int = 0
+    outputTokens: int = 0
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/content/conspect", response_model=ConspectWriteResponse)
+async def content_conspect(payload: ConspectWriteRequest, request: Request) -> ConspectWriteResponse:
+    """Написать часть конспекта по промпту сайта. Текст возвращается как есть — разбирает сайт."""
+    rate_limiter.check(payload.context.userId)
+    messages = [
+        {"role": "system", "content": payload.system},
+        {"role": "user", "content": payload.prompt},
+    ]
+
+    with request_context(user_id=payload.context.userId, channel="api", workflow="CONSPECT_WRITE"):
+        try:
+            result = await llm.complete(
+                Task.CONSPECT_WRITE,
+                messages,
+                temperature=0.3,
+                max_output_tokens=payload.maxTokens,
+            )
+        except llm.LLMError as exc:
+            logger.exception("Конспект (промпт сайта): сбой провайдера")
+            # Настоящая причина (`reason`) — сайту, чтобы владелец видел её на экране
+            return ConspectWriteResponse(text="", error=exc.reason or str(exc))
+
+    return ConspectWriteResponse(
+        text=result.text,
+        provider=result.provider,
+        model=result.model,
+        truncated=result.truncated,
+        inputTokens=result.input_tokens,
+        cachedInputTokens=result.cached_input_tokens,
+        outputTokens=result.output_tokens,
     )
 
 
