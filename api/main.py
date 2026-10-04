@@ -88,7 +88,11 @@ class SearchResultItem(BaseModel):
     title: str
     page_from: int | None
     page_to: int | None
-    distance: float
+    # None у находок только по ключевым словам (BM25): у них нет векторной
+    # дистанции — retriever.RetrievedChunk.distance тоже float | None. С
+    # обязательным float весь /search падал 500 на любом предмете, где
+    # попадалась такая находка (патофизиология, 04.10.2026)
+    distance: float | None
     rerank_score: float | None
 
 
