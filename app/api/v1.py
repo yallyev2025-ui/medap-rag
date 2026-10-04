@@ -718,7 +718,7 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
             result = await llm.complete(
                 Task.CONSPECT_WRITE,
                 messages,
-                temperature=0.3,
+                temperature=0.1,  # переписывание чужого текста: чем ниже, тем меньше отсебятины
                 max_output_tokens=payload.maxTokens,
             )
         except llm.LLMError as exc:
