@@ -684,6 +684,8 @@ class ConspectWriteRequest(BaseModel):
     system: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
     maxTokens: int | None = Field(None, ge=256, le=CONSPECT_WRITE_MAX_TOKENS)
+    # Просить у модели строго валидный JSON (режим провайдера) — сайт ждёт блоки
+    jsonMode: bool = False
     context: StudentAIContext
 
 
@@ -720,6 +722,7 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
                 messages,
                 temperature=0.1,  # переписывание чужого текста: чем ниже, тем меньше отсебятины
                 max_output_tokens=payload.maxTokens,
+                json_mode=payload.jsonMode,
             )
         except llm.LLMError as exc:
             logger.exception("Конспект (промпт сайта): сбой провайдера")

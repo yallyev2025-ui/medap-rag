@@ -129,7 +129,7 @@ def _incompatible_param(exc: Exception, request: dict[str, Any], dropped: set[st
     if not isinstance(exc, openai.BadRequestError):
         return None
     lowered = _error_message(exc).lower()
-    for param in ("temperature", "reasoning_effort", "max_completion_tokens", "max_tokens"):
+    for param in ("temperature", "reasoning_effort", "max_completion_tokens", "max_tokens", "response_format"):
         if param in lowered and param in request and param not in dropped:
             return param
     return None
@@ -204,12 +204,16 @@ async def complete(
     temperature: float = 0.2,
     max_output_tokens: int | None = None,
     json_schema: dict | None = None,
+    json_mode: bool = False,
     image_units: int = 0,
 ) -> LLMResult:
     """Выполняет атомарную AI-задачу на закреплённом за ней провайдере.
 
     `json_schema` включает structured output: ответ парсится и проверяется на
     обязательные поля верхнего уровня; при провале делается один повтор.
+    `json_mode` — только режим провайдера «ответ обязан быть валидным JSON»: без
+    разбора и без платного повтора (разбирает вызывающий). Нужен длинным ответам,
+    где один сырой перенос строки в тексте ломает весь JSON.
     """
     try:
         provider_key, fallback_from = await resolve_provider(task, needs_vision=image_units > 0)
@@ -221,7 +225,7 @@ async def complete(
 
     request = _build_request(
         provider_key, prof.model_id, messages, temperature,
-        _max_tokens_for(task, max_output_tokens), json_schema is not None,
+        _max_tokens_for(task, max_output_tokens), json_schema is not None or json_mode,
     )
 
     attempts = 2 if json_schema is not None else 1
