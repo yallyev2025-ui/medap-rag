@@ -18,6 +18,7 @@ from app.evidence.citations import extract_cited_chunks
 from app.evidence.pack import build_citations
 from app.llm.task_map import Task
 from app.workflows.dialog import compact_sources, strip_source_brackets
+from app.workflows.question_kind import is_open_exam_list
 from app.workflows.scope import Scope
 from config import settings
 from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_USER_DOCUMENT
@@ -32,6 +33,7 @@ from rag.retriever import (
     ChunkResult,
     count_document_chunks,
     fetch_document_chunks,
+    retrieve,
     retrieve_per_question,
 )
 
@@ -126,6 +128,12 @@ async def answer_questions(
 ) -> MultiAnswer:
     """Отвечает на все вопросы порциями; возвращает единый текст с источниками."""
     items = [i for i in items if i.strip()]
+
+    # Список экзаменационных вопросов (без вариантов ответа) по учебникам: каждый — полным
+    # структурированным ответом, а не строкой на 1–2 предложения
+    if scope.uses_textbooks and not scope.uses_documents and is_open_exam_list(items):
+        return await _answer_open_questions(items, scope, task=task, history=history, budget_ok=budget_ok)
+
     batch_size = max(1, settings.MULTI_QUESTION_BATCH)
     batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
@@ -199,3 +207,48 @@ async def answer_questions(
     if stopped:
         body += "\n\n" + STOPPED_BY_BUDGET_TEXT
     return MultiAnswer(text=body, citations=all_citations, batches=len(batches), stopped_by_budget=stopped)
+
+
+
+async def _answer_open_questions(
+    items: list[str],
+    scope: Scope,
+    *,
+    task: Task,
+    history: list[dict] | None,
+    budget_ok: Callable[[], Awaitable[bool]] | None,
+) -> MultiAnswer:
+    """Экзаменационные вопросы списком: на каждый — обычный полный ответ (тот же поиск, что у
+    одиночного вопроса, тот же промпт с форматированием), под жирным заголовком с номером.
+    Деньги: одна генерация на вопрос, поэтому список ограничен MAX_OPEN_QUESTIONS."""
+    parts: list[str] = []
+    all_citations: list[dict[str, Any]] = []
+    stopped = False
+
+    for number, item in enumerate(items, start=1):
+        if number > 1 and budget_ok is not None and not await budget_ok():
+            stopped = True
+            break
+
+        chunks = await retrieve(" ".join(item.split())[:400], source_type=scope.source_type, subject=scope.subject)
+        relevant = relevant_chunks(chunks)
+        title = f"**{number}. {item.strip()}**"
+
+        if not relevant:
+            parts.append(f"{title}\n\n{NOT_FOUND_LINE}")
+            continue
+
+        generated = await generate_answer(
+            item, relevant, scope.source_type or "учебник", history, task=task, dialog=False
+        )
+        cited = extract_cited_chunks(generated.text, relevant)
+        all_citations.extend(c.to_dict() for c in build_citations(cited))
+        parts.append(f"{title}\n\n{strip_source_brackets(generated.text)}")
+
+    body = "\n\n".join(parts)
+    sources = compact_sources(all_citations)
+    if sources:
+        body += "\n\n" + sources
+    if stopped:
+        body += "\n\n" + STOPPED_BY_BUDGET_TEXT
+    return MultiAnswer(text=body, citations=all_citations, batches=len(parts), stopped_by_budget=stopped)
