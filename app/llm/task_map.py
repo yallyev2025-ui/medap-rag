@@ -67,11 +67,15 @@ class Task(str, Enum):
 
 
 DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
-    Task.GROUNDED_QA: DEEPSEEK,
-    Task.EXPLAIN: DEEPSEEK,
+    # Ответы студентам — OpenAI, а не DeepSeek (07.10.2026): DeepSeek игнорировал правила
+    # оформления и отдавал сплошной текст (длинные абзацы с перечнями через «;»), даже когда
+    # промпт требовал списки и заголовки. Вернуть можно без выкатки кода:
+    # TASK_MODEL_MAP_OVERRIDES={"GROUNDED_QA": "deepseek"} или админка.
+    Task.GROUNDED_QA: OPENAI,
+    Task.EXPLAIN: OPENAI,
     Task.CLASS_QUICK: DEEPSEEK,
     Task.TEST_SOLVE_TEXT: DEEPSEEK,
-    Task.DOCUMENT_QA: DEEPSEEK,
+    Task.DOCUMENT_QA: OPENAI,
     Task.TARGETED_REPAIR: DEEPSEEK,
     Task.WEB_RESEARCH: DEEPSEEK,
     Task.WEB_SEARCH: DEEPSEEK,
