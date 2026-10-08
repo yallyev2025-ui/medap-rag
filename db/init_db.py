@@ -80,6 +80,7 @@ async def init_db() -> None:
         # Батч 27: режим ответа (учебники / мои документы / вместе) и включённые документы.
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS answer_scope VARCHAR(12);"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_document_ids TEXT;"))
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS answer_tier VARCHAR(8);"))
 
         # Батч 9: синхронизация клинреков с Рубрикатором Минздрава ("{код}_{версия}").
         await conn.execute(text("ALTER TABLE books ADD COLUMN IF NOT EXISTS external_ref VARCHAR(32);"))

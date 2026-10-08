@@ -18,6 +18,8 @@ from app.workflows.user_documents import delete_user_document, list_user_documen
 from bot import panel
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access
 from constants import (
+    TIER_DEEP,
+    TIER_LABELS,
     SCOPE_BOTH,
     SCOPE_DOCUMENTS,
     SCOPE_TEXTBOOK,
@@ -26,7 +28,10 @@ from constants import (
     subject_label,
 )
 from db.crud import (
+    can_use_deep,
     get_or_create_user,
+    set_answer_tier,
+    user_tier,
     get_textbook_subjects,
     remove_active_document,
     set_answer_scope,
@@ -238,6 +243,36 @@ async def on_pick_scope(message: Message, state: FSMContext) -> None:
         return
     user = await _load_user(message.from_user)
     await show_main(message, user, "✅ Режим изменён.")
+
+
+# --- Режим ответа (батч 31) ----------------------------------------------------------
+
+DEEP_PREMIUM_TEXT = "Глубокий режим доступен в Premium. Сейчас включён ⚡ Быстрый."
+
+
+@router.message(F.text == panel.BTN_TIER)
+async def on_tier(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    user = await _load_user(message.from_user)
+    await message.answer(
+        f"Режим ответа: {TIER_LABELS[user_tier(user)]}",
+        reply_markup=panel.tier_keyboard(user_tier(user)),
+    )
+
+
+@router.message(F.text.func(lambda t: isinstance(t, str) and panel.tier_from_button(t) is not None))
+async def on_pick_tier(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    tier = panel.tier_from_button(message.text)
+    user = await _load_user(message.from_user)
+    if tier == TIER_DEEP and not can_use_deep(user):
+        await message.answer(DEEP_PREMIUM_TEXT, reply_markup=panel.tier_keyboard(user_tier(user)))
+        return
+    async with async_session() as session:
+        await set_answer_tier(session, user.id, tier)
+        await session.commit()
+    user = await _load_user(message.from_user)
+    await show_main(message, user, f"✅ Режим ответа: {TIER_LABELS[tier]}.")
 
 
 # --- Мои документы -------------------------------------------------------------------

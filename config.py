@@ -24,6 +24,23 @@ class Settings(BaseSettings):
     MULTI_QUESTION_CHUNKS_PER_QUESTION: int = 3
     # Конспект для сайта (батч 30): пунктов темы на одну генерацию (подробный/краткий), фрагментов
     # на пункт, потолок фрагментов на порцию, параллельных генераций и лимит вывода одной порции.
+    # Режимы ответа студента (батч 31): сколько фрагментов берётся и какой провайдер отвечает.
+    # Быстрый — 12–15 фрагментов (по умолчанию 14) и дешёвая модель; глубокий — как раньше,
+    # 30 фрагментов и сильная модель. Провайдеры — ключи реестра: 'deepseek' | 'openai'.
+    TIER_FAST_TOP_K: int = 14
+    TIER_DEEP_TOP_K: int = 30
+    TIER_FAST_PROVIDER: str = "deepseek"
+    TIER_DEEP_PROVIDER: str = "openai"
+    # Не больше стольких фрагментов с одного «места» учебника (книга + блок из трёх страниц):
+    # так 14 фрагментов покрывают разные стороны вопроса, а не одну страницу.
+    DIVERSITY_PER_SPOT: int = 2
+    # Кеш ответов по смыслу (батч 31). Вопрос должен быть близок (косинус не ниже
+    # CACHE_MIN_SIMILARITY) И поиск обязан найти те же фрагменты (доля общих не ниже
+    # CACHE_MIN_OVERLAP) — иначе ответ пишется заново. CACHE_ENABLED=false выключает кеш.
+    CACHE_ENABLED: bool = True
+    CACHE_MIN_SIMILARITY: float = 0.92
+    CACHE_MIN_OVERLAP: float = 0.7
+    CACHE_MAX_AGE_DAYS: int = 30
     CONSPECT_POINTS_PER_BATCH_DETAILED: int = 5
     CONSPECT_POINTS_PER_BATCH_BRIEF: int = 8
     CONSPECT_FRAGMENTS_PER_POINT: int = 6

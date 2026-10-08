@@ -287,6 +287,39 @@ def _is_relevant(chunk: ChunkResult) -> bool:
     return chunk.bm25_score is not None
 
 
+def _spot(chunk: ChunkResult) -> tuple:
+    """«Место» учебника: книга и блок из трёх соседних страниц."""
+    page = chunk.page_from if chunk.page_from is not None else -1
+    return (chunk.book_id if chunk.book_id is not None else chunk.title, page // 3)
+
+
+def diversify(chunks: list[ChunkResult], limit: int, per_spot: int | None = None) -> list[ChunkResult]:
+    """Отбирает `limit` фрагментов из отсортированного по релевантности списка так, чтобы не
+    брать больше `per_spot` с одного места учебника (батч 31). Когда разнообразных не хватает,
+    остаток добирается из пропущенных по порядку релевантности — меньше доступного не вернём."""
+    cap = max(1, per_spot if per_spot is not None else settings.DIVERSITY_PER_SPOT)
+    taken: list[ChunkResult] = []
+    skipped: list[ChunkResult] = []
+    counts: dict[tuple, int] = {}
+    for chunk in chunks:
+        if len(taken) >= limit:
+            break
+        spot = _spot(chunk)
+        if counts.get(spot, 0) < cap:
+            counts[spot] = counts.get(spot, 0) + 1
+            taken.append(chunk)
+        else:
+            skipped.append(chunk)
+    for chunk in skipped:
+        if len(taken) >= limit:
+            break
+        taken.append(chunk)
+    # Порядок выдачи — снова по релевантности, как у обычного поиска.
+    order = {id(c): i for i, c in enumerate(chunks)}
+    taken.sort(key=lambda c: order[id(c)])
+    return taken
+
+
 async def retrieve(
     question: str,
     candidates: int = settings.RETRIEVAL_CANDIDATES,
@@ -296,8 +329,12 @@ async def retrieve(
     focus_document: bool = False,
     book_id: int | Sequence[int] | None = None,
     user_id: str | None = None,
+    spread: bool = False,
 ) -> list[ChunkResult]:
     """Возвращает top_k фрагментов, переупорядоченных реранкером (rerank_score проставлен).
+
+    spread=True (батч 31) — разнообразный отбор `diversify`: не больше DIVERSITY_PER_SPOT
+    фрагментов с одного места учебника, чтобы короткая выдача покрывала разные стороны вопроса.
 
     source_type/subject задают логическую базу: например (учебник, physiology) или
     (клинрек, взрослые). Оба None — поиск по всему (обратная совместимость).
@@ -324,7 +361,7 @@ async def retrieve(
         return []
 
     chunk_list = await _rerank(question, chunk_list)
-    top = chunk_list[:top_k]
+    top = diversify(chunk_list, top_k) if spread else chunk_list[:top_k]
 
     if not focus_document:
         return top

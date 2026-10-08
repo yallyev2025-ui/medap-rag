@@ -210,6 +210,45 @@ async def resolve_provider(task: Task, needs_vision: bool = False) -> tuple[str,
     return _with_fallback(task, admin.get(task) or task_model_map()[task], needs_vision)
 
 
+# --- Режимы ответа студента (батч 31) -------------------------------------------
+# «Быстрый» — всё текстовое на дешёвом провайдере, «Глубокий» — сам ответ на сильном
+# (служебные дешёвые задачи — переписывание запроса, роутинг — остаются на дешёвом).
+# Фото, голос и оценка ответа студента режимом не затрагиваются.
+_ANSWER_TASKS = (
+    Task.GROUNDED_QA, Task.EXPLAIN, Task.CLASS_QUICK, Task.TEST_SOLVE_TEXT,
+    Task.DOCUMENT_QA, Task.TARGETED_REPAIR,
+)
+_HELPER_TASKS = (
+    Task.CLAIM_EVIDENCE_CHECK, Task.INTENT_ROUTER, Task.QUERY_REWRITE,
+    Task.WEB_SEARCH, Task.PUBMED_SEARCH, Task.PUBMED_QUERY, Task.WEB_RESEARCH,
+)
+
+
+def tier_mapping(tier: str | None) -> dict[Task, str]:
+    """Принудительный маппинг задач для режима. Пустой — режим не задан (прежнее поведение)."""
+    if tier == "fast":
+        return {task: settings.TIER_FAST_PROVIDER for task in (*_ANSWER_TASKS, *_HELPER_TASKS)}
+    if tier == "deep":
+        return {
+            **{task: settings.TIER_DEEP_PROVIDER for task in (*_ANSWER_TASKS, Task.CLAIM_EVIDENCE_CHECK)},
+            **{task: settings.TIER_FAST_PROVIDER for task in (Task.INTENT_ROUTER, Task.QUERY_REWRITE)},
+        }
+    return {}
+
+
+@contextmanager
+def tier_providers(tier: str | None) -> Iterator[None]:
+    """На время запроса направляет текстовые задачи на провайдера режима."""
+    mapping = tier_mapping(tier)
+    if not mapping:
+        yield
+        return
+    registry = model_registry()
+    mapping = {task: key for task, key in mapping.items() if key in registry}
+    with force_providers(mapping):
+        yield
+
+
 def provider_for(task: Task) -> tuple[str, str | None]:
     """Синхронный вариант без оверрайдов из админки (см. resolve_provider)."""
     return _with_fallback(task, task_model_map()[task])

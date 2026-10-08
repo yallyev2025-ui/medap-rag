@@ -36,6 +36,7 @@ from db.crud import (
     log_query,
     reset_chat,
     user_scope,
+    user_tier,
 )
 from db.models import User
 from db.session import async_session
@@ -249,6 +250,7 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
                     symptom_mode=db_user.clinrek_symptom_mode,
                     scope=scope,
                     budget_ok=budget_ok,
+                    tier=user_tier(db_user),
                 )
         finally:
             rotator.cancel()

@@ -19,10 +19,11 @@ from typing import Any
 from app.evidence.citations import extract_cited_chunks
 from app.evidence.pack import build_citations
 from app.observability.context import current, current_request_id, set_workflow
-from app.llm.task_map import Task
+from app.llm.task_map import Task, tier_providers
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
+from app.workflows import answer_cache
 from app.workflows.dialog import (
     AFFIRM,
     ASK_TOPIC_TEXT,
@@ -36,7 +37,16 @@ from app.workflows.multi import answer_questions, split_questions
 from app.workflows.plain_text import to_plain_text
 from app.workflows.scope import Scope, retrieve_documents
 from config import settings
-from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK, SOURCE_USER_DOCUMENT
+from constants import (
+    ANSWER_TIERS,
+    SCOPE_BOTH,
+    SCOPE_DOCUMENTS,
+    SOURCE_CLINREK,
+    SOURCE_TEXTBOOK,
+    SOURCE_USER_DOCUMENT,
+    TIER_DEEP,
+    TIER_FAST,
+)
 from db.models import AnswerLog
 from db.session import async_session
 from rag.generator import (
@@ -47,6 +57,7 @@ from rag.generator import (
     PARTIAL_EVIDENCE_MARKER,
     build_history_messages,
     detect_intent,
+    detect_mode,
     detect_subject,
     document_threshold,
     generate_answer,
@@ -210,9 +221,30 @@ async def _log_and_return(result: AskResult, question: str) -> AskResult:
     return result
 
 
-async def ask(
+def tier_top_k(tier: str | None) -> int:
+    """Сколько фрагментов брать в контекст: быстрый — 12–15, глубокий — 30, без режима — как раньше."""
+    if tier == TIER_FAST:
+        return settings.TIER_FAST_TOP_K
+    if tier == TIER_DEEP:
+        return settings.TIER_DEEP_TOP_K
+    return settings.RERANK_TOP_K
+
+
+async def ask(question: str, *, tier: str | None = None, **kwargs) -> AskResult:
+    """Отвечает на вопрос по материалам MedAP (параметры — см. `_ask`).
+
+    `tier` (батч 31) — режим ответа: 'fast' | 'deep' | None. Он задаёт провайдера текстовых
+    задач на время запроса (`tier_providers`) и число фрагментов (`tier_top_k`). Без режима
+    (скрипты, прежние клиенты) всё работает, как раньше."""
+    tier = tier if tier in ANSWER_TIERS else None
+    with tier_providers(tier):
+        return await _ask(question, tier=tier, **kwargs)
+
+
+async def _ask(
     question: str,
     *,
+    tier: str | None = None,
     source_type: str = SOURCE_TEXTBOOK,
     subject: str | None = None,
     turns: list[tuple[str, str]] | None = None,
@@ -382,7 +414,8 @@ async def ask(
                     search_query,
                     source_type=source_type,
                     subject=subject,
-                    top_k=top_k or settings.RERANK_TOP_K // 2,
+                    top_k=top_k or tier_top_k(tier) // 2,
+                    spread=tier is not None,
                 )
             relevant = relevant_chunks(chunks, document_threshold()) + relevant_chunks(book_chunks)
             all_chunks = chunks + book_chunks
@@ -394,7 +427,8 @@ async def ask(
                 # Обычный клинический вопрос отвечается строго из одной рекомендации,
                 # разбор симптомов — наоборот, по многим.
                 focus_document=(source_type == SOURCE_CLINREK and not reasoning),
-                top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else settings.RERANK_TOP_K),
+                top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else tier_top_k(tier)),
+                spread=tier is not None and source_type != SOURCE_CLINREK,
             )
             relevant = relevant_chunks(chunks)
             all_chunks = chunks
@@ -423,6 +457,53 @@ async def ask(
             ),
             question,
         )
+
+    # Кеш по смыслу (батч 31): тот же вопрос, спрошенный другими словами, и тот же найденный
+    # материал — готовый проверенный ответ без вызова модели. Только учебники и обычная подача.
+    cache_key = None
+    if (
+        settings.CACHE_ENABLED
+        and source_type == SOURCE_TEXTBOOK
+        and not doc_scope
+        and not turns
+        and continuation_search is None
+        and not reasoning
+        and intent == "SINGLE"
+        and answer_cache.cacheable_question(question)
+    ):
+        cache_key = dict(
+            question=question.strip(),
+            tier=tier or "default",
+            source_type=source_type,
+            subject=subject,
+            mode=detect_mode(question),
+            kind="dialog" if dialog else "api",
+            fmt=fmt,
+            chunk_ids=[c.id for c in relevant],
+        )
+        with stages.measure("answer_cache") as details:
+            hit = await answer_cache.lookup(**cache_key)
+            details["hit"] = hit is not None
+        if hit is not None:
+            return await _log_and_return(
+                AskResult(
+                    answer=hit.answer,
+                    workflow=decision.workflow.value,
+                    intent=intent,
+                    has_relevant=True,
+                    citations=hit.citations,
+                    diagnostics=stages.as_dict(),
+                    request_id=current_request_id(),
+                    subject_used=detect_subject(chunks),
+                    versions=_versions(),
+                    chunks=chunks,
+                    verified=hit.verified,
+                    source_mode=_derive_source_mode(source_type),
+                    evidence_status="SUFFICIENT",
+                    verification_status="VERIFIED" if hit.verified else "UNVERIFIED",
+                ),
+                question,
+            )
 
     history = build_history_messages(turns)
     with stages.measure("generation") as details:
@@ -506,6 +587,16 @@ async def ask(
         final_text = strip_source_brackets(final_text)
         if fmt == OUTPUT_PLAIN:
             final_text = to_plain_text(final_text)
+
+    # Запоминаем только проверенный, не оборванный ответ с реальными цитатами.
+    if (
+        cache_key is not None
+        and generated.verified is not False
+        and not generated.truncated
+        and final_text != NO_CONTEXT_ANSWER
+        and citations
+    ):
+        await answer_cache.store(**cache_key, answer=final_text, citations=citations, verified=generated.verified)
     return await _log_and_return(
         AskResult(
             answer=final_text,
@@ -538,6 +629,7 @@ async def ask_grounded(
     turns: list[tuple[str, str]] | None = None,
     requested_workflow: str | None = None,
     output_format: str | None = None,
+    tier: str | None = None,
 ) -> AskResult:
     """Вариант для API: при отсутствии подтверждения — честный отказ (§15).
 
@@ -552,6 +644,7 @@ async def ask_grounded(
         turns=turns,
         requested_workflow=requested_workflow,
         output_format=output_format,
+        tier=tier,
     )
     if result.answer is None:
         result.answer = NO_CONTEXT_ANSWER

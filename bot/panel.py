@@ -17,6 +17,7 @@ from aiogram.types import (
 
 from constants import (
     CLINREK_CATEGORIES,
+    TIER_LABELS,
     SCOPE_BOTH,
     SCOPE_DOCUMENTS,
     SCOPE_TEXTBOOK,
@@ -29,6 +30,7 @@ BTN_TEXTBOOKS = "📚 Учебники"
 BTN_DOCS = "📄 Мои документы"
 BTN_CLINREK = "📋 Клин. рекомендации"
 BTN_SCOPE = "🔀 Откуда отвечать"
+BTN_TIER = "⚙️ Режим ответа"
 BTN_BACK = "⬅️ Назад"
 BTN_UPLOAD = "➕ Загрузить документ"
 BTN_SYMPTOM = "🩺 Разбор по симптомам"
@@ -45,9 +47,11 @@ SCOPE_LABELS = {
 _ACTIVE_MARK = "✅ "
 
 _STATIC_TEXTS = frozenset(
-    {BTN_TEXTBOOKS, BTN_DOCS, BTN_CLINREK, BTN_SCOPE, BTN_BACK, BTN_UPLOAD, BTN_SYMPTOM}
+    {BTN_TEXTBOOKS, BTN_DOCS, BTN_CLINREK, BTN_SCOPE, BTN_TIER, BTN_BACK, BTN_UPLOAD, BTN_SYMPTOM}
     | set(SCOPE_LABELS.values())
     | {_ACTIVE_MARK + label for label in SCOPE_LABELS.values()}
+    | set(TIER_LABELS.values())
+    | {_ACTIVE_MARK + label for label in TIER_LABELS.values()}
 )
 
 PLACEHOLDER_MAX = 64
@@ -65,6 +69,14 @@ def scope_from_button(text: str) -> str | None:
     for scope, label in SCOPE_LABELS.items():
         if label == plain:
             return scope
+    return None
+
+
+def tier_from_button(text: str) -> str | None:
+    plain = text[len(_ACTIVE_MARK):] if text.startswith(_ACTIVE_MARK) else text
+    for tier, label in TIER_LABELS.items():
+        if label == plain:
+            return tier
     return None
 
 
@@ -119,6 +131,8 @@ def main_keyboard(show_clinrek: bool, placeholder: str = "Задай вопро�
     if show_clinrek:
         second.insert(0, KeyboardButton(text=BTN_CLINREK))
     rows.append(second)
+    # Режим ответа — отдельной строкой: выбор «Быстрый/Глубокий» (глубокий — Premium).
+    rows.append([KeyboardButton(text=BTN_TIER)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -155,6 +169,17 @@ def scope_keyboard(current: str) -> ReplyKeyboardMarkup:
     rows.append([KeyboardButton(text=BTN_BACK)])
     return ReplyKeyboardMarkup(
         keyboard=rows, resize_keyboard=True, is_persistent=True, input_field_placeholder="Откуда отвечать?"
+    )
+
+
+def tier_keyboard(current: str) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=(_ACTIVE_MARK if tier == current else "") + label)]
+        for tier, label in TIER_LABELS.items()
+    ]
+    rows.append([KeyboardButton(text=BTN_BACK)])
+    return ReplyKeyboardMarkup(
+        keyboard=rows, resize_keyboard=True, is_persistent=True, input_field_placeholder="Режим ответа"
     )
 
 

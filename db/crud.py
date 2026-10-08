@@ -9,7 +9,15 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from constants import ANSWER_SCOPES, SCOPE_DOCUMENTS, SCOPE_TEXTBOOK, SOURCE_TEXTBOOK
+from constants import (
+    ANSWER_SCOPES,
+    ANSWER_TIERS,
+    SCOPE_DOCUMENTS,
+    SCOPE_TEXTBOOK,
+    SOURCE_TEXTBOOK,
+    TIER_DEEP,
+    TIER_FAST,
+)
 from db.models import (
     AIUsageEvent,
     AnswerLog,
@@ -171,6 +179,26 @@ def user_scope(user: User) -> str:
     if getattr(user, "current_document_id", None):
         return SCOPE_DOCUMENTS
     return SCOPE_TEXTBOOK
+
+
+def can_use_deep(user: User) -> bool:
+    """Глубокий режим доступен только Premium и админам."""
+    return bool(getattr(user, "is_premium", False)) or getattr(user, "id", None) in settings.ADMIN_IDS
+
+
+def user_tier(user: User) -> str:
+    """Действующий режим ответа: выбранный глубокий — только если на него есть право,
+    иначе быстрый (срок Premium закончился — режим тихо возвращается к быстрому)."""
+    if getattr(user, "answer_tier", None) == TIER_DEEP and can_use_deep(user):
+        return TIER_DEEP
+    return TIER_FAST
+
+
+async def set_answer_tier(session: AsyncSession, user_id: int, tier: str) -> None:
+    user = await session.get(User, user_id)
+    if user is None or tier not in ANSWER_TIERS:
+        return
+    user.answer_tier = tier
 
 
 def user_active_document_ids(user: User) -> list[int]:

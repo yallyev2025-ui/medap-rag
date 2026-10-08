@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 
+from app.llm.task_map import tier_providers
 from app.observability.context import request_context
 from app.workflows.vision import solve_from_image
 from bot.formatting import split_for_telegram, to_telegram_html
@@ -16,7 +17,7 @@ from bot.handlers.menu import send_main_menu
 from bot.handlers.panel import explain_problem, prepare_scope
 from config import settings
 from constants import SCOPE_DOCUMENTS, SOURCE_TEXTBOOK
-from db.crud import get_or_create_user, is_limit_exceeded, log_query, user_scope
+from db.crud import get_or_create_user, is_limit_exceeded, log_query, user_scope, user_tier
 from db.models import User
 from db.session import async_session
 
@@ -73,7 +74,9 @@ async def handle_photo(message: Message, db_user: User, usage_ctx: dict) -> None
         buffer = await message.bot.download(photo)
         image_bytes = buffer.read()
 
-        with request_context(
+        # Распознавание картинки всегда на OpenAI (режимом не меняется); решение вопросов
+        # по тексту идёт моделью выбранного режима.
+        with tier_providers(user_tier(db_user)), request_context(
             user_id=f"telegram:{db_user.id}", channel="telegram", workflow="VISION_EXTRACT"
         ):
             result = await solve_from_image(

@@ -21,6 +21,14 @@ SCOPE_DOCUMENTS = "documents"
 SCOPE_BOTH = "both"
 ANSWER_SCOPES = (SCOPE_TEXTBOOK, SCOPE_DOCUMENTS, SCOPE_BOTH)
 
+# Режим ответа (батч 31). Названия для студента нейтральные — без имён моделей.
+# «Быстрый» — меньше фрагментов и дешёвая модель; «Глубокий» — больше фрагментов и сильная
+# модель, лимит тратится заметно быстрее. Глубокий — только Premium/админ.
+TIER_FAST = "fast"
+TIER_DEEP = "deep"
+ANSWER_TIERS = (TIER_FAST, TIER_DEEP)
+TIER_LABELS = {TIER_FAST: "⚡ Быстрый", TIER_DEEP: "🧠 Глубокий"}
+
 # Категории клинреков: (код для callback_data, человекочитаемая метка, значение subject в БД).
 # Значение None у "Все категории" означает поиск без фильтра по subject.
 CLINREK_CATEGORIES: list[tuple[str, str, str | None]] = [

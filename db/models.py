@@ -166,6 +166,9 @@ class User(Base):
     answer_scope: Mapped[str | None] = mapped_column(String(12), nullable=True)
     # Включённые документы — JSON-список Book.id (кнопки-галочки в панели «Мои документы»).
     active_document_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Режим ответа (батч 31): 'fast' | 'deep'. None = быстрый. Глубокий применяется только
+    # Premium/админу (db.crud.user_tier).
+    answer_tier: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
 
 class Usage(Base):
@@ -274,6 +277,34 @@ class Query(Base):
     subject: Mapped[str | None] = mapped_column(String, nullable=True)
     response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnswerCache(Base):
+    """Кеш ответов по смыслу (батч 31): готовый ответ на вопрос по учебнику отдаётся повторно,
+    когда новый вопрос близок по смыслу И поиск нашёл те же фрагменты. Живёт только для
+    вопросов по учебникам без диалога; пользовательских данных не хранит (нет user_id)."""
+
+    __tablename__ = "answer_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Ключ раздела кеша: ответы разных режимов, предметов, видов подачи не смешиваются.
+    tier: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)  # question | explanation | conspect
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # dialog (Telegram) | api (сайт)
+    fmt: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    q_embedding: Mapped[list[float]] = mapped_column(Vector(settings.EMBEDDING_DIM), nullable=False)
+    chunk_ids: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: id фрагментов ответа
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # JSON
+    verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AnswerLog(Base):

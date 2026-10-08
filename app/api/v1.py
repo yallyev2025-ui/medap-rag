@@ -75,6 +75,10 @@ class ChatRequest(BaseModel):
     # без разметки и эмодзи) — по умолчанию, для сайта, который рисует ответ как обычный текст;
     # "markdown" — конспект с заголовками «## », списками и таблицами для клиента, умеющего их рисовать.
     outputFormat: Literal["plain", "markdown"] = "plain"
+    # Режим ответа (батч 31): "fast" — 12–15 фрагментов и дешёвая модель, "deep" — 30 фрагментов
+    # и сильная модель (дороже по лимиту). Пусто — прежнее поведение (маппинг по умолчанию).
+    # Право на глубокий проверяет вызывающий сервис (сайт): у бота нет данных о его подписках.
+    tier: Literal["fast", "deep"] | None = None
 
 
 class Citation(BaseModel):
@@ -331,6 +335,7 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
             turns=payload.history,
             requested_workflow=forced_workflow or payload.workflow,
             output_format=payload.outputFormat,
+            tier=payload.tier,
         )
 
     logger.info(
