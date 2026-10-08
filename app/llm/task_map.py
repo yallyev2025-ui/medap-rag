@@ -243,17 +243,29 @@ def tier_mapping(tier: str | None) -> dict[Task, str]:
     return {}
 
 
+_current_tier: ContextVar[str | None] = ContextVar("current_tier", default=None)
+
+
+def current_tier() -> str | None:
+    """Режим ответа текущего запроса ('fast' | 'deep' | None) — по нему промпт подстраивается под модель."""
+    return _current_tier.get()
+
+
 @contextmanager
 def tier_providers(tier: str | None) -> Iterator[None]:
     """На время запроса направляет текстовые задачи на провайдера режима."""
-    mapping = tier_mapping(tier)
-    if not mapping:
-        yield
-        return
-    registry = model_registry()
-    mapping = {task: key for task, key in mapping.items() if key in registry}
-    with force_providers(mapping):
-        yield
+    token = _current_tier.set(tier if tier in ("fast", "deep") else None)
+    try:
+        mapping = tier_mapping(tier)
+        if not mapping:
+            yield
+            return
+        registry = model_registry()
+        mapping = {task: key for task, key in mapping.items() if key in registry}
+        with force_providers(mapping):
+            yield
+    finally:
+        _current_tier.reset(token)
 
 
 def provider_for(task: Task) -> tuple[str, str | None]:

@@ -24,6 +24,7 @@ from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
 from app.workflows import answer_cache
+from app.workflows.structure import is_wall, preserved
 from app.workflows.dialog import (
     AFFIRM,
     ASK_TOPIC_TEXT,
@@ -67,6 +68,7 @@ from rag.generator import (
     generate_fallback,
     generate_multi,
     relevant_chunks,
+    restructure_answer,
     rewrite_query,
 )
 from rag.retriever import ChunkResult, retrieve
@@ -540,6 +542,22 @@ async def _ask(
             )
         details["chars"] = len(generated.text if generated else "")
         details["verified"] = generated.verified if generated else None
+
+    # «Быстрый» режим: если дешёвая модель выдала ответ полотном — один проход «перестрой форму».
+    # Принимается только результат с теми же числами и ссылками; иначе остаётся исходный ответ.
+    if (
+        tier == TIER_FAST
+        and generated is not None
+        and source_type != SOURCE_CLINREK
+        and generated.verified is not False
+        and generated.text != NO_CONTEXT_ANSWER
+        and is_wall(generated.text)
+    ):
+        with stages.measure("restructure") as details:
+            rewritten = await restructure_answer(generated.text)
+            details["applied"] = bool(rewritten) and preserved(generated.text, rewritten)
+            if details["applied"]:
+                generated.text = rewritten
 
     # generate_differential/generate_multi могут вернуть None, если внутри
     # обнаружили отсутствие материала (защитная проверка — на практике сюда не

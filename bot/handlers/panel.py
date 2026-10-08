@@ -72,7 +72,7 @@ async def show_main(message: Message, user: User, title: str = "Главное �
     status, placeholder = _status(user)
     await message.answer(
         f"{title}\n{status}",
-        reply_markup=panel.main_keyboard(has_clinrek_access(user), placeholder),
+        reply_markup=panel.main_keyboard(has_clinrek_access(user), placeholder, show_tier=can_use_deep(user)),
     )
 
 
@@ -156,7 +156,7 @@ async def on_clinrek(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
         return
     await message.answer("Выбери категорию клинических рекомендаций:", reply_markup=panel.categories_keyboard())
 
@@ -166,7 +166,7 @@ async def on_pick_category(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
         return
     picked = panel.category_from_button(message.text)
     if picked is None:
@@ -186,7 +186,7 @@ async def on_symptom(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
         return
     async with async_session() as session:
         await set_user_selection(session, user.id, SOURCE_CLINREK, None, symptom_mode=True)

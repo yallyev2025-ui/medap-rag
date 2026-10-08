@@ -12,7 +12,7 @@ from typing import Awaitable, Callable, Literal
 
 from app.llm import provider as llm
 from app.llm.prompts import get_prompt
-from app.llm.task_map import Task
+from app.llm.task_map import Task, current_tier
 from app.verification.numeric import extract_numeric_claims
 from app.verification.verify import verify_answer
 from config import settings
@@ -491,6 +491,28 @@ def apply_output_format(system_prompt: str, mode_instruction: str, output_format
 
 GENERATION_TEMPERATURE = 0.2
 
+# «Быстрый» режим (дешёвая модель): конкретный образец оформления держит форму лучше абстрактных
+# правил. Образец без медицинского содержания — только скелет; факты берутся из контекста.
+FAST_FORMAT_SKELETON = """ОБРАЗЕЦ ОФОРМЛЕНИЯ (только форма; содержание берётся из контекста, пустые блоки не пиши):
+
+**Определение.** Одно короткое предложение.
+
+**Виды** (или «Классификация», «Признаки», «Показания»)
+- **Название** — короткое пояснение.
+- **Название** — короткое пояснение.
+
+**Механизм** (если он есть в контексте)
+1. Первый шаг.
+2. Второй шаг.
+
+**Важно:** опасное и то, что нельзя перепутать, — отдельной строкой.
+
+Жёстко: ни одного абзаца длиннее трёх предложений; три и более однотипных элемента — только списком по одному на строку; не начинай со слов «согласно контексту» и не упоминай «контекст», «фрагменты», «в тексте указано»."""
+
+RESTRUCTURE_SYSTEM = """Ты редактор формы учебного ответа. Перестрой данный текст так, чтобы он читался как конспект: короткие блоки с жирными заголовками, перечисления из трёх и более элементов — списком по «-» (у элемента жирное ключевое слово и короткое пояснение), механизм или последовательность — нумерованными шагами, опасное — отдельной строкой «**Важно:**», ни одного абзаца длиннее трёх предложений.
+
+СТРОГО: не добавляй ни одного нового факта, не убирай факты; все числа, названия и скобки со ссылками вида [Автор, Название, стр. N] оставь дословно и на своих местах (ссылка — после того утверждения, к которому она относилась). Разметка только **жирный**, *курсив* и «-» в начале строки. Верни только переписанный текст."""
+
 USER_PROMPT_TEMPLATE = """{mode_instruction}
 
 Контекст из {source_label}:
@@ -754,6 +776,8 @@ async def generate_answer(
             mode_instruction = MODE_INSTRUCTIONS[mode]
 
     system_prompt, mode_instruction = apply_output_format(system_prompt, mode_instruction, output_format)
+    if current_tier() == "fast" and not is_clinrek:
+        system_prompt = f"{system_prompt}\n\n{FAST_FORMAT_SKELETON}"
 
     if mode_override is not None:
         user_prompt = USER_PROMPT_TEMPLATE_PARTIAL.format(
@@ -788,6 +812,15 @@ async def generate_answer(
     result = await _verify_and_repair(context, answer, correct, always_check=is_clinrek)
     result.truncated = state["truncated"] and result.verified is not False
     return result
+
+
+async def restructure_answer(text: str) -> str | None:
+    """Один дешёвый проход «перестрой форму, факты не трогай». None — не вышло (ответ останется прежним)."""
+    try:
+        return (await _complete(RESTRUCTURE_SYSTEM, text, 0.1, Task.TARGETED_REPAIR)).strip()
+    except Exception:
+        logger.exception("Не удалось перестроить форму ответа")
+        return None
 
 
 async def generate_combined(
