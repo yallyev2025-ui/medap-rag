@@ -97,6 +97,27 @@ async def month_spend_rub(session: AsyncSession, user_id: int) -> float:
     return float(result.scalar_one())
 
 
+async def month_spend_rub_by_id(session: AsyncSession, usage_user_id: str) -> float:
+    """То же, что `month_spend_rub`, но по готовому идентификатору учёта: «telegram:<id>» для
+    Telegram (и для сайта, если аккаунт привязан к Telegram — так расход у них общий) либо
+    id аккаунта сайта. Нужен сайту: он сам решает, чей это расход, и спрашивает остаток лимита."""
+    stmt = select(func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0)).where(
+        AIUsageEvent.user_id == usage_user_id,
+        AIUsageEvent.created_at >= _month_start(),
+    )
+    return float((await session.execute(stmt)).scalar_one())
+
+
+async def request_cost(session: AsyncSession, request_id: str) -> tuple[float, float]:
+    """Сколько стоил один запрос целиком (все вызовы модели): (доллары, рубли)."""
+    stmt = select(
+        func.coalesce(func.sum(AIUsageEvent.provider_cost_usd), 0.0),
+        func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0),
+    ).where(AIUsageEvent.request_id == request_id)
+    row = (await session.execute(stmt)).one()
+    return float(row[0]), float(row[1])
+
+
 def monthly_budget_rub_for(user: User) -> float | None:
     """Месячный ₽-бюджет пользователя. None = безлимит (только админы)."""
     if user.id in settings.ADMIN_IDS:

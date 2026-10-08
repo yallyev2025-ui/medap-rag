@@ -43,6 +43,8 @@ from app.workflows.web_research import WebResearchResult, research_url
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
 from constants import SOURCE_TEXTBOOK
+from db.crud import month_spend_rub_by_id, request_cost
+from db.session import async_session
 from rag.generator import generate_repair
 from rag.retriever import retrieve
 
@@ -138,6 +140,10 @@ class ChatResponse(BaseModel):
     sourceMode: str = "MEDAP"
     evidenceStatus: str = "INSUFFICIENT"
     verificationStatus: str = "UNVERIFIED"
+    # Сколько стоил весь запрос (все вызовы модели, батч 31+): сайт ведёт по нему месячный лимит
+    # студента. 0 — ответ из кеша или стоимость не записана.
+    costUsd: float = 0.0
+    costRub: float = 0.0
     unsupportedAreas: list[str] = Field(default_factory=list)
     clinicalWarnings: list[str] = Field(default_factory=list)
 
@@ -341,6 +347,14 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
             tier=payload.tier,
         )
 
+    cost_usd_total = cost_rub_total = 0.0
+    if result.request_id:
+        try:
+            async with async_session() as session:
+                cost_usd_total, cost_rub_total = await request_cost(session, result.request_id)
+        except Exception:  # учёт не должен ронять ответ студенту
+            logger.warning("Не удалось посчитать стоимость запроса %s", result.request_id, exc_info=True)
+
     logger.info(
         "v1 ответ: workflow=%s grounded=%s citations=%d request_id=%s",
         result.workflow,
@@ -363,6 +377,8 @@ async def _answer(payload: ChatRequest, request: Request, forced_workflow: str |
         verificationStatus=result.verification_status,
         unsupportedAreas=result.unsupported_areas,
         clinicalWarnings=result.clinical_warnings,
+        costUsd=round(cost_usd_total, 6),
+        costRub=round(cost_rub_total, 4),
     )
 
 
@@ -1072,3 +1088,24 @@ async def pubmed_search_endpoint(payload: PubMedSearchRequest, request: Request)
     with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_SEARCH"):
         result = await search_pubmed(payload.query, payload.question)
     return _pubmed_response(result)
+
+
+# --- Месячный расход (для лимита на сайте) ---------------------------------------------
+class UsageMonthResponse(BaseModel):
+    userId: str
+    month: str
+    spendRub: float
+
+
+@router.get("/usage/month", response_model=UsageMonthResponse)
+async def usage_month(userId: str) -> UsageMonthResponse:
+    """Сколько AI-расхода (₽) записано на идентификатор учёта за текущий календарный месяц (UTC).
+
+    `userId` — ровно тот идентификатор, с которым сайт вызывает бота: «telegram:<id>» у аккаунта,
+    привязанного к Telegram (расход Telegram и сайта тогда общий), иначе id аккаунта сайта.
+    Лимит и его размер решает вызывающий: у бота нет данных о подписках сайта."""
+    from datetime import datetime, timezone
+
+    async with async_session() as session:
+        spend = await month_spend_rub_by_id(session, userId.strip()[:64])
+    return UsageMonthResponse(userId=userId.strip()[:64], month=datetime.now(timezone.utc).strftime("%Y-%m"), spendRub=round(spend, 4))
