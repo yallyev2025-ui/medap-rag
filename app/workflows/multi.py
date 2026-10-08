@@ -126,6 +126,7 @@ async def answer_questions(
 ) -> MultiAnswer:
     """Отвечает на все вопросы порциями; возвращает единый текст с источниками."""
     items = [i for i in items if i.strip()]
+
     batch_size = max(1, settings.MULTI_QUESTION_BATCH)
     batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
@@ -199,3 +200,5 @@ async def answer_questions(
     if stopped:
         body += "\n\n" + STOPPED_BY_BUDGET_TEXT
     return MultiAnswer(text=body, citations=all_citations, batches=len(batches), stopped_by_budget=stopped)
+
+

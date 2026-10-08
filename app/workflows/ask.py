@@ -34,6 +34,7 @@ from app.workflows.dialog import (
     strip_source_brackets,
 )
 from app.workflows.multi import answer_questions, split_questions
+from app.workflows.question_kind import is_open_exam_list
 from app.workflows.plain_text import to_plain_text
 from app.workflows.scope import Scope, retrieve_documents
 from config import settings
@@ -373,7 +374,10 @@ async def _ask(
     # Только в диалоговых каналах (Telegram/админка): сайт (/v1) по-прежнему получает один полный ответ.
     if dialog and source_type != SOURCE_CLINREK and continuation_search is None and not reasoning:
         items = split_questions(question)
-        if len(items) >= 2:
+        # Список экзаменационных вопросов (без вариантов ответа) — не тест: идёт обычным путём,
+        # одним поиском и одним полным структурированным ответом на все вопросы сразу. Компактный
+        # режим «строка на вопрос» остаётся для тестов с вариантами
+        if len(items) >= 2 and not is_open_exam_list(items):
             with stages.measure("multi_questions") as details:
                 multi = await answer_questions(
                     items,
