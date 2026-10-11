@@ -472,8 +472,9 @@ async def _ask(
             )
             relevant = relevant_chunks(chunks)
             all_chunks = chunks
-            # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать
-            if not relevant and source_type == SOURCE_TEXTBOOK and continuation_search is None:
+            # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать.
+            # Только диалоговые каналы (Telegram): сайт (/v1) отвечает как раньше, без повторного захода
+            if dialog and not relevant and source_type == SOURCE_TEXTBOOK and continuation_search is None:
                 more = await _expanded_retrieval(search_query, source_type=source_type, subject=subject)
                 details["expanded"] = len(more)
                 more_relevant = relevant_chunks(more)
@@ -604,7 +605,8 @@ async def _ask(
     # Модель отказалась сама («нет в материалах»), хотя фрагменты были: составной вопрос мог принести не те
     # куски. Один повторный заход по частям вопроса и новая генерация — только если нашлось что-то новое
     if (
-        generated is not None
+        dialog
+        and generated is not None
         and not expanded
         and _is_refusal(generated.text)
         and source_type == SOURCE_TEXTBOOK
