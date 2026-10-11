@@ -10,6 +10,7 @@ Telegram-бот. По §30 ТЗ Telegram — клиент AI-сервиса, а 
 предложения и проверяемым `citationId` приходит на этапе 3.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -24,6 +25,7 @@ from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
 from app.workflows import answer_cache
+from app.workflows.expand import merge_by_id, query_variants
 from app.workflows.structure import is_wall, preserved
 from app.workflows.dialog import (
     AFFIRM,
@@ -224,6 +226,32 @@ async def _log_and_return(result: AskResult, question: str) -> AskResult:
     return result
 
 
+def _is_refusal(text: str) -> bool:
+    """Ответ — «этой информации нет в материалах» (модель отказалась сама)."""
+    return text.strip().startswith(NO_CONTEXT_ANSWER.splitlines()[0].strip())
+
+
+async def _expanded_retrieval(
+    search_query: str, *, source_type: str, subject: str | None
+) -> list[ChunkResult]:
+    """Второй заход поиска перед отказом: тема и каждая часть составного вопроса отдельными запросами
+    (см. app/workflows/expand.py). Простой вопрос без частей — пусто: повторять нечего."""
+    variants = query_variants(search_query)
+    if len(variants) < 2:
+        return []
+
+    limit = tier_top_k(TIER_DEEP)
+    batches = await asyncio.gather(
+        *(retrieve(v, source_type=source_type, subject=subject, top_k=limit, spread=False) for v in variants)
+    )
+    return merge_by_id(
+        batches,
+        key=lambda c: c.id,
+        score=lambda c: c.rerank_score if c.rerank_score is not None else 0.0,
+        limit=limit,
+    )
+
+
 def tier_top_k(tier: str | None) -> int:
     """Сколько фрагментов брать в контекст: быстрый — 12–15, глубокий — 30, без режима — как раньше."""
     if tier == TIER_FAST:
@@ -408,6 +436,7 @@ async def _ask(
 
     book_chunks: list[ChunkResult] = []
     doc_chunks: list[ChunkResult] = []
+    expanded = False
     with stages.measure("retrieval") as details:
         if doc_scope:
             chunks, doc_details = await retrieve_documents(
@@ -438,6 +467,14 @@ async def _ask(
             )
             relevant = relevant_chunks(chunks)
             all_chunks = chunks
+            # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать
+            if not relevant and source_type == SOURCE_TEXTBOOK and continuation_search is None:
+                more = await _expanded_retrieval(search_query, source_type=source_type, subject=subject)
+                details["expanded"] = len(more)
+                more_relevant = relevant_chunks(more)
+                if more_relevant:
+                    chunks, relevant, all_chunks = more, more_relevant, more
+                    expanded = True
         details["candidates"] = len(all_chunks)
         details["relevant"] = len(relevant)
         # Реранкер мог быть недоступен — это важно видеть в диагностике (§36).
@@ -558,6 +595,31 @@ async def _ask(
             details["applied"] = bool(rewritten) and preserved(generated.text, rewritten)
             if details["applied"]:
                 generated.text = rewritten
+
+    # Модель отказалась сама («нет в материалах»), хотя фрагменты были: составной вопрос мог принести не те
+    # куски. Один повторный заход по частям вопроса и новая генерация — только если нашлось что-то новое
+    if (
+        generated is not None
+        and not expanded
+        and _is_refusal(generated.text)
+        and source_type == SOURCE_TEXTBOOK
+        and not doc_scope
+        and not reasoning
+        and continuation_search is None
+    ):
+        with stages.measure("retry_expanded") as details:
+            more = await _expanded_retrieval(search_query, source_type=source_type, subject=subject)
+            more_relevant = relevant_chunks(more)
+            fresh = {c.id for c in more_relevant} - {c.id for c in relevant}
+            details["found"] = len(more)
+            details["new"] = len(fresh)
+            if fresh:
+                retry = await generate_answer(
+                    gen_question, more, source_type, history, task=decision.task, dialog=dialog, output_format=fmt
+                )
+                details["answered"] = not _is_refusal(retry.text)
+                if not _is_refusal(retry.text):
+                    generated, chunks, relevant = retry, more, more_relevant
 
     # generate_differential/generate_multi могут вернуть None, если внутри
     # обнаружили отсутствие материала (защитная проверка — на практике сюда не

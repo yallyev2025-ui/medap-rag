@@ -1,0 +1,80 @@
+"""Второй заход поиска перед отказом «этой информации нет в материалах».
+
+Студент (11.10.2026): вопрос «Таламус: ядра все, группы ядер с полным перечислением функций каждого
+ядра, группы ядер специфические, неспецифические, ассоциативные» боту то отвечали, то нет —
+«информации нет», хотя она в учебнике есть; у одногруппницы то же. Причина в самом вопросе: он
+составной, и одна длинная фраза даёт одному вектору и реранкеру размазанный запрос — нужные куски
+(список ядер на одной странице, функции на другой) то проходят порог релевантности, то нет.
+
+Поэтому ПЕРЕД честным отказом бот ищет ещё раз: тема вопроса плюс каждая его часть отдельным коротким
+запросом, результаты объединяются. Платить за это приходится только в тех случаях, где иначе был бы
+отказ. Модуль без зависимостей: разбор вопроса на запросы проверяется отдельно.
+"""
+
+import re
+from collections.abc import Callable, Iterable
+from typing import TypeVar
+
+T = TypeVar("T")
+
+# Куски, которые только сообщают, как ответить, а не о чём: на поиск они не работают
+_FLUFF = re.compile(
+    r"\b(с\s+полным\s+перечислением|полное\s+перечисление|полный\s+перечень|перечисли\w*|"
+    r"расскажи\w*|объясни\w*|подробно|максимально|все\b|всё\b|каждого|каждой|каждый|каждое)\b",
+    re.IGNORECASE,
+)
+_SPLIT = re.compile(r"[,;:()\n]|\s[—–-]\s")
+
+MAX_VARIANTS = 7
+MIN_WORDS = 1
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[\w-]+", text, flags=re.UNICODE)
+
+
+def query_variants(question: str) -> list[str]:
+    """Запросы для второго захода: исходный вопрос, тема отдельно и тема + каждая часть.
+
+    Тема — первая смысловая часть до двоеточия/запятой («Таламус»). Одной фразы без частей (простой
+    вопрос) хватает, дополнительных запросов не будет. Всегда не больше `MAX_VARIANTS`, без повторов.
+    """
+    base = " ".join(question.split())
+    parts = [p.strip(" .?!") for p in _SPLIT.split(base)]
+    parts = [re.sub(r"\s+", " ", _FLUFF.sub(" ", p)).strip() for p in parts]
+    parts = [p for p in parts if len(_words(p)) >= MIN_WORDS]
+
+    variants: list[str] = [base]
+    if len(parts) >= 2:
+        topic, rest = parts[0], parts[1:]
+        variants.append(topic)
+        for part in rest:
+            # Часть без темы сама по себе («неспецифические») ничего не найдёт — темой подпираем
+            variants.append(part if topic.lower() in part.lower() else f"{topic} {part}")
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for variant in variants:
+        key = variant.lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(variant)
+
+    return unique[:MAX_VARIANTS]
+
+
+def merge_by_id(
+    batches: Iterable[Iterable[T]],
+    key: Callable[[T], object],
+    score: Callable[[T], float],
+    limit: int,
+) -> list[T]:
+    """Объединить результаты нескольких поисков: дубликаты по `key` — остаётся лучший по `score`."""
+    best: dict[object, T] = {}
+    for batch in batches:
+        for item in batch:
+            current = best.get(key(item))
+            if current is None or score(item) > score(current):
+                best[key(item)] = item
+
+    return sorted(best.values(), key=score, reverse=True)[:limit]
