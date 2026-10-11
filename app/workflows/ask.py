@@ -257,6 +257,15 @@ async def _expanded_retrieval(
     )
 
 
+def tier_candidates(tier: str | None) -> int:
+    """Сколько кандидатов проверяет реранкер: быстрый — меньше (ответ быстрее), глубокий — все."""
+    if tier == TIER_FAST:
+        return max(tier_top_k(tier), settings.TIER_FAST_CANDIDATES)
+    if tier == TIER_DEEP:
+        return max(tier_top_k(tier), settings.TIER_DEEP_CANDIDATES)
+    return settings.RETRIEVAL_CANDIDATES
+
+
 def tier_top_k(tier: str | None) -> int:
     """Сколько фрагментов брать в контекст: быстрый — 12–15, глубокий — 30, без режима — как раньше."""
     if tier == TIER_FAST:
@@ -469,7 +478,12 @@ async def _ask(
                 focus_document=(source_type == SOURCE_CLINREK and not reasoning),
                 top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else tier_top_k(tier)),
                 spread=tier is not None and source_type != SOURCE_CLINREK,
+                # Клинреки и разбор симптомов — как раньше (там глубина важнее скорости)
+                candidates=settings.RETRIEVAL_CANDIDATES
+                if (source_type == SOURCE_CLINREK or reasoning)
+                else tier_candidates(tier),
             )
+            details["pool"] = settings.RETRIEVAL_CANDIDATES if (source_type == SOURCE_CLINREK or reasoning) else tier_candidates(tier)
             relevant = relevant_chunks(chunks)
             all_chunks = chunks
             # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать.
