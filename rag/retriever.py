@@ -277,6 +277,45 @@ async def _rerank(question: str, chunks: list[ChunkResult]) -> list[ChunkResult]
     return chunks
 
 
+async def retrieve_multi(
+    question: str,
+    variants: Sequence[str],
+    *,
+    source_type: str | None = None,
+    subject: str | None = None,
+    top_k: int = settings.RERANK_TOP_K,
+    candidates: int = settings.RETRIEVAL_CANDIDATES,
+) -> list[ChunkResult]:
+    """Поиск по нескольким формулировкам с ОДНИМ реранком (второй заход перед отказом, 11.10.2026).
+
+    Кандидаты каждой формулировки (дёшево: вектор + BM25) собираются вместе, дубли убираются, берутся
+    по кругу из каждой формулировки, пока не наберётся `candidates`; реранкер идёт один раз — по
+    исходному вопросу. Реранк занимает все ядра и по минуте не терпит повторов: семь отдельных
+    `retrieve` подряд были бы семь реранков (~20 секунд каждый на боевом сервере).
+    """
+    per_variant = max(10, candidates // 2)
+    batches = await asyncio.gather(
+        *(_fetch_candidates(v, per_variant, source_type, subject) for v in variants)
+    )
+
+    pool: list[ChunkResult] = []
+    seen: set[int] = set()
+    depth = max((len(b) for b in batches), default=0)
+    for i in range(depth):
+        for batch in batches:
+            if i < len(batch) and batch[i].id not in seen:
+                seen.add(batch[i].id)
+                pool.append(batch[i])
+        if len(pool) >= candidates:
+            break
+    pool = pool[:candidates]
+    if not pool:
+        return []
+
+    pool = await _rerank(question, pool)
+    return pool[:top_k]
+
+
 def _is_relevant(chunk: ChunkResult) -> bool:
     if chunk.rerank_score is not None:
         return chunk.rerank_score >= settings.RERANK_SCORE_THRESHOLD

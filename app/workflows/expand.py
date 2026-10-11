@@ -8,15 +8,10 @@
 
 Поэтому ПЕРЕД честным отказом бот ищет ещё раз: тема вопроса плюс каждая его часть отдельным коротким
 запросом, результаты объединяются. Платить за это приходится только в тех случаях, где иначе был бы
-отказ. Модуль без зависимостей: разбор вопроса на запросы проверяется отдельно.
+отказ. Модуль без зависимостей: разбор вопроса на запросы проверяется отдельно; сам поиск — `rag.retriever.retrieve_multi`.
 """
 
 import re
-from collections.abc import Callable, Iterable
-from typing import TypeVar
-
-T = TypeVar("T")
-
 # Куски, которые только сообщают, как ответить, а не о чём: на поиск они не работают
 _FLUFF = re.compile(
     r"\b(с\s+полным\s+перечислением|полное\s+перечисление|полный\s+перечень|перечисли\w*|"
@@ -61,20 +56,3 @@ def query_variants(question: str) -> list[str]:
             unique.append(variant)
 
     return unique[:MAX_VARIANTS]
-
-
-def merge_by_id(
-    batches: Iterable[Iterable[T]],
-    key: Callable[[T], object],
-    score: Callable[[T], float],
-    limit: int,
-) -> list[T]:
-    """Объединить результаты нескольких поисков: дубликаты по `key` — остаётся лучший по `score`."""
-    best: dict[object, T] = {}
-    for batch in batches:
-        for item in batch:
-            current = best.get(key(item))
-            if current is None or score(item) > score(current):
-                best[key(item)] = item
-
-    return sorted(best.values(), key=score, reverse=True)[:limit]

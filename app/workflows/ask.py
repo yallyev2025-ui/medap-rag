@@ -25,7 +25,7 @@ from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
 from app.verification.conflicts import detect_conflicts
 from app.workflows import answer_cache
-from app.workflows.expand import merge_by_id, query_variants
+from app.workflows.expand import query_variants
 from app.workflows.structure import is_wall, preserved
 from app.workflows.dialog import (
     AFFIRM,
@@ -73,7 +73,7 @@ from rag.generator import (
     restructure_answer,
     rewrite_query,
 )
-from rag.retriever import ChunkResult, retrieve
+from rag.retriever import ChunkResult, retrieve, retrieve_multi
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +226,13 @@ async def _log_and_return(result: AskResult, question: str) -> AskResult:
     return result
 
 
+# Подсказка повторной генерации: по теме материал нашёлся, полный отказ допустим, только если во фрагментах нет ничего
+_RETRY_HINT = (
+    "(Во фрагментах есть материал по теме вопроса. Ответь на всё, что в них подтверждено, а непокрытую часть "
+    "закончи фразой частичного покрытия. Полностью отказывай, только если во фрагментах нет ничего по теме.)"
+)
+
+
 def _is_refusal(text: str) -> bool:
     """Ответ — «этой информации нет в материалах» (модель отказалась сама)."""
     return text.strip().startswith(NO_CONTEXT_ANSWER.splitlines()[0].strip())
@@ -234,21 +241,19 @@ def _is_refusal(text: str) -> bool:
 async def _expanded_retrieval(
     search_query: str, *, source_type: str, subject: str | None
 ) -> list[ChunkResult]:
-    """Второй заход поиска перед отказом: тема и каждая часть составного вопроса отдельными запросами
-    (см. app/workflows/expand.py). Простой вопрос без частей — пусто: повторять нечего."""
+    """Второй заход поиска перед отказом: тема и каждая часть составного вопроса отдельными запросами,
+    общий пул кандидатов и один реранк (см. app/workflows/expand.py). Простой вопрос без частей —
+    пусто: повторять нечего."""
     variants = query_variants(search_query)
     if len(variants) < 2:
         return []
 
-    limit = tier_top_k(TIER_DEEP)
-    batches = await asyncio.gather(
-        *(retrieve(v, source_type=source_type, subject=subject, top_k=limit, spread=False) for v in variants)
-    )
-    return merge_by_id(
-        batches,
-        key=lambda c: c.id,
-        score=lambda c: c.rerank_score if c.rerank_score is not None else 0.0,
-        limit=limit,
+    return await retrieve_multi(
+        search_query,
+        variants,
+        source_type=source_type,
+        subject=subject,
+        top_k=tier_top_k(TIER_DEEP),
     )
 
 
@@ -615,7 +620,13 @@ async def _ask(
             details["new"] = len(fresh)
             if fresh:
                 retry = await generate_answer(
-                    gen_question, more, source_type, history, task=decision.task, dialog=dialog, output_format=fmt
+                    f"{gen_question}\n\n{_RETRY_HINT}",
+                    more,
+                    source_type,
+                    history,
+                    task=decision.task,
+                    dialog=dialog,
+                    output_format=fmt,
                 )
                 details["answered"] = not _is_refusal(retry.text)
                 if not _is_refusal(retry.text):
