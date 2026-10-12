@@ -14,6 +14,7 @@ python -m scripts.compare_tiers --questions eval/questions_real.txt [--limit 5] 
 
 import argparse
 import asyncio
+import logging
 import statistics
 import time
 from pathlib import Path
@@ -28,6 +29,23 @@ from rag.reranker import warm_up
 
 TIERS = ("fast", "deep")
 OUT_FILE = "eval/tier_compare.md"
+
+
+class _Issues(logging.Handler):
+    """Собирает из журнала бота причины, по которым проверка ответа не прошла («Проблемы: …»), чтобы показать их
+    рядом с ответом: без этого видно только «с пометкой», а почему — нет."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if "Проблемы" in message or "не прошёл проверку" in message:
+            self.lines.append(message)
+
+
+ISSUES = _Issues()
 
 
 def read_questions(path: str, limit: int | None) -> list[str]:
@@ -58,6 +76,7 @@ def cited_pages(result) -> set[tuple[str, int | None]]:
 
 
 async def run_one(question: str, tier: str, channel: str) -> dict:
+    ISSUES.lines.clear()
     started = time.perf_counter()
     with request_context(user_id="tier-compare", channel=channel):
         result = await ask(question, tier=tier, source_type=SOURCE_TEXTBOOK)
@@ -79,6 +98,7 @@ async def run_one(question: str, tier: str, channel: str) -> dict:
         "cited": len(result.citations),
         "rub": float(usage.get("costRub", 0.0)),
         "outcome": outcome(result),
+        "issues": list(ISSUES.lines),
     }
 
 
@@ -94,6 +114,8 @@ async def main() -> None:
         raise SystemExit("В файле нет вопросов")
 
     settings.CACHE_ENABLED = False
+    logging.getLogger("rag.generator").setLevel(logging.INFO)
+    logging.getLogger("rag.generator").addHandler(ISSUES)
     print(f"Режимы: быстрый — {settings.TIER_FAST_PROVIDER}, {settings.TIER_FAST_TOP_K} фрагментов, "
           f"{settings.TIER_FAST_CANDIDATES} кандидатов; глубокий — {settings.TIER_DEEP_PROVIDER}, "
           f"{settings.TIER_DEEP_TOP_K} фрагментов, {settings.TIER_DEEP_CANDIDATES} кандидатов; "
@@ -124,6 +146,8 @@ async def main() -> None:
             row = pair[tier]
             report.append(f"### {tier} — {row['seconds']:.0f} с, {row['rub']:.2f} ₽, {row['outcome']}\n")
             report.append((row["result"].answer or "(нет ответа)") + "\n")
+            if row["issues"]:
+                report.append("\n> Что нашла проверка:\n> " + "\n> ".join(row["issues"]).replace("\n", "\n> ") + "\n")
 
     print()
     print("Итого (среднее по вопросам):")
