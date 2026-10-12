@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import func, select, tuple_
 
-from config import settings
+from config import rerank_threshold, settings
 from constants import ACTIVE_SOURCE_STATUSES
 from db.models import Book, BookChunk
 from db.session import async_session
@@ -318,7 +318,7 @@ async def retrieve_multi(
 
 def _is_relevant(chunk: ChunkResult) -> bool:
     if chunk.rerank_score is not None:
-        return chunk.rerank_score >= settings.RERANK_SCORE_THRESHOLD
+        return chunk.rerank_score >= rerank_threshold()
     if chunk.distance is not None:
         return chunk.distance <= settings.MAX_DISTANCE_THRESHOLD
     # Чанк найден только BM25 (нет векторной дистанции) и реранкер недоступен —

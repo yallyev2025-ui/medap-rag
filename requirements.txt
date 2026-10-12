@@ -1,6 +1,8 @@
 aiogram==3.28.2
 sentence-transformers==5.5.1
 torch==2.12.0
+# Реранкер в int8 (RERANKER_BACKEND=onnx, rag/reranker.py); сама конвертация — optimum, ставится только при сборке
+onnxruntime==1.30.0
 sqlalchemy[asyncio]==2.0.50
 asyncpg==0.31.0
 pgvector==0.4.2

@@ -73,6 +73,7 @@ from rag.generator import (
     restructure_answer,
     rewrite_query,
 )
+from rag.reranker import active_backend
 from rag.retriever import ChunkResult, retrieve, retrieve_multi
 
 logger = logging.getLogger(__name__)
@@ -484,6 +485,7 @@ async def _ask(
                 else tier_candidates(tier),
             )
             details["pool"] = settings.RETRIEVAL_CANDIDATES if (source_type == SOURCE_CLINREK or reasoning) else tier_candidates(tier)
+            details["reranker"] = active_backend()
             relevant = relevant_chunks(chunks)
             all_chunks = chunks
             # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать.

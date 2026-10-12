@@ -268,6 +268,16 @@ class Settings(BaseSettings):
     # Порог релевантности реранкера (0..1). Ниже — фрагмент считается нерелевантным.
     # TODO: откалибровать через scripts/eval_rag.py на реальных вопросах.
     RERANK_SCORE_THRESHOLD: float = 0.3
+    # Реранкер: "torch" — как было (sentence-transformers, 32-битные веса); "onnx" — та же модель,
+    # сжатая в int8 и запускаемая через onnxruntime (быстрее на процессоре, меньше памяти).
+    # Откат — вернуть "torch" и перезапустить: код и веса старого пути остаются в образе (12.10.2026).
+    # Если ONNX не загрузился (нет файлов, сломан), бот сам продолжает на "torch" и пишет это в лог
+    RERANKER_BACKEND: str = "torch"
+    # Папка с model_quantized.onnx и токенизатором (делает scripts/export_reranker_onnx.py при сборке)
+    RERANKER_ONNX_DIR: str = "/opt/models/reranker-onnx-int8"
+    RERANKER_ONNX_FILE: str = "model_quantized.onnx"
+    # У int8 шкала оценок слегка сдвигается, поэтому свой порог релевантности; пусто — общий
+    RERANK_SCORE_THRESHOLD_ONNX: float | None = None
     # Запасной косинусный порог, если реранкер недоступен.
     MAX_DISTANCE_THRESHOLD: float = 0.5
 
@@ -325,6 +335,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def rerank_threshold() -> float:
+    """Порог релевантности реранкера для выбранного способа (у int8 может быть свой)."""
+    if settings.RERANKER_BACKEND == "onnx" and settings.RERANK_SCORE_THRESHOLD_ONNX is not None:
+        return settings.RERANK_SCORE_THRESHOLD_ONNX
+    return settings.RERANK_SCORE_THRESHOLD
+
 
 # Батч 16: должно случиться ДО первого импорта torch где-либо в процессе —
 # config.py импортируется практически везде первым, поэтому это надёжная

@@ -15,7 +15,7 @@ from app.llm.prompts import get_prompt
 from app.llm.task_map import Task, current_tier
 from app.verification.numeric import extract_numeric_claims
 from app.verification.verify import verify_answer
-from config import settings
+from config import rerank_threshold, settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
 from rag.conspect_prompts import (
@@ -51,7 +51,7 @@ def _is_relevant(chunk: ChunkResult, threshold: float | None = None) -> bool:
     недоступен (rerank_score=None) — падаем на запасной косинусный порог.
     `threshold` — свой порог (для личных документов он мягче, чем у учебников)."""
     if chunk.rerank_score is not None:
-        return chunk.rerank_score >= (settings.RERANK_SCORE_THRESHOLD if threshold is None else threshold)
+        return chunk.rerank_score >= (rerank_threshold() if threshold is None else threshold)
     if chunk.distance is None:
         # Найден только лексическим поиском, реранкера нет — порога нет, берём как есть.
         return True
