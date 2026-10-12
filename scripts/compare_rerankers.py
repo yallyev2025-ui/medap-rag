@@ -59,6 +59,9 @@ async def main() -> None:
     overlaps: list[float] = []
     torch_s: list[float] = []
     onnx_s: list[float] = []
+    # Для подбора числа кандидатов: какая доля лучших кусков (по оценке) лежит в первых N кандидатах поиска
+    pool_sizes = (15, 20, 25, 30, 40)
+    pool_hits: dict[int, list[float]] = {n: [] for n in pool_sizes}
 
     # Первый вызов каждого способа загружает модель — в замер времени он не входит
     warm = ["прогрев"]
@@ -83,6 +86,10 @@ async def main() -> None:
 
         k = min(args.top_k, len(ids))
         common = len(set(top(ids, a, k)) & set(top(ids, b, k))) / k
+        best_ids = top(ids, a, k)
+        for n in pool_sizes:
+            if n <= len(ids):
+                pool_hits[n].append(len(set(best_ids) & set(ids[:n])) / k)
         all_torch.extend(a)
         all_onnx.extend(b)
         overlaps.append(common)
@@ -96,6 +103,12 @@ async def main() -> None:
         print(f"Совпадение топ-{args.top_k}: в среднем {statistics.mean(overlaps):.0%}, худший случай {min(overlaps):.0%}")
         print(f"Время: torch {statistics.mean(torch_s):.1f} с, onnx {statistics.mean(onnx_s):.1f} с "
               f"(ускорение ×{statistics.mean(torch_s) / max(statistics.mean(onnx_s), 1e-9):.1f})")
+
+        print("Сколько нужных кусков остаётся, если реранкеру отдать только первые N кандидатов поиска "
+              f"(доля от топ-{args.top_k} при {args.candidates} кандидатах):")
+        for n in pool_sizes:
+            if pool_hits[n]:
+                print(f"  {n:>3} кандидатов: в среднем {statistics.mean(pool_hits[n]):.0%}, худший вопрос {min(pool_hits[n]):.0%}")
 
         # Шкала оценок у int8 слегка сдвигается, а порог релевантности — по ней. Сравниваем оценки одних и тех же кусков
         # и долю прошедших порог у каждого способа
