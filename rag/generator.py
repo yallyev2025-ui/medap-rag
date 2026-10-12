@@ -657,6 +657,11 @@ SOFT_FAIL_NOTE = (
     "\n\n⚠️ Автоматическая проверка не смогла подтвердить по учебникам часть утверждений этого ответа — "
     "числа и формулировки сверь с источником."
 )
+# Клинические рекомендации и разбор по симптомам: предупреждение жёстче, ответ нельзя применять без сверки
+CLINICAL_SOFT_FAIL_NOTE = (
+    "\n\n⚠️ Автоматическая проверка не смогла подтвердить часть утверждений по тексту клинической рекомендации. "
+    "Не применяй на практике без сверки с самой рекомендацией."
+)
 
 
 async def _verify_and_repair(
@@ -665,7 +670,8 @@ async def _verify_and_repair(
     correct: Callable[[str], Awaitable[str]],
     *,
     always_check: bool = True,
-    soft_fail: bool = False,
+    soft_fail: bool = True,
+    note: str = SOFT_FAIL_NOTE,
 ) -> GeneratedAnswer:
     """Общий цикл Verification Layer для generate_answer/_reasoning_answer
     (app/verification/verify.py): PASS сразу; при проблеме — один корректирующий
@@ -701,7 +707,7 @@ async def _verify_and_repair(
         NO_CONTEXT_ANSWER.splitlines()[0].strip()
     ):
         logger.info("Исправленный ответ не прошёл проверку — выдаю с пометкой. Проблемы: %s", result2.issues)
-        return GeneratedAnswer(corrected.rstrip() + SOFT_FAIL_NOTE, verified=None, flagged=True)
+        return GeneratedAnswer(corrected.rstrip() + note, verified=None, flagged=True)
 
     logger.info("Исправленный ответ снова не прошёл проверку — честный отказ вместо недостоверного ответа")
     return GeneratedAnswer(NO_CONTEXT_ANSWER, verified=False)
@@ -825,7 +831,13 @@ async def generate_answer(
         )
         return corrected
 
-    result = await _verify_and_repair(context, answer, correct, always_check=is_clinrek, soft_fail=not is_clinrek)
+    result = await _verify_and_repair(
+        context,
+        answer,
+        correct,
+        always_check=is_clinrek,
+        note=CLINICAL_SOFT_FAIL_NOTE if is_clinrek else SOFT_FAIL_NOTE,
+    )
     result.truncated = state["truncated"] and result.verified is not False
     return result
 
@@ -950,7 +962,7 @@ async def _reasoning_answer(
             system_prompt, correction, GENERATION_TEMPERATURE, Task.GROUNDED_QA, history
         )
 
-    return await _verify_and_repair(context, answer, correct)
+    return await _verify_and_repair(context, answer, correct, note=CLINICAL_SOFT_FAIL_NOTE)
 
 
 async def generate_differential(

@@ -13,7 +13,7 @@ except ImportError:
 import rag.generator as generator
 from app.verification.numeric import find_unsupported_numbers
 from config import settings
-from rag.generator import NO_CONTEXT_ANSWER, SOFT_FAIL_NOTE, _verify_and_repair
+from rag.generator import CLINICAL_SOFT_FAIL_NOTE, NO_CONTEXT_ANSWER, SOFT_FAIL_NOTE, _verify_and_repair
 from app.verification.verify import VerificationResult, strip_illustrations
 
 
@@ -72,6 +72,22 @@ def test_failed_check_gives_answer_with_note() -> None:
     finally:
         generator.verify_answer = original
         settings.VERIFY_SOFT_FAIL = True
+
+
+def test_note_is_on_by_default_and_clinical_is_stricter() -> None:
+    original = generator.verify_answer
+    bad = VerificationResult(False, "x")
+    try:
+        # без явного soft_fail: пометка, а не отказ (владелец 12.10.2026: «нет в источниках» из-за проверки — ошибка)
+        generator.verify_answer = fake_verify([bad, bad])
+        result = run(_verify_and_repair("ctx", "ответ", correct))
+        assert result.text.endswith(SOFT_FAIL_NOTE) and result.flagged
+
+        generator.verify_answer = fake_verify([bad, bad])
+        result = run(_verify_and_repair("ctx", "ответ", correct, note=CLINICAL_SOFT_FAIL_NOTE))
+        assert result.text.endswith(CLINICAL_SOFT_FAIL_NOTE) and "Не применяй" in result.text
+    finally:
+        generator.verify_answer = original
 
 
 def test_passing_and_corrected_answers_are_untouched() -> None:
