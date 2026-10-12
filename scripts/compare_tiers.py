@@ -107,6 +107,7 @@ async def main() -> None:
     parser.add_argument("--questions", required=True)
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--channel", default="telegram", help="telegram (диалог, как в боте) или api (как сайт)")
+    parser.add_argument("--out", default=OUT_FILE, help="куда записать тексты ответов (чтобы два прогона не затирали друг друга)")
     args = parser.parse_args()
 
     questions = read_questions(args.questions, args.limit)
@@ -164,9 +165,9 @@ async def main() -> None:
     if overlaps:
         print(f"  Процитированные страницы совпали на {statistics.mean(overlaps):.0%} (доля общих среди всех названных)")
 
-    Path(OUT_FILE).parent.mkdir(parents=True, exist_ok=True)
-    Path(OUT_FILE).write_text("\n".join(report), encoding="utf-8")
-    print(f"\nТексты ответов обоих режимов: {OUT_FILE} (откройте и сравните глазами)")
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text("\n".join(report), encoding="utf-8")
+    print(f"\nТексты ответов обоих режимов: {args.out} (откройте и сравните глазами)")
 
 
 if __name__ == "__main__":
