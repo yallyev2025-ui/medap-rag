@@ -56,8 +56,9 @@ async def main() -> None:
         handle.write("\n".join(questions) + ("\n" if questions else ""))
 
     print(f"Записано вопросов: {len(questions)} → {args.out}")
-    if len(questions) < 30:
-        print("Мало вопросов: для сравнения лучше 50–100 (увеличьте --days или --limit).")
+    # Подсказка — только когда нашлось меньше, чем просили (сам попросил 5 — значит так и надо)
+    if len(questions) < args.limit:
+        print(f"Нашлось меньше, чем просили ({args.limit}): увеличьте --days. Это подсказка, файл записан.")
 
 
 if __name__ == "__main__":
