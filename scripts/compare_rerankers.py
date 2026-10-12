@@ -47,6 +47,7 @@ async def main() -> None:
     parser.add_argument("--candidates", type=int, default=settings.RETRIEVAL_CANDIDATES)
     parser.add_argument("--subject", default=None)
     parser.add_argument("--source-type", default=None)
+    parser.add_argument("--no-negatives", action="store_true", help="не проверять вопросы вне материалов")
     args = parser.parse_args()
 
     questions = read_questions(args.questions)
@@ -96,16 +97,53 @@ async def main() -> None:
         print(f"Время: torch {statistics.mean(torch_s):.1f} с, onnx {statistics.mean(onnx_s):.1f} с "
               f"(ускорение ×{statistics.mean(torch_s) / max(statistics.mean(onnx_s), 1e-9):.1f})")
 
-        # Шкала оценок у int8 слегка сдвигается, а порог релевантности — по ней. Подбираем такой порог для
-        # onnx, при котором «релевантными» остаётся столько же кусков, сколько сейчас при пороге torch
+        # Шкала оценок у int8 слегка сдвигается, а порог релевантности — по ней. Сравниваем оценки одних и тех же кусков
+        # и долю прошедших порог у каждого способа
         base = settings.RERANK_SCORE_THRESHOLD
-        share = sum(1 for v in all_torch if v >= base) / len(all_torch)
-        ordered = sorted(all_onnx)
-        index = min(len(ordered) - 1, max(0, int(round((1 - share) * (len(ordered) - 1)))))
-        print(f"Релевантных при пороге {base}: {share:.0%} кусков. "
-              f"Тот же процент у onnx даёт порог ≈ {ordered[index]:.3f} — "
-              f"поставьте RERANK_SCORE_THRESHOLD_ONNX={ordered[index]:.2f}")
+        diff = statistics.mean(abs(x - y) for x, y in zip(all_torch, all_onnx))
+        share_torch = sum(1 for v in all_torch if v >= base) / len(all_torch)
+        share_onnx = sum(1 for v in all_onnx if v >= base) / len(all_onnx)
+        print(f"Оценки одних и тех же кусков отличаются в среднем на {diff:.3f} (шкала 0..1)")
+        print(f"Прошли порог {base}: torch {share_torch:.0%}, onnx {share_onnx:.0%} кусков")
+        if 0.05 <= share_torch <= 0.95 and abs(share_torch - share_onnx) > 0.03:
+            ordered = sorted(all_onnx)
+            index = min(len(ordered) - 1, max(0, int(round((1 - share_torch) * (len(ordered) - 1)))))
+            print(f"Тот же процент у onnx даёт порог ≈ {ordered[index]:.2f} — можно поставить RERANK_SCORE_THRESHOLD_ONNX")
+        else:
+            print("Порог для onnx менять не нужно: оставьте RERANK_SCORE_THRESHOLD_ONNX незаданным (будет общий "
+                  f"{base}). Если все куски проходят порог, подобрать его по этим вопросам нельзя.")
 
+    if not args.no_negatives:
+        await check_negatives(args)
+
+
+# Вопросы, ответа на которые в учебниках быть не должно: порог обязан их отсекать (бот скажет «нет в материалах»)
+NEGATIVES = [
+    "Как приготовить борщ",
+    "Курс доллара к рублю сегодня",
+    "Кто выиграл чемпионат мира по футболу",
+    "Как установить Windows на ноутбук",
+]
+
+
+async def check_negatives(args) -> None:
+    base = settings.RERANK_SCORE_THRESHOLD
+    print()
+    print(f"Вопросы вне материалов (лучший кусок должен быть ниже порога {base}, иначе бот не откажет):")
+    worst_torch = worst_onnx = 0.0
+    for question in NEGATIVES:
+        chunks = await _fetch_candidates(question, args.candidates, args.source_type, args.subject)
+        if not chunks:
+            print(f"  — нет кандидатов: {question}")
+            continue
+        texts = [c.content for c in chunks]
+        best_torch = max(_torch_scores(question, texts))
+        best_onnx = max(_onnx_scores(question, texts))
+        worst_torch = max(worst_torch, best_torch)
+        worst_onnx = max(worst_onnx, best_onnx)
+        print(f"  лучший кусок: torch {best_torch:.3f} | onnx {best_onnx:.3f} | {question}")
+    verdict = "порог отсекает" if worst_onnx < base else "ВНИМАНИЕ: порог пропускает чужие вопросы — onnx включать нельзя без подбора порога"
+    print(f"Итог для onnx: выше всех {worst_onnx:.3f} (torch {worst_torch:.3f}) — {verdict}")
 
 if __name__ == "__main__":
     asyncio.run(main())
