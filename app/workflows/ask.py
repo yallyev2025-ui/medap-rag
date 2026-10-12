@@ -708,6 +708,7 @@ async def _ask(
     if (
         cache_key is not None
         and generated.verified is not False
+        and not generated.flagged
         and not generated.truncated
         and final_text != NO_CONTEXT_ANSWER
         and citations

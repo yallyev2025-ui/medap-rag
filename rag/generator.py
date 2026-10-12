@@ -542,11 +542,11 @@ CORRECTION_TEMPLATE = """{mode_instruction}
 
 Вопрос студента: {question}
 
-Твой предыдущий ответ содержал утверждения, которых НЕТ в контексте:
+Проверка указала на утверждения, которые могут не подтверждаться контекстом (замечания бывают неточными — число или факт, который в контексте есть, не убирай):
 {issues}
 
-Перепиши ответ, оставив ТОЛЬКО то, что напрямую подтверждается контекстом выше. \
-Если после удаления неподтверждённого не остаётся содержательного ответа — выведи ровно "{no_context_answer}"."""
+Перепиши ответ: каждое утверждение, которого в контексте действительно нет или которое ему противоречит, убери или замени тем, что в контексте написано; всё подтверждённое сохрани как было. \
+Если после этого не остаётся содержательного ответа — выведи ровно "{no_context_answer}"."""
 
 CONSPECT_PATTERN = re.compile(
     r"конспект|кратко разбери|структурируй|выпиши основное|сделай схему|схему для тетради|"
@@ -648,6 +648,14 @@ class GeneratedAnswer:
     # Ответ упёрся в лимит токенов и был обрезан по законченному предложению —
     # app/workflows/dialog.py дописывает «продолжу с этого места» вместо видимого обрыва.
     truncated: bool = False
+    # Не прошёл проверку, но выдан с пометкой (VERIFY_SOFT_FAIL): в кеш такой ответ не кладём
+    flagged: bool = False
+
+
+SOFT_FAIL_NOTE = (
+    "\n\n⚠️ Автоматическая проверка не смогла подтвердить по учебникам часть утверждений этого ответа — "
+    "числа и формулировки сверь с источником."
+)
 
 
 async def _verify_and_repair(
@@ -656,6 +664,7 @@ async def _verify_and_repair(
     correct: Callable[[str], Awaitable[str]],
     *,
     always_check: bool = True,
+    soft_fail: bool = False,
 ) -> GeneratedAnswer:
     """Общий цикл Verification Layer для generate_answer/_reasoning_answer
     (app/verification/verify.py): PASS сразу; при проблеме — один корректирующий
@@ -686,6 +695,12 @@ async def _verify_and_repair(
         return GeneratedAnswer(corrected, verified=True)
     if result2.grounded is None:
         return GeneratedAnswer(corrected, verified=None)
+
+    if soft_fail and settings.VERIFY_SOFT_FAIL and corrected.strip() and not corrected.strip().startswith(
+        NO_CONTEXT_ANSWER.splitlines()[0].strip()
+    ):
+        logger.info("Исправленный ответ не прошёл проверку — выдаю с пометкой. Проблемы: %s", result2.issues)
+        return GeneratedAnswer(corrected.rstrip() + SOFT_FAIL_NOTE, verified=None, flagged=True)
 
     logger.info("Исправленный ответ снова не прошёл проверку — честный отказ вместо недостоверного ответа")
     return GeneratedAnswer(NO_CONTEXT_ANSWER, verified=False)
@@ -809,7 +824,7 @@ async def generate_answer(
         )
         return corrected
 
-    result = await _verify_and_repair(context, answer, correct, always_check=is_clinrek)
+    result = await _verify_and_repair(context, answer, correct, always_check=is_clinrek, soft_fail=not is_clinrek)
     result.truncated = state["truncated"] and result.verified is not False
     return result
 
