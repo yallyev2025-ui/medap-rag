@@ -6,7 +6,7 @@ import rag.reranker as reranker
 from config import rerank_threshold, settings
 
 
-ORIGINAL = {name: getattr(reranker, name) for name in ("_torch_scores", "_onnx_scores", "_get_onnx")}
+ORIGINAL = {name: getattr(reranker, name) for name in ("_torch_scores", "_onnx_scores", "_get_onnx", "_get_reranker")}
 
 
 def reset(backend: str) -> None:
@@ -137,6 +137,54 @@ def test_nan_from_onnx_falls_back_to_torch() -> None:
     finally:
         logging.disable(logging.NOTSET)
     assert reranker.active_backend() == "torch"
+
+
+def test_torch_scores_are_single_sigmoid_not_double() -> None:
+    """Регрессия 13.10.2026: predict уже применяет сигмоиду, вторая сжимала оценки в 0.50–0.73."""
+    import math
+    import sys
+    import types
+
+    reset("torch")  # настоящая _torch_scores, а не подделка предыдущего теста
+
+    class Identity:
+        pass
+
+    fake_torch = types.SimpleNamespace(nn=types.SimpleNamespace(Identity=Identity))
+    saved = sys.modules.get("torch")
+    sys.modules["torch"] = fake_torch  # type: ignore[assignment]
+    try:
+        logits = [-6.0, 0.0, 4.0]
+
+        class NewModel:
+            # как sentence-transformers ≥ 4: по умолчанию сигмоида, с Identity — сырые логиты
+            def predict(self, pairs, batch_size=None, activation_fn=None):
+                if isinstance(activation_fn, Identity):
+                    return logits
+                return [1 / (1 + math.exp(-x)) for x in logits]
+
+        class OldModel:
+            # как версии, где параметр называется activation_fct
+            def predict(self, pairs, batch_size=None, activation_fct=None):
+                return logits if isinstance(activation_fct, Identity) else [1 / (1 + math.exp(-x)) for x in logits]
+
+        class NoActivationModel:
+            # параметра нет, возвращает уже вероятности
+            def predict(self, pairs, batch_size=None):
+                return [1 / (1 + math.exp(-x)) for x in logits]
+
+        for model in (NewModel(), OldModel(), NoActivationModel()):
+            reranker._get_reranker = lambda m=model: m  # type: ignore[assignment]
+            scores = reranker._torch_scores("q", ["a", "b", "c"])
+            expected = [1 / (1 + math.exp(-x)) for x in logits]
+            assert all(abs(a - b) < 1e-9 for a, b in zip(scores, expected)), scores
+            # настоящий разброс: посторонний кусок почти 0, хороший почти 1 (раньше было 0.50 и 0.73)
+            assert scores[0] < 0.01 and scores[2] > 0.98
+    finally:
+        if saved is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = saved
 
 
 if __name__ == "__main__":

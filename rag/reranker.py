@@ -46,10 +46,33 @@ def _sigmoid(x: float) -> float:
 
 
 def _torch_scores(query: str, passages: list[str]) -> list[float]:
+    """Оценки 0..1: сигмоида от сырого логита модели — ровно один раз.
+
+    ВАЖНО (замер 13.10.2026). В sentence-transformers у модели с одним выходом (bge-reranker) `predict` уже сам
+    применяет сигмоиду. Прежний код брал сигмоиду от этого результата ещё раз, и все оценки сжимались в диапазон
+    0.50–0.73: «борщ» получал те же 0.50, что и мусор, лучший настоящий кусок не поднимался выше 0.73, а порог
+    релевантности 0.3 не отсекал вообще ничего — «подходящими» были всегда все куски. Здесь у `predict` просим сырые
+    логиты (тождественная активация) и берём сигмоиду сами."""
+    import torch
+
     model = _get_reranker()
     pairs = [(query, passage) for passage in passages]
-    raw_scores = model.predict(pairs, batch_size=settings.RERANK_BATCH_SIZE)
-    return [_sigmoid(float(score)) for score in raw_scores]
+    batch = settings.RERANK_BATCH_SIZE
+    identity = torch.nn.Identity()
+
+    # Имя параметра менялось между версиями sentence-transformers (activation_fn / activation_fct)
+    for name in ("activation_fn", "activation_fct"):
+        try:
+            raw = model.predict(pairs, batch_size=batch, **{name: identity})
+        except TypeError:
+            continue
+        return [_sigmoid(float(score)) for score in raw]
+
+    # Параметра нет: оценки либо уже вероятности (0..1) — берём как есть, либо сырые логиты — тогда сигмоида
+    values = [float(score) for score in model.predict(pairs, batch_size=batch)]
+    if all(0.0 <= value <= 1.0 for value in values):
+        return values
+    return [_sigmoid(value) for value in values]
 
 
 @lru_cache(maxsize=1)

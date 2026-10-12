@@ -37,6 +37,13 @@ def read_questions(path: str) -> list[str]:
     return questions
 
 
+def split_marked(questions: list[str]) -> tuple[list[str], list[str]]:
+    """Строка с «!» в начале — вопрос, которого в учебниках быть не должно (проверка отказа): (обычные, помеченные)."""
+    normal = [q for q in questions if not q.startswith("!")]
+    marked = [q.lstrip("!").strip() for q in questions if q.startswith("!")]
+    return normal, [q for q in marked if q]
+
+
 def ranks(scores: list[float]) -> list[float]:
     """Место каждого элемента по убыванию оценки (при равных — среднее место)."""
     order = sorted(range(len(scores)), key=lambda i: -scores[i])
@@ -80,7 +87,7 @@ async def main() -> None:
     parser.add_argument("--no-negatives", action="store_true", help="не проверять вопросы вне материалов")
     args = parser.parse_args()
 
-    questions = read_questions(args.questions)
+    questions, marked_negatives = split_marked(read_questions(args.questions))
     if not questions:
         raise SystemExit("В файле нет вопросов")
 
@@ -136,7 +143,8 @@ async def main() -> None:
         overlaps.append(common)
         torch_s.append(torch_time)
         onnx_s.append(onnx_time)
-        print(f"{common:5.0%} общих в топ-{k} | torch {torch_time:5.1f} с | onnx {onnx_time:5.1f} с | {question[:50]}")
+        print(f"{common:5.0%} общих в топ-{k} | torch {torch_time:5.1f} с | onnx {onnx_time:5.1f} с | "
+              f"лучший кусок torch {max(a):.3f} onnx {max(b):.3f} | {question[:40]}")
 
     if overlaps:
         print()
@@ -174,7 +182,7 @@ async def main() -> None:
     neg_t: list[float] = []
     neg_o: list[float] = []
     if not args.no_negatives:
-        neg_t, neg_o = await check_negatives(args)
+        neg_t, neg_o = await check_negatives(args, marked_negatives)
     if best_pos_o:
         print_calibration(settings.RERANK_SCORE_THRESHOLD, best_pos_t, best_pos_o, neg_t, neg_o)
 
@@ -214,14 +222,14 @@ NEGATIVES = [
 ]
 
 
-async def check_negatives(args) -> tuple[list[float], list[float]]:
+async def check_negatives(args, extra: list[str] | None = None) -> tuple[list[float], list[float]]:
     base = settings.RERANK_SCORE_THRESHOLD
     print()
     print(f"Вопросы вне материалов (лучший кусок должен быть ниже порога {base}, иначе бот не откажет):")
     worst_torch = worst_onnx = 0.0
     bests_t: list[float] = []
     bests_o: list[float] = []
-    for question in NEGATIVES:
+    for question in [*NEGATIVES, *(extra or [])]:
         chunks = await _fetch_candidates(question, args.candidates, args.source_type, args.subject)
         if not chunks:
             print(f"  — нет кандидатов: {question}")
