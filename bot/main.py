@@ -66,8 +66,23 @@ async def _run_api() -> None:
     await server.serve()
 
 
+async def _warm_up_models() -> None:
+    """Подгружает модели поиска заранее, чтобы первый студент после деплоя не ждал их загрузки. Фоном: бот и
+    /health отвечают сразу. Сбой не опасен — модели загрузятся при первом вопросе, как раньше."""
+    try:
+        from rag.embedder import embed_query
+        from rag.reranker import warm_up
+
+        await asyncio.to_thread(embed_query, "прогрев")
+        backend = await asyncio.to_thread(warm_up)
+        logger.info("Модели поиска загружены, реранкер: %s", backend)
+    except Exception:
+        logger.exception("Прогрев моделей не удался — загрузятся при первом вопросе")
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    warm_up_task = asyncio.create_task(_warm_up_models())  # noqa: F841 — держим ссылку, фоновая задача
     # Если один из двух упадёт — падает весь процесс (Railway перезапустит по
     # restartPolicy), а не тихо остаётся половина функциональности недоступна.
     await asyncio.gather(_run_bot(), _run_api())

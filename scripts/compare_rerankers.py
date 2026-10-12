@@ -35,6 +35,33 @@ def read_questions(path: str) -> list[str]:
     return questions
 
 
+def ranks(scores: list[float]) -> list[float]:
+    """Место каждого элемента по убыванию оценки (при равных — среднее место)."""
+    order = sorted(range(len(scores)), key=lambda i: -scores[i])
+    result = [0.0] * len(scores)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        for t in range(i, j + 1):
+            result[order[t]] = (i + j) / 2
+        i = j + 1
+    return result
+
+
+def spearman(a: list[float], b: list[float]) -> float:
+    """Корреляция порядка двух оценок (1.0 — порядок один и тот же). Устойчивее, чем «доля общих в топ-10»,
+    которая сильно колеблется на кусках с почти равной оценкой у границы."""
+    if len(a) < 3:
+        return 1.0
+    ra, rb = ranks(a), ranks(b)
+    ma, mb = statistics.mean(ra), statistics.mean(rb)
+    num = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    den = (sum((x - ma) ** 2 for x in ra) * sum((y - mb) ** 2 for y in rb)) ** 0.5
+    return num / den if den else 1.0
+
+
 def top(ids: list[int], scores: list[float], k: int) -> list[int]:
     order = sorted(range(len(ids)), key=lambda i: scores[i], reverse=True)[:k]
     return [ids[i] for i in order]
@@ -57,6 +84,9 @@ async def main() -> None:
     all_torch: list[float] = []
     all_onnx: list[float] = []
     overlaps: list[float] = []
+    top1_same: list[float] = []
+    top3_common: list[float] = []
+    correlations: list[float] = []
     torch_s: list[float] = []
     onnx_s: list[float] = []
     # Для подбора числа кандидатов: какая доля лучших кусков (по оценке) лежит в первых N кандидатах поиска
@@ -86,6 +116,10 @@ async def main() -> None:
 
         k = min(args.top_k, len(ids))
         common = len(set(top(ids, a, k)) & set(top(ids, b, k))) / k
+        top1_same.append(1.0 if top(ids, a, 1) == top(ids, b, 1) else 0.0)
+        k3 = min(3, len(ids))
+        top3_common.append(len(set(top(ids, a, k3)) & set(top(ids, b, k3))) / k3)
+        correlations.append(spearman(a, b))
         best_ids = top(ids, a, k)
         for n in pool_sizes:
             if n <= len(ids):
@@ -101,6 +135,10 @@ async def main() -> None:
         print()
         print(f"Вопросов: {len(overlaps)}; кандидатов на вопрос: {args.candidates}")
         print(f"Совпадение топ-{args.top_k}: в среднем {statistics.mean(overlaps):.0%}, худший случай {min(overlaps):.0%}")
+        print(f"Лучший кусок один и тот же: в {statistics.mean(top1_same):.0%} вопросов; "
+              f"общих в топ-3: {statistics.mean(top3_common):.0%}")
+        print(f"Корреляция порядка всех кусков (1.00 — полностью одинаковый): в среднем {statistics.mean(correlations):.3f}, "
+              f"худший вопрос {min(correlations):.3f}")
         print(f"Время: torch {statistics.mean(torch_s):.1f} с, onnx {statistics.mean(onnx_s):.1f} с "
               f"(ускорение ×{statistics.mean(torch_s) / max(statistics.mean(onnx_s), 1e-9):.1f})")
 

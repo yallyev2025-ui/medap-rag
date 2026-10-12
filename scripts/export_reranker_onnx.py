@@ -30,6 +30,12 @@ def main() -> int:
     parser.add_argument("--preset", choices=["avx2", "avx512_vnni", "arm64"], default="avx2")
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--per-channel",
+        action="store_true",
+        help="масштаб квантования на каждый выходной канал, а не на весь слой: обычно точнее; "
+        "сначала проверьте compare_rerankers",
+    )
     args = parser.parse_args()
 
     from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
@@ -46,7 +52,7 @@ def main() -> int:
     AutoTokenizer.from_pretrained(args.model).save_pretrained(out)
 
     print(f"2/3 Квантую в int8 (пресет {args.preset})…")
-    config = getattr(AutoQuantizationConfig, args.preset)(is_static=False, per_channel=False)
+    config = getattr(AutoQuantizationConfig, args.preset)(is_static=False, per_channel=args.per_channel)
     quantizer = ORTQuantizer.from_pretrained(raw)
     quantizer.quantize(save_dir=out, quantization_config=config)
 

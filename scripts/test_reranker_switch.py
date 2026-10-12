@@ -102,6 +102,43 @@ def test_onnx_scores_keep_original_order_after_length_sorting() -> None:
     assert scores == [reranker._sigmoid(float(len(p))) for p in passages]
 
 
+def test_sigmoid_is_stable_and_symmetric() -> None:
+    # Прежняя форма 1/(1+exp(-x)) падала на очень отрицательных x
+    assert reranker._sigmoid(-5000.0) == 0.0 or reranker._sigmoid(-5000.0) < 1e-300
+    assert reranker._sigmoid(5000.0) == 1.0
+    assert abs(reranker._sigmoid(0.0) - 0.5) < 1e-12
+    assert abs(reranker._sigmoid(2.0) + reranker._sigmoid(-2.0) - 1.0) < 1e-12
+
+
+def test_nan_from_onnx_falls_back_to_torch() -> None:
+    """Испорченная модель, отдающая NaN, не должна молча превращать все куски в «нерелевантные»."""
+    import numpy as np
+
+    class Tokenizer:
+        def __call__(self, queries, passages, **kwargs):
+            return {"input_ids": np.zeros((len(passages), 1), dtype=np.float32)}
+
+    class Input:
+        name = "input_ids"
+
+    class NanSession:
+        def get_inputs(self):
+            return [Input()]
+
+        def run(self, _outputs, feed):
+            return [np.full((feed["input_ids"].shape[0], 1), np.nan, dtype=np.float32)]
+
+    reset("onnx")
+    reranker._get_onnx = lambda: (NanSession(), Tokenizer())
+    reranker._torch_scores = lambda q, p: [0.42] * len(p)
+    logging.disable(logging.CRITICAL)
+    try:
+        assert reranker.rerank_scores("q", ["a", "b"]) == [0.42, 0.42]
+    finally:
+        logging.disable(logging.NOTSET)
+    assert reranker.active_backend() == "torch"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

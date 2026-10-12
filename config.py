@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     # те же 60. Теперь быстрый проверяет меньше (быстрее, но чуть выше шанс упустить нужный кусок
     # из дальнего хвоста грубого отбора), глубокий — как раньше. Без режима (сайт, генерация) —
     # RETRIEVAL_CANDIDATES. Меняется переменной окружения без правки кода
-    TIER_FAST_CANDIDATES: int = 40
-    TIER_DEEP_CANDIDATES: int = 60
+    TIER_FAST_CANDIDATES: int = 35
+    TIER_DEEP_CANDIDATES: int = 50
     TIER_DEEP_TOP_K: int = 30
     TIER_FAST_PROVIDER: str = "deepseek"
     TIER_DEEP_PROVIDER: str = "openai"

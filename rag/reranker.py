@@ -38,7 +38,11 @@ def _get_reranker():
 
 
 def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
+    # Устойчивая форма: при очень отрицательном x обычная exp(-x) переполняется
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
 
 
 def _torch_scores(query: str, passages: list[str]) -> list[float]:
@@ -94,7 +98,12 @@ def _onnx_scores(query: str, passages: list[str]) -> list[float]:
         logits = session.run(None, feed)[0]
         flat = np.asarray(logits).reshape(len(indexes), -1)[:, 0]
         for i, logit in zip(indexes, flat):
-            scores[i] = _sigmoid(float(logit))
+            value = float(logit)
+            # Молчаливо испорченная модель (NaN/inf) сделала бы все куски «нерелевантными» и бот отвечал бы
+            # отказами. Лучше громко упасть: rerank_scores перейдёт на torch и запишет причину в лог
+            if not math.isfinite(value):
+                raise ValueError("ONNX-реранкер вернул нечисловую оценку (NaN/inf)")
+            scores[i] = _sigmoid(value)
 
     return scores
 
@@ -123,6 +132,13 @@ def rerank_scores(query: str, passages: list[str]) -> list[float]:
                     )
 
     return _torch_scores(query, passages)
+
+
+def warm_up() -> str:
+    """Загружает реранкер в память заранее (при старте бота), а не на первом вопросе студента.
+    Возвращает, какой путь работает; сбой ONNX здесь же переводит на torch."""
+    rerank_scores("прогрев", ["прогрев"])
+    return active_backend()
 
 
 def active_backend() -> str:
