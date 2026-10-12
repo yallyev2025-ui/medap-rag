@@ -46,12 +46,13 @@ CrossEncoder('${RERANKER_MODEL_NAME}')" && exit 0; \
         echo "Загрузка моделей не удалась (попытка $attempt), повтор через 20 с"; sleep 20; \
     done; exit 1
 
-# Реранкер int8/ONNX (RERANKER_BACKEND=onnx) — по желанию, при сборке с BUILD_ONNX_RERANKER=1.
-# По умолчанию выключено: конвертации нужно ~8 ГБ памяти и несколько минут, а упавшая сборка
-# оставила бы без деплоя весь бот. Шаг не валит сборку (|| true): без ONNX бот работает на torch.
+# Реранкер int8/ONNX (RERANKER_BACKEND=onnx): сжатая модель кладётся в образ при сборке, чтобы её
+# можно было включить переменной окружения, не запуская конвертацию в работающем боте (там она
+# съела бы память бота). Конвертации нужно ~8 ГБ памяти и несколько минут. Шаг не валит сборку
+# (|| echo): не получилось — бот работает на torch. Отключить шаг: аргумент сборки BUILD_ONNX_RERANKER=0.
 # Пресет avx2 работает на любом x86; с avx512_vnni (проверка: lscpu | grep avx512_vnni) быстрее.
 # Вручную в консоли работающего бота: python scripts/export_reranker_onnx.py (до следующего деплоя).
-ARG BUILD_ONNX_RERANKER=0
+ARG BUILD_ONNX_RERANKER=1
 ARG ONNX_PRESET=avx2
 COPY scripts/export_reranker_onnx.py /tmp/export_reranker_onnx.py
 RUN if [ "$BUILD_ONNX_RERANKER" = "1" ]; then \

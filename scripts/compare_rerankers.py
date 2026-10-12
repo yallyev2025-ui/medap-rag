@@ -53,6 +53,8 @@ async def main() -> None:
     if not questions:
         raise SystemExit("В файле нет вопросов")
 
+    all_torch: list[float] = []
+    all_onnx: list[float] = []
     overlaps: list[float] = []
     torch_s: list[float] = []
     onnx_s: list[float] = []
@@ -80,6 +82,8 @@ async def main() -> None:
 
         k = min(args.top_k, len(ids))
         common = len(set(top(ids, a, k)) & set(top(ids, b, k))) / k
+        all_torch.extend(a)
+        all_onnx.extend(b)
         overlaps.append(common)
         torch_s.append(torch_time)
         onnx_s.append(onnx_time)
@@ -91,6 +95,16 @@ async def main() -> None:
         print(f"Совпадение топ-{args.top_k}: в среднем {statistics.mean(overlaps):.0%}, худший случай {min(overlaps):.0%}")
         print(f"Время: torch {statistics.mean(torch_s):.1f} с, onnx {statistics.mean(onnx_s):.1f} с "
               f"(ускорение ×{statistics.mean(torch_s) / max(statistics.mean(onnx_s), 1e-9):.1f})")
+
+        # Шкала оценок у int8 слегка сдвигается, а порог релевантности — по ней. Подбираем такой порог для
+        # onnx, при котором «релевантными» остаётся столько же кусков, сколько сейчас при пороге torch
+        base = settings.RERANK_SCORE_THRESHOLD
+        share = sum(1 for v in all_torch if v >= base) / len(all_torch)
+        ordered = sorted(all_onnx)
+        index = min(len(ordered) - 1, max(0, int(round((1 - share) * (len(ordered) - 1)))))
+        print(f"Релевантных при пороге {base}: {share:.0%} кусков. "
+              f"Тот же процент у onnx даёт порог ≈ {ordered[index]:.3f} — "
+              f"поставьте RERANK_SCORE_THRESHOLD_ONNX={ordered[index]:.2f}")
 
 
 if __name__ == "__main__":
