@@ -37,6 +37,22 @@ def read_questions(path: str) -> list[str]:
     return questions
 
 
+def check_tokenizers(texts: list[str]) -> None:
+    """Токенизатор у сжатой модели (папка RERANKER_ONNX_DIR) должен резать текст так же, как у исходной. При загрузке он пишет
+    длинное предупреждение про «неверный regex»: проверяем напрямую — совпадают ли номера токенов на настоящих текстах."""
+    try:
+        from transformers import AutoTokenizer
+
+        original = AutoTokenizer.from_pretrained(settings.RERANKER_MODEL_NAME)
+        compressed = AutoTokenizer.from_pretrained(settings.RERANKER_ONNX_DIR)
+    except Exception as error:  # noqa: BLE001 — это лишь дополнительная проверка
+        print(f"Токенизатор не удалось сравнить: {error}")
+        return
+    same = sum(1 for text in texts if original(text)["input_ids"] == compressed(text)["input_ids"])
+    verdict = "предупреждение библиотеки безвредно" if same == len(texts) else "РАЗЛИЧИЯ: оценки onnx могут быть искажены"
+    print(f"Токенизация исходной и сжатой модели совпадает у {same} из {len(texts)} текстов — {verdict}")
+
+
 def split_marked(questions: list[str]) -> tuple[list[str], list[str]]:
     """Строка с «!» в начале — вопрос, которого в учебниках быть не должно (проверка отказа): (обычные, помеченные)."""
     normal = [q for q in questions if not q.startswith("!")]
@@ -102,6 +118,7 @@ async def main() -> None:
     best_pos_t: list[float] = []  # лучший кусок каждого настоящего вопроса — по нему подбирается порог
     best_pos_o: list[float] = []
     # Для подбора числа кандидатов: какая доля лучших кусков (по оценке) лежит в первых N кандидатах поиска
+    tokenizer_checked = False
     pool_sizes = (15, 20, 25, 30, 40)
     pool_hits: dict[int, list[float]] = {n: [] for n in pool_sizes}
 
@@ -117,6 +134,9 @@ async def main() -> None:
             continue
         texts = [c.content for c in chunks]
         ids = [c.id for c in chunks]
+        if not tokenizer_checked:
+            tokenizer_checked = True
+            check_tokenizers([question, *texts[:30]])
 
         started = time.perf_counter()
         a = _torch_scores(question, texts)
