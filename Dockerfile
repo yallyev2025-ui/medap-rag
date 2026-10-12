@@ -58,6 +58,8 @@ COPY scripts/export_reranker_onnx.py /tmp/export_reranker_onnx.py
 RUN if [ "$BUILD_ONNX_RERANKER" = "1" ]; then \
         pip install --retries 10 --timeout 60 "optimum[onnxruntime]" && \
         python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" || echo "ONNX-реранкер не собран, бот будет на torch"; \
+        python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" --per-channel --out /opt/models/reranker-onnx-int8-pc \
+            || echo "Вариант -pc (per-channel) не собран"; \
     fi
 
 COPY . .

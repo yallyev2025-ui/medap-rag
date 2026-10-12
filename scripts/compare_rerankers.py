@@ -89,6 +89,8 @@ async def main() -> None:
     correlations: list[float] = []
     torch_s: list[float] = []
     onnx_s: list[float] = []
+    best_pos_t: list[float] = []  # лучший кусок каждого настоящего вопроса — по нему подбирается порог
+    best_pos_o: list[float] = []
     # Для подбора числа кандидатов: какая доля лучших кусков (по оценке) лежит в первых N кандидатах поиска
     pool_sizes = (15, 20, 25, 30, 40)
     pool_hits: dict[int, list[float]] = {n: [] for n in pool_sizes}
@@ -124,6 +126,8 @@ async def main() -> None:
         for n in pool_sizes:
             if n <= len(ids):
                 pool_hits[n].append(len(set(best_ids) & set(ids[:n])) / k)
+        best_pos_t.append(max(a))
+        best_pos_o.append(max(b))
         all_torch.extend(a)
         all_onnx.extend(b)
         overlaps.append(common)
@@ -164,8 +168,38 @@ async def main() -> None:
             print("Порог для onnx менять не нужно: оставьте RERANK_SCORE_THRESHOLD_ONNX незаданным (будет общий "
                   f"{base}). Если все куски проходят порог, подобрать его по этим вопросам нельзя.")
 
+    neg_t: list[float] = []
+    neg_o: list[float] = []
     if not args.no_negatives:
-        await check_negatives(args)
+        neg_t, neg_o = await check_negatives(args)
+    if best_pos_o:
+        print_calibration(settings.RERANK_SCORE_THRESHOLD, best_pos_t, best_pos_o, neg_t, neg_o)
+
+
+def print_calibration(base: float, pos_t: list[float], pos_o: list[float], neg_t: list[float], neg_o: list[float]) -> None:
+    """Порог отвечает на вопрос «есть ли вообще подходящий кусок». Нужен такой, чтобы лучший кусок настоящих вопросов
+    его проходил, а лучший кусок посторонних — нет. Поэтому подбираем его по лучшему куску каждого вопроса."""
+    print()
+    print("Подбор порога для onnx (по лучшему куску каждого вопроса):")
+    print(f"  настоящие вопросы, лучший кусок: torch {min(pos_t):.3f}–{max(pos_t):.3f}, onnx {min(pos_o):.3f}–{max(pos_o):.3f}")
+    lost_o = sum(1 for v in pos_o if v < base)
+    lost_t = sum(1 for v in pos_t if v < base)
+    print(f"  при общем пороге {base}: без единого подходящего куска остались бы {lost_o} из {len(pos_o)} вопросов "
+          f"у onnx (у torch — {lost_t})")
+    if lost_o > lost_t:
+        print("  ВНИМАНИЕ: с onnx бот ответил бы «не нашёл» на вопросы, на которые torch отвечает. "
+              "Включать onnx с общим порогом нельзя.")
+    if not neg_o:
+        return
+    print(f"  посторонние вопросы, лучший кусок: torch до {max(neg_t):.3f}, onnx до {max(neg_o):.3f}")
+    low, high = max(neg_o), min(pos_o)
+    if low < high:
+        tau = max(low + 0.01, min(high - 0.01, round((low + high) / 2, 2)))
+        print(f"  Оценки разделяются: ставьте RERANK_SCORE_THRESHOLD_ONNX={tau:.2f} "
+              f"(между {low:.3f} посторонних и {high:.3f} настоящих). Запас небольшой — на 5–10 вопросах это ориентир.")
+    else:
+        print("  Оценки настоящих и посторонних вопросов у onnx ПЕРЕСЕКАЮТСЯ: никаким порогом их не разделить. "
+              "Эта сборка сжатой модели не годится; попробуйте вариант -pc (см. docs/RERANKER.md).")
 
 
 # Вопросы, ответа на которые в учебниках быть не должно: порог обязан их отсекать (бот скажет «нет в материалах»)
@@ -177,11 +211,13 @@ NEGATIVES = [
 ]
 
 
-async def check_negatives(args) -> None:
+async def check_negatives(args) -> tuple[list[float], list[float]]:
     base = settings.RERANK_SCORE_THRESHOLD
     print()
     print(f"Вопросы вне материалов (лучший кусок должен быть ниже порога {base}, иначе бот не откажет):")
     worst_torch = worst_onnx = 0.0
+    bests_t: list[float] = []
+    bests_o: list[float] = []
     for question in NEGATIVES:
         chunks = await _fetch_candidates(question, args.candidates, args.source_type, args.subject)
         if not chunks:
@@ -192,9 +228,12 @@ async def check_negatives(args) -> None:
         best_onnx = max(_onnx_scores(question, texts))
         worst_torch = max(worst_torch, best_torch)
         worst_onnx = max(worst_onnx, best_onnx)
+        bests_t.append(best_torch)
+        bests_o.append(best_onnx)
         print(f"  лучший кусок: torch {best_torch:.3f} | onnx {best_onnx:.3f} | {question}")
     verdict = "порог отсекает" if worst_onnx < base else "ВНИМАНИЕ: порог пропускает чужие вопросы — onnx включать нельзя без подбора порога"
     print(f"Итог для onnx: выше всех {worst_onnx:.3f} (torch {worst_torch:.3f}) — {verdict}")
+    return bests_t, bests_o
 
 if __name__ == "__main__":
     asyncio.run(main())

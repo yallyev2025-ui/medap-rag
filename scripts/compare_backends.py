@@ -67,6 +67,11 @@ def split_pieces(text: str, size: int = 1200) -> list[str]:
 def meaning(a: str, b: str, embed) -> float:
     """Косинус средних эмбеддингов двух ответов (0..1). embed(list[str]) -> list[list[float]], векторы нормированы."""
 
+    if not a.strip() and not b.strip():
+        return 1.0
+    if not a.strip() or not b.strip():
+        return 0.0  # у одного ответа нет вовсе — это не «похоже», а полное расхождение
+
     def mean_vector(text: str) -> list[float]:
         vectors = embed(split_pieces(text))
         size = len(vectors[0])
@@ -131,6 +136,7 @@ async def main() -> None:
     names = ("torch↔torch (шум)", "torch↔onnx")
     metrics: dict[str, dict[str, list[float]]] = {n: {"chunks": [], "pages": [], "meaning": [], "numbers": []} for n in names}
     seconds = {"torch": [], "onnx": []}
+    empty = {"torch": 0, "torch2": 0, "onnx": 0}
     report = ["# torch и onnx: ответы быстрого режима\n"]
 
     for number, question in enumerate(questions, 1):
@@ -143,6 +149,8 @@ async def main() -> None:
                 raise SystemExit("ONNX не работает (упал на torch): см. журнал бота и scripts/export_reranker_onnx.py")
             if label != "torch2":
                 seconds[backend].append(row["seconds"])
+            if not (row["result"].answer or "").strip():
+                empty[label] += 1
             print(f"   {label:<7} {row['seconds']:5.1f} с | {len(row['result'].answer or '')} симв. | "
                   f"источников {len(row['result'].citations)} | {row['rub']:.2f} ₽")
 
@@ -166,6 +174,11 @@ async def main() -> None:
     for name in names:
         m = metrics[name]
         print(f"  {name:<22}{fmt(m['chunks']):>11}{fmt(m['pages']):>10}{fmt(m['meaning']):>8}{fmt(m['numbers']):>8}")
+    print(f"\nВопросов БЕЗ ответа вообще (поиск не нашёл подходящих кусков): torch {empty['torch']}, "
+          f"torch повторно {empty['torch2']}, onnx {empty['onnx']} из {len(questions)}")
+    if empty["onnx"] > empty["torch"]:
+        print("  ВНИМАНИЕ: с onnx бот не нашёл материал там, где torch нашёл. Это сдвиг оценок реранкера относительно "
+              "порога: сначала scripts.compare_rerankers (блок «Подбор порога»), потом снова этот замер.")
     print(f"\nВремя ответа: torch {statistics.mean(seconds['torch']):.1f} с, onnx {statistics.mean(seconds['onnx']):.1f} с "
           f"(ускорение ×{statistics.mean(seconds['torch']) / max(statistics.mean(seconds['onnx']), 1e-9):.1f})")
     print("Как читать: если строка torch↔onnx близка к строке «шум» (torch↔torch), сжатие ответы не меняет; "

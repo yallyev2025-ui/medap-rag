@@ -138,7 +138,15 @@ def warm_up() -> str:
     """Загружает реранкер в память заранее (при старте бота), а не на первом вопросе студента.
     Возвращает, какой путь работает; сбой ONNX здесь же переводит на torch."""
     rerank_scores("прогрев", ["прогрев"])
-    return active_backend()
+    backend = active_backend()
+    if backend == "onnx" and settings.RERANK_SCORE_THRESHOLD_ONNX is None:
+        # Оценки сжатой модели ниже: общий порог мог бы отсекать подходящие куски, и бот отвечал бы «не нашёл»
+        # (замер 12.10.2026: у 2 вопросов из 5). Порог подбирает scripts.compare_rerankers («Подбор порога»)
+        logger.warning(
+            "ONNX включён без своего порога RERANK_SCORE_THRESHOLD_ONNX: возможны ложные «не нашёл». "
+            "Подберите порог: python -m scripts.compare_rerankers"
+        )
+    return backend
 
 
 def active_backend() -> str:
