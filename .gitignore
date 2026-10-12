@@ -219,3 +219,4 @@ __marimo__/
 
 # Вопросы студентов для сравнения реранкеров — только на сервере, не в репозитории
 eval/questions_real*.txt
+eval/tier_compare.md
