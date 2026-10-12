@@ -14,7 +14,7 @@ from app.llm import provider as llm
 from app.llm.prompts import get_prompt
 from app.llm.task_map import Task, current_tier
 from app.verification.numeric import extract_numeric_claims
-from app.verification.verify import verify_answer
+from app.verification.verify import strip_illustrations, verify_answer
 from config import rerank_threshold, settings
 from constants import SOURCE_CLINREK, SOURCE_TEXTBOOK
 from rag.retriever import ChunkResult
@@ -545,6 +545,7 @@ CORRECTION_TEMPLATE = """{mode_instruction}
 Проверка указала на утверждения, которые могут не подтверждаться контекстом (замечания бывают неточными — число или факт, который в контексте есть, не убирай):
 {issues}
 
+Блоки с пометкой 💡 (придуманные образы и аналогии) не трогай и не удаляй: они не должны подтверждаться учебником.
 Перепиши ответ: каждое утверждение, которого в контексте действительно нет или которое ему противоречит, убери или замени тем, что в контексте написано; всё подтверждённое сохрани как было. \
 Если после этого не остаётся содержательного ответа — выведи ровно "{no_context_answer}"."""
 
@@ -678,7 +679,7 @@ async def _verify_and_repair(
     """
     if not settings.VERIFY_GROUNDING:
         return GeneratedAnswer(answer, verified=None)
-    if not always_check and not extract_numeric_claims(answer):
+    if not always_check and not extract_numeric_claims(strip_illustrations(answer)):
         return GeneratedAnswer(answer, verified=None)
 
     result = await verify_answer(context, answer)

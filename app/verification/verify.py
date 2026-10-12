@@ -13,6 +13,7 @@
   verified, но не отбрасывается — контролируемая, а не полная деградация.
 """
 
+import re
 from dataclasses import dataclass
 
 from app.llm.task_map import Task
@@ -28,6 +29,8 @@ VERIFY_SYSTEM_PROMPT = """Ты — фактчекер учебного отве�
 - числа, совпадающие с контекстом по значению (6–12 мес = «от 6 до 12 мес», 48 ч = 48 часов);
 - оформление, нумерацию, строку источника в конце ([Автор, Название, стр. N]) и служебные фразы.
 
+Придуманные образы, аналогии, примеры из жизни и мнемоники (блоки с пометкой 💡 «придуман, не из учебника» и просто сравнения вроде «это как…») НЕ проверяй: они не должны быть в учебнике. Проверяй только медицинские утверждения.
+
 Если неподтверждённых утверждений нет — первой строкой выведи ровно:
 GROUNDED
 Если есть хотя бы одно утверждение, которого нет в контексте или которое ему противоречит, — первой строкой выведи ровно:
@@ -41,6 +44,30 @@ VERIFY_USER_TEMPLATE = """КОНТЕКСТ:
 {answer}"""
 
 
+_ILLUSTRATION = re.compile(r"^\s*(?:\*\*|\*|_)*\s*💡")
+
+
+def strip_illustrations(text: str) -> str:
+    """Убирает из ответа блоки-иллюстрации (**💡 Пример**, **💡 Образ для запоминания** — модель обязана помечать
+    придуманное): их нечем подтверждать по учебнику, а проверка принимала их за выдумку и браковала весь ответ
+    (замер 12.10.2026). Блок — абзац с пометкой; если абзац состоит из одной строки-заголовка, уходит и следующий."""
+    paragraphs = re.split(r"\n\s*\n", text)
+    kept: list[str] = []
+    skip_next = False
+    for paragraph in paragraphs:
+        if skip_next:
+            skip_next = False
+            continue
+        if _ILLUSTRATION.match(paragraph):
+            lines = [line for line in paragraph.strip().splitlines() if line.strip()]
+            # Только заголовок без текста («**💡 Пример** *(придуман, не из учебника)*»): сам образ в следующем абзаце.
+            # Строка, где после пометки идёт текст и точка, — целый блок, следующий абзац не трогаем
+            skip_next = len(lines) == 1 and lines[0].rstrip().endswith(("*", "_"))
+            continue
+        kept.append(paragraph)
+    return "\n\n".join(kept)
+
+
 @dataclass
 class VerificationResult:
     grounded: bool | None
@@ -52,6 +79,10 @@ async def verify_answer(context: str, answer: str) -> VerificationResult:
     # (verify_answer используется в generate_answer/_reasoning_answer), поэтому
     # обратный импорт _complete здесь должен быть внутри функции, иначе цикл.
     from rag.generator import _complete
+
+    answer = strip_illustrations(answer)
+    if not answer.strip():
+        return VerificationResult(True)  # в ответе одни придуманные образы: проверять нечего
 
     numeric_issues = find_unsupported_numbers(answer, context)
 
