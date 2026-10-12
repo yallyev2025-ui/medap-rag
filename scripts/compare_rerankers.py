@@ -18,6 +18,8 @@ from config import settings
 from rag.reranker import _onnx_scores, _torch_scores
 from rag.retriever import _fetch_candidates
 
+from scripts._tee import tee_output
+
 
 def read_questions(path: str) -> list[str]:
     questions: list[str] = []
@@ -68,6 +70,7 @@ def top(ids: list[int], scores: list[float], k: int) -> list[int]:
 
 
 async def main() -> None:
+    tee_output("eval/last_compare_rerankers.txt")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--questions", required=True)
     parser.add_argument("--top-k", type=int, default=10)

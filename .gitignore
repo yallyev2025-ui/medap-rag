@@ -221,3 +221,4 @@ __marimo__/
 eval/questions_real*.txt
 eval/tier_compare.md
 eval/backend_compare.md
+eval/last_*.txt

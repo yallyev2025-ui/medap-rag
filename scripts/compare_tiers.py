@@ -47,6 +47,8 @@ class _Issues(logging.Handler):
 
 ISSUES = _Issues()
 
+from scripts._tee import tee_output
+
 
 def read_questions(path: str, limit: int | None) -> list[str]:
     with open(path, encoding="utf-8") as handle:
@@ -103,6 +105,7 @@ async def run_one(question: str, tier: str, channel: str) -> dict:
 
 
 async def main() -> None:
+    tee_output("eval/last_compare_tiers.txt")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--questions", required=True)
     parser.add_argument("--limit", type=int, default=5)

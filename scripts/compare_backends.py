@@ -32,6 +32,8 @@ from rag import reranker
 
 RUNS = (("torch", "torch"), ("torch2", "torch"), ("onnx", "onnx"))
 
+from scripts._tee import tee_output
+
 
 def read_questions(path: str, limit: int | None) -> list[str]:
     with open(path, encoding="utf-8") as handle:
@@ -112,6 +114,7 @@ def fmt(values: list[float]) -> str:
 
 
 async def main() -> None:
+    tee_output("eval/last_compare_backends.txt")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--questions", required=True)
     parser.add_argument("--limit", type=int, default=5)
