@@ -24,7 +24,7 @@
  * Деньги считаются по токенам, которые вернул сам поставщик (включая «мысли» моделей), и по ценам из
  * `--price`/таблицы ниже. Ключи не печатаются и не сохраняются: скрипт показывает только «ключ есть / нет».
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,23 @@ function parseArgs(argv) {
 
 const { _: positional, flags } = parseArgs(process.argv.slice(2));
 
+/* --log файл: всё, что стенд печатает, дублируется в файл (консоль закрыли — результат остался) */
+if (typeof flags.log === "string") {
+  const logFile = flags.log;
+  writeFileSync(logFile, `# ${new Date().toISOString()} node slides-bench.mjs ${process.argv.slice(2).join(" ")}\n`);
+  for (const name of ["log", "error"]) {
+    const original = console[name].bind(console);
+    console[name] = (...args) => {
+      original(...args);
+      try {
+        appendFileSync(logFile, args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ") + "\n");
+      } catch {
+        /* журнал вспомогательный: не должен ронять стенд */
+      }
+    };
+  }
+}
+
 if (flags.help || flags.h) {
   console.log(`Стенд замеров Medap Slide.
 
@@ -107,6 +124,7 @@ if (flags.help || flags.h) {
 Параметры боевого прогона:
   --providers p1,p2     anthropic, deepseek, openai (по умолчанию все, у кого есть ключ)
   --out файл.json       куда сохранить результат (по умолчанию out-<время>.json)
+  --log файл.log        дублировать весь вывод в файл (чтобы не потерялся при закрытии консоли)
   --sizes 5,10          только эти размеры (по умолчанию 5,10,15,20)
   --topics med,law,biz  только эти темы
   --openai-model id     точный id модели OpenAI «mini» (иначе стенд выберет сам из списка по ключу)
