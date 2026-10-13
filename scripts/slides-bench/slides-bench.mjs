@@ -7,7 +7,7 @@
  * запускается в два приёма, и каждый раз ему нужен только Node.
  *
  *   # на сервере сайта
- *   node slides-bench.mjs --providers deepseek,openai --out out-site.json
+ *   node slides-bench.mjs --providers openai --out out-site.json
  *   # на сервере бота
  *   node slides-bench.mjs --providers anthropic --out out-bot.json
  *   # где угодно: слияние в таблицу и «безымянные» черновики для слепого сравнения
@@ -57,10 +57,11 @@ const PLAN = {
     { model: "claude-haiku-5-5", vision: true },
     { model: "claude-sonnet-5-5", vision: true, topics: ["med", "biz"] },
   ],
-  deepseek: [
-    { model: "deepseek-flash", vision: false },
-    { model: "deepseek-v4-pro", vision: false },
-  ],
+  // DeepSeek выключен по решению владельца (13.10.2026). Вернуть: раскомментировать и запускать с --providers deepseek
+  // deepseek: [
+  //   { model: "deepseek-flash", vision: false },
+  //   { model: "deepseek-v4-pro", vision: false },
+  // ],
   // модели OpenAI заданы флагом --openai-models; без него стенд ищет по списку ключа «luna» и «sol» (иначе «nano»/«mini»)
   openai: [{ model: "AUTO_OPENAI", vision: true }],
 };

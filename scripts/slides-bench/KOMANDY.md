@@ -4,13 +4,13 @@
 
 **Что делает стенд.** Делает настоящие запросы к моделям (черновик на 5/10/15/20 слайдов, «сократить слайд», «перепиши», текст доклада), берёт из ответов токены, которые сам поставщик выставляет в счёт, и умножает на цену. На выходе — таблица «модель × размер → рубли» с отметкой, уложились ли в потолок (15 ₽ для 5–10 слайдов, 25 ₽ для 15–20).
 
-**Где какие ключи.** Anthropic (Claude) — на сервере бота. DeepSeek и OpenAI — на сервере сайта. Поэтому два запуска; в каждом команды идут в таком порядке: проверка → оценка → прогон → таблица.
+**Где какие ключи.** Anthropic (Claude) — на сервере бота. OpenAI — на сервере сайта (DeepSeek по решению владельца не сравниваем). Поэтому два запуска; в каждом команды идут в таком порядке: проверка → оценка → прогон → таблица.
 
 **Чтобы консоль не потерялась.** В каждой команде есть `--log файл.log`: весь вывод дублируется в файл. Файлы лежат в `/tmp` на сервере; результаты прогона (`out-*.json`) — тоже там.
 
 ---
 
-## 1. Сервер САЙТА (DeepSeek и OpenAI)
+## 1. Сервер САЙТА (OpenAI)
 
 Скрипт лежит в образе сайта: `/app/scripts/slides-bench/slides-bench.mjs` (после выкладки этого этапа). Node там есть.
 
@@ -23,13 +23,13 @@ cd /app
 node scripts/slides-bench/slides-bench.mjs --list-models --providers openai
 
 # 2) Проверка ключей и связи (копейки)
-node scripts/slides-bench/slides-bench.mjs --check --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-check.log
+node scripts/slides-bench/slides-bench.mjs --check --providers openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-check.log
 
 # 3) Оценка расхода БЕЗ запросов к моделям
-node scripts/slides-bench/slides-bench.mjs --dry-run --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-dry.log
+node scripts/slides-bench/slides-bench.mjs --dry-run --providers openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-dry.log
 
 # 4) Боевой прогон (минуты)
-node scripts/slides-bench/slides-bench.mjs --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --out /tmp/out-site.json --log /tmp/stend-site-run.log
+node scripts/slides-bench/slides-bench.mjs --providers openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --out /tmp/out-site.json --log /tmp/stend-site-run.log
 
 # 5) Таблица и файл-пакет для передачи
 node scripts/slides-bench/slides-bench.mjs merge /tmp/out-site.json --usd-rub 95 --out /tmp/stend-site.md --log /tmp/stend-site-merge.log
