@@ -14,26 +14,29 @@
 
 Скрипт лежит в образе сайта: `/app/scripts/slides-bench/slides-bench.mjs` (после выкладки этого этапа). Node там есть.
 
+Модели OpenAI для сравнения: **GPT-6 Luna** (самая дешёвая) и **GPT-6.1 Sol** (посильнее). Точные id и цены я не знаю (по сторонним сайтам Luna $0,10/$0,50, Sol $2/$10 за миллион токенов — **проверьте на platform.openai.com/pricing**). Ниже `LUNA` и `SOL` — это id из списка, `ВХОД/ВЫХОД` — цены в долларах за миллион токенов.
+
 ```bash
 cd /app
 
-# 1) Какие модели видны по ключу OpenAI — найдите «5.4 mini» и запишите точный id (в примерах ниже — ID)
+# 1) Какие модели видны по ключу OpenAI. В конце стенд напишет, какие «похожи на нужные» (luna, sol, nano, mini)
 node scripts/slides-bench/slides-bench.mjs --list-models --providers openai
 
-# 2) Проверка ключей и связи (копейки). Цена OpenAI — с сайта OpenAI, доллары за миллион токенов: ВХОД/ВЫХОД
-node scripts/slides-bench/slides-bench.mjs --check --providers deepseek,openai --price ID=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-check.log
+# 2) Проверка ключей и связи (копейки)
+node scripts/slides-bench/slides-bench.mjs --check --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-check.log
 
 # 3) Оценка расхода БЕЗ запросов к моделям
-node scripts/slides-bench/slides-bench.mjs --dry-run --providers deepseek,openai --price ID=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-dry.log
+node scripts/slides-bench/slides-bench.mjs --dry-run --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --log /tmp/stend-site-dry.log
 
 # 4) Боевой прогон (минуты)
-node scripts/slides-bench/slides-bench.mjs --providers deepseek,openai --openai-model ID --price ID=ВХОД/ВЫХОД --usd-rub 95 --out /tmp/out-site.json --log /tmp/stend-site-run.log
+node scripts/slides-bench/slides-bench.mjs --providers deepseek,openai --openai-models LUNA,SOL --price LUNA=ВХОД/ВЫХОД,SOL=ВХОД/ВЫХОД --usd-rub 95 --out /tmp/out-site.json --log /tmp/stend-site-run.log
 
 # 5) Таблица и файл-пакет для передачи
 node scripts/slides-bench/slides-bench.mjs merge /tmp/out-site.json --usd-rub 95 --out /tmp/stend-site.md --log /tmp/stend-site-merge.log
 cat /tmp/stend-site.md
 ```
 
+Если `--openai-models` не указать, стенд сам возьмёт по списку ключа модели с «luna» и «sol» в названии (а если их нет — «nano» и «mini»). Цену всё равно нужно указать, иначе модель будет пропущена.
 Если на сервере задан `MEDAP_USD_RUB_RATE`, `--usd-rub 95` можно не писать (подставьте свой курс вместо 95).
 
 ## 2. Сервер БОТА (Claude)

@@ -61,7 +61,8 @@ const PLAN = {
     { model: "deepseek-flash", vision: false },
     { model: "deepseek-v4-pro", vision: false },
   ],
-  openai: [{ model: "AUTO_MINI", vision: true }],
+  // модели OpenAI заданы флагом --openai-models; без него стенд ищет по списку ключа «luna» и «sol» (иначе «nano»/«mini»)
+  openai: [{ model: "AUTO_OPENAI", vision: true }],
 };
 
 const ENDPOINTS = {
@@ -127,7 +128,7 @@ if (flags.help || flags.h) {
   --log файл.log        дублировать весь вывод в файл (чтобы не потерялся при закрытии консоли)
   --sizes 5,10          только эти размеры (по умолчанию 5,10,15,20)
   --topics med,law,biz  только эти темы
-  --openai-model id     точный id модели OpenAI «mini» (иначе стенд выберет сам из списка по ключу)
+  --openai-models a,b   точные id моделей OpenAI через запятую, например luna и sol (иначе стенд найдёт сам по списку ключа)
   --price модель=вход/выход[,...]   цена в долларах за миллион токенов (обязательно для OpenAI)
   --cap anthropic=0.9   потолок расхода по поставщику, доллары (по умолчанию anthropic=0.9)
   --budget-rub 300      общий потолок в рублях (нужен MEDAP_USD_RUB_RATE или --usd-rub)
@@ -438,11 +439,33 @@ async function benchOne(provider, spec, topic, n, sample) {
   return { out, spent };
 }
 
-async function resolveOpenAiModel() {
-  if (typeof flags["openai-model"] === "string") return flags["openai-model"];
-  const ids = await listModels("openai");
-  const minis = ids.filter((id) => /mini/i.test(id) && !/audio|realtime|transcribe|tts|search|image/i.test(id)).sort();
-  return minis.at(-1) ?? null;
+const OPENAI_SKIP = /audio|realtime|transcribe|tts|search|image|embed|moderation|whisper|dall|codex|instruct|pro\b/i;
+
+/** Какие модели OpenAI брать: из флага; иначе по списку ключа — «luna» и «sol», а если их нет — «nano» и «mini» */
+async function resolveOpenAiModels() {
+  const manual = csv(flags["openai-models"]) ?? csv(flags["openai-model"]);
+  if (manual && manual.length) return manual;
+  const ids = (await listModels("openai")).filter((id) => !OPENAI_SKIP.test(id));
+  const pick = (word) => ids.filter((id) => new RegExp(word, "i").test(id)).sort().at(-1);
+  const found = ["luna", "sol"].map(pick).filter(Boolean);
+  if (found.length) return found;
+  return ["nano", "mini"].map(pick).filter(Boolean);
+}
+
+/** Развёртка списка запусков по поставщику: AUTO_OPENAI → конкретные модели */
+async function specsFor(provider) {
+  const out = [];
+  for (const spec of PLAN[provider] ?? []) {
+    if (spec.model !== "AUTO_OPENAI") {
+      out.push(spec);
+      continue;
+    }
+    const models = await resolveOpenAiModels();
+    if (models.length === 0) console.log("✗ openai: не нашёл подходящих моделей в списке; укажите --openai-models id1,id2");
+    else console.log(`• openai: беру модели ${models.map((m) => `«${m}»`).join(", ")}`);
+    for (const model of models) out.push({ ...spec, model });
+  }
+  return out;
 }
 
 async function runBench() {
@@ -465,16 +488,8 @@ async function runBench() {
       console.log(`✗ ${provider}: ключ не найден в окружении (${ENDPOINTS[provider].key}) — пропускаю`);
       continue;
     }
-    for (const spec0 of PLAN[provider] ?? []) {
-      let model = spec0.model;
-      if (model === "AUTO_MINI") {
-        model = await resolveOpenAiModel();
-        if (!model) {
-          console.log("✗ openai: не нашёл модель «mini» в списке; укажите --openai-model");
-          continue;
-        }
-        console.log(`• openai: беру модель «${model}»`);
-      }
+    for (const spec0 of await specsFor(provider)) {
+      const model = spec0.model;
       if (!prices[model]) {
         console.log(`✗ ${provider}/${model}: не задана цена. Добавьте --price ${model}=вход/выход (доллары за миллион токенов) — без неё не работает потолок расхода`);
         continue;
@@ -551,7 +566,11 @@ async function runList() {
     }
     try {
       const ids = await listModels(provider);
-      console.log(`${provider}: ключ есть, моделей ${ids.length}\n  ${ids.slice(0, 80).join("\n  ")}`);
+      console.log(`${provider}: ключ есть, моделей ${ids.length}\n  ${ids.slice(0, 120).join("\n  ")}`);
+      if (provider === "openai") {
+        const likely = ids.filter((id) => /luna|sol|nano|mini/i.test(id) && !OPENAI_SKIP.test(id));
+        console.log(`\nOpenAI: похоже на нужные («luna», «sol», «nano», «mini»): ${likely.join(", ") || "не нашёл"}\nДальше: --openai-models ${likely.slice(0, 2).join(",") || "ID1,ID2"} --price ID1=вход/выход,ID2=вход/выход`);
+      }
     } catch (e) {
       console.log(`${provider}: ключ есть, но список не получен — ${String(e.message).slice(0, 160)}`);
     }
@@ -564,13 +583,8 @@ async function runCheck() {
       console.log(`${provider}: ключа нет`);
       continue;
     }
-    for (const spec of PLAN[provider]) {
-      let model = spec.model;
-      if (model === "AUTO_MINI") model = await resolveOpenAiModel();
-      if (!model) {
-        console.log(`${provider}: модель «mini» не найдена`);
-        continue;
-      }
+    for (const spec of await specsFor(provider)) {
+      const model = spec.model;
       try {
         const res = await callModel(provider, model, { system: "Отвечай по-русски, одним словом.", user: "Ответь одним словом: готово", maxTokens: 300, json: false });
         const usd = costOf(model, res.usage);
