@@ -1,7 +1,7 @@
 """Vision / Test Solver (§16, §17, §53.2 ТЗ, этап 4A.4).
 
 ```
-Photo/Screenshot → VISION_EXTRACT (GPT-5.4 Mini) → question+options+diagram →
+Photo/Screenshot → VISION_EXTRACT (GPT-6 Luna) → question+options+diagram →
 confidence check → retrieval → solving → evidence verification → answer
 ```
 

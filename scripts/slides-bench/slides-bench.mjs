@@ -39,7 +39,13 @@ const PRICES = {
   "claude-sonnet-5-5": { input: 2, output: 10 },
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
   "deepseek-flash": { input: 0.14, output: 0.28 },
+  // OpenAI GPT-6, цены подтвердил владелец 13.10.2026. id Luna сверен с developers.openai.com; id Sol — по прессе и OpenRouter (проверить через --list-models)
+  "gpt-6-luna": { input: 0.1, output: 0.5 },
+  "gpt-6.1-sol": { input: 2, output: 10 },
 };
+
+/** Модели OpenAI по умолчанию; другие — флагом --openai-models (цену тогда добавить через --price) */
+const OPENAI_DEFAULT_MODELS = ["gpt-6-luna", "gpt-6.1-sol"];
 
 const TOPICS = [
   { id: "med", kind: "lecture", title: "Хроническая сердечная недостаточность", about: "учебная лекция для студентов-медиков" },
@@ -62,7 +68,7 @@ const PLAN = {
   //   { model: "deepseek-flash", vision: false },
   //   { model: "deepseek-v4-pro", vision: false },
   // ],
-  // модели OpenAI заданы флагом --openai-models; без него стенд ищет по списку ключа «luna» и «sol» (иначе «nano»/«mini»)
+  // модели OpenAI — OPENAI_DEFAULT_MODELS, либо флаг --openai-models
   openai: [{ model: "AUTO_OPENAI", vision: true }],
 };
 
@@ -129,8 +135,8 @@ if (flags.help || flags.h) {
   --log файл.log        дублировать весь вывод в файл (чтобы не потерялся при закрытии консоли)
   --sizes 5,10          только эти размеры (по умолчанию 5,10,15,20)
   --topics med,law,biz  только эти темы
-  --openai-models a,b   точные id моделей OpenAI через запятую, например luna и sol (иначе стенд найдёт сам по списку ключа)
-  --price модель=вход/выход[,...]   цена в долларах за миллион токенов (обязательно для OpenAI)
+  --openai-models a,b   id моделей OpenAI через запятую (по умолчанию gpt-6-luna и gpt-6.1-sol, цены уже зашиты)
+  --price модель=вход/выход[,...]   своя цена в долларах за миллион токенов (нужна только для моделей, которых нет в таблице)
   --cap anthropic=0.9   потолок расхода по поставщику, доллары (по умолчанию anthropic=0.9)
   --budget-rub 300      общий потолок в рублях (нужен MEDAP_USD_RUB_RATE или --usd-rub)
   --usd-rub 95          курс доллара
@@ -440,17 +446,10 @@ async function benchOne(provider, spec, topic, n, sample) {
   return { out, spent };
 }
 
-const OPENAI_SKIP = /audio|realtime|transcribe|tts|search|image|embed|moderation|whisper|dall|codex|instruct|pro\b/i;
-
-/** Какие модели OpenAI брать: из флага; иначе по списку ключа — «luna» и «sol», а если их нет — «nano» и «mini» */
-async function resolveOpenAiModels() {
+/** Какие модели OpenAI брать: из флага --openai-models; иначе Luna и Sol */
+function resolveOpenAiModels() {
   const manual = csv(flags["openai-models"]) ?? csv(flags["openai-model"]);
-  if (manual && manual.length) return manual;
-  const ids = (await listModels("openai")).filter((id) => !OPENAI_SKIP.test(id));
-  const pick = (word) => ids.filter((id) => new RegExp(word, "i").test(id)).sort().at(-1);
-  const found = ["luna", "sol"].map(pick).filter(Boolean);
-  if (found.length) return found;
-  return ["nano", "mini"].map(pick).filter(Boolean);
+  return manual && manual.length ? manual : OPENAI_DEFAULT_MODELS;
 }
 
 /** Развёртка списка запусков по поставщику: AUTO_OPENAI → конкретные модели */
@@ -461,7 +460,7 @@ async function specsFor(provider) {
       out.push(spec);
       continue;
     }
-    const models = await resolveOpenAiModels();
+    const models = resolveOpenAiModels();
     if (models.length === 0) console.log("✗ openai: не нашёл подходящих моделей в списке; укажите --openai-models id1,id2");
     else console.log(`• openai: беру модели ${models.map((m) => `«${m}»`).join(", ")}`);
     for (const model of models) out.push({ ...spec, model });
@@ -569,8 +568,9 @@ async function runList() {
       const ids = await listModels(provider);
       console.log(`${provider}: ключ есть, моделей ${ids.length}\n  ${ids.slice(0, 120).join("\n  ")}`);
       if (provider === "openai") {
-        const likely = ids.filter((id) => /luna|sol|nano|mini/i.test(id) && !OPENAI_SKIP.test(id));
-        console.log(`\nOpenAI: похоже на нужные («luna», «sol», «nano», «mini»): ${likely.join(", ") || "не нашёл"}\nДальше: --openai-models ${likely.slice(0, 2).join(",") || "ID1,ID2"} --price ID1=вход/выход,ID2=вход/выход`);
+        const gpt6 = ids.filter((id) => /gpt-6/i.test(id));
+        console.log(`\nOpenAI, семейство GPT-6 в вашем списке: ${gpt6.join(", ") || "не нашёл"}`);
+        for (const m of resolveOpenAiModels()) console.log(`  ${ids.includes(m) ? "✓ есть" : "✗ НЕТ В СПИСКЕ"}: ${m}${ids.includes(m) ? "" : " — запрос к нему даст ошибку; точный id укажите через --openai-models"}`);
       }
     } catch (e) {
       console.log(`${provider}: ключ есть, но список не получен — ${String(e.message).slice(0, 160)}`);

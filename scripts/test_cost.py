@@ -29,22 +29,22 @@ def main() -> None:
     p = profile()
 
     # Тариф: вход / кеш / выход за миллион токенов
-    assert approx(p.input_price_usd, 0.75), p.input_price_usd
-    assert approx(p.cached_input_price_usd, 0.075), p.cached_input_price_usd
-    assert approx(p.output_price_usd, 4.50), p.output_price_usd
+    assert approx(p.input_price_usd, 0.10), p.input_price_usd
+    assert approx(p.cached_input_price_usd, 0.01), p.cached_input_price_usd
+    assert approx(p.output_price_usd, 0.50), p.output_price_usd
 
     # Без кеша: 18 750 входных и 11 062 выходных
-    expected = (18_750 * 0.75 + 11_062 * 4.50) / 1_000_000
+    expected = (18_750 * 0.10 + 11_062 * 0.50) / 1_000_000
     assert approx(cost_usd(p, 18_750, 0, 11_062), expected)
 
     # Кеш вычитается из полного входа и берётся по своей ставке
     with_cache = cost_usd(p, 18_750, 12_000, 11_062)
-    expected_cached = ((18_750 - 12_000) * 0.75 + 12_000 * 0.075 + 11_062 * 4.50) / 1_000_000
+    expected_cached = ((18_750 - 12_000) * 0.10 + 12_000 * 0.01 + 11_062 * 0.50) / 1_000_000
     assert approx(with_cache, expected_cached)
     assert with_cache < cost_usd(p, 18_750, 0, 11_062)
 
     # Кеша больше входа — не уходим в минус
-    assert approx(cost_usd(p, 100, 500, 0), 500 * 0.075 / 1_000_000)
+    assert approx(cost_usd(p, 100, 500, 0), 500 * 0.01 / 1_000_000)
 
     # Рубли по курсу из настроек
     assert approx(to_rub(1.0), settings.USD_RUB_RATE)

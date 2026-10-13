@@ -29,7 +29,7 @@
   эндпоинтом не сделан — то же самое уже возвращают `incorrect`/`causalErrors`/`contradictions` в
   ответе evaluate.
 - **Батч 3 (готов):** 4A.4 Vision/Test Solver. `app/workflows/vision.py`:
-  `extract_from_image()` — VISION_EXTRACT (GPT-5.4 Mini, multi-part image_url content в сообщении,
+  `extract_from_image()` — VISION_EXTRACT (GPT-6 Luna, multi-part image_url content в сообщении,
   `image_units=1` в телеметрию расхода) распознаёт вопрос/варианты/схему с фото, возвращает confidence;
   при `confidence < 0.5` или пустом вопросе — `needs_retake=True`, честная просьба переснять, а не
   угадывание нечитаемого текста. Распознанный вопрос решается через ОБЫЧНЫЙ Evidence-конвейер
@@ -370,7 +370,7 @@ Repair короткий и адресный: при локальной ошиб�
 ## 4A.4. Vision и Test Solver (§16, §17, §53.2)
 
 ```
-Photo/Screenshot → VISION_EXTRACT (GPT-5.4 Mini) → question + options + diagram →
+Photo/Screenshot → VISION_EXTRACT (GPT-6 Luna) → question + options + diagram →
 confidence check → trusted retrieval → solving → evidence verification → answer
 ```
 

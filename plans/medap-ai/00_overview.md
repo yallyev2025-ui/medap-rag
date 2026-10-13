@@ -42,7 +42,7 @@ MEDAP EDUCATIONAL WEBSITE        TELEGRAM BOT
 | Хостинг | Timeweb Cloud App Platform, регион Нидерланды, сборка из Dockerfile |
 | БД | Managed PostgreSQL Timeweb, расширение `pgvector` включено в панели |
 | Хранилище оригиналов | S3 Timeweb (этап 2) |
-| Провайдеры LLM | DeepSeek V4.1 Flash + GPT-5.4 Mini по `TaskModelMap` (§56.5) |
+| Провайдеры LLM | DeepSeek V4.1 Flash + GPT-6 Luna по `TaskModelMap` (§56.5) |
 | Данные с Railway | Не переносятся — учебники грузятся заново через админку |
 | Процессы | Один процесс: Telegram polling + API + админка (модели в памяти один раз) |
 | UI админки | Server-rendered Jinja2 + HTMX, без отдельной фронтенд-сборки |

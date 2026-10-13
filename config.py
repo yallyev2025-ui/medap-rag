@@ -58,12 +58,13 @@ class Settings(BaseSettings):
     CONSPECT_MAX_FRAGMENTS: int = 36
     CONSPECT_CONCURRENCY: int = 2
     CONSPECT_MAX_OUTPUT_TOKENS: int = 8192
-    # Модель OpenAI: Vision (фото тестов), оценка ответов студента. По ТЗ — GPT-5.4 Mini
-    # (дешёвая и хорошо читает изображения). Если OpenAI ответит «модели нет», сервис
-    # сам попробует запасные из OPENAI_MODEL_FALLBACKS и запомнит рабочую.
-    OPENAI_MODEL: str = "gpt-5.4-mini"
+    # Модель OpenAI: ответы студентам (в т.ч. глубокий режим), конспекты, Vision (фото
+    # тестов), оценка ответов. С 13.10.2026 — GPT-6 Luna (дешевле и лучше GPT-5.4 Mini).
+    # Если OpenAI ответит «модели нет», сервис сам попробует запасные из
+    # OPENAI_MODEL_FALLBACKS и запомнит рабочую.
+    OPENAI_MODEL: str = "gpt-6-luna"
     # Запасные модели через запятую, пробуются по порядку при 404 / model_not_found.
-    OPENAI_MODEL_FALLBACKS: str = "gpt-5-mini,gpt-4.1-mini"
+    OPENAI_MODEL_FALLBACKS: str = "gpt-5.4-mini,gpt-4.1-mini"
     # УСТАРЕЛО: выбор модели теперь делает TaskModelMap (app/llm/task_map.py).
     # Поле оставлено, чтобы не падал старый .env; значение больше не используется.
     CLINREK_OPENAI_MODEL: str = "gpt-4.1"
@@ -77,7 +78,7 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
-    # GPT-5.4 Mini — восприятие (Vision) и оценка ответов студента. Пусто = берём
+    # GPT-6 Luna — восприятие (Vision) и оценка ответов студента. Пусто = берём
     # OPENAI_MODEL, чтобы переезд не менял модель на проде молча. При смене модели
     # обязательно обновить цены ниже — они версионируются вместе с PRICING_VERSION.
     OPENAI_EVAL_MODEL: str = ""
@@ -125,13 +126,13 @@ class Settings(BaseSettings):
     DNS_FALLBACK_ENABLED: bool = True
 
     # --- Цены провайдеров (§59, §64). Доллары за 1M токенов, с версией и датой -----
-    PRICING_VERSION: str = "2026-09-19"
+    PRICING_VERSION: str = "2026-10-13"
     DEEPSEEK_INPUT_PRICE_USD: float = 0.30
     DEEPSEEK_CACHED_INPUT_PRICE_USD: float = 0.03
     DEEPSEEK_OUTPUT_PRICE_USD: float = 1.20
-    OPENAI_EVAL_INPUT_PRICE_USD: float = 0.75
-    OPENAI_EVAL_CACHED_INPUT_PRICE_USD: float = 0.075
-    OPENAI_EVAL_OUTPUT_PRICE_USD: float = 4.50
+    OPENAI_EVAL_INPUT_PRICE_USD: float = 0.10
+    OPENAI_EVAL_CACHED_INPUT_PRICE_USD: float = 0.01
+    OPENAI_EVAL_OUTPUT_PRICE_USD: float = 0.50
     # Whisper API тарифицируется по минутам аудио, не по токенам ($ за минуту).
     OPENAI_WHISPER_PRICE_USD_PER_MINUTE: float = 0.006
     # Курс для перевода стоимости в рубли на дашборде (курс ЦБ на дату baseline).

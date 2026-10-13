@@ -77,7 +77,7 @@ FastAPI-приложение остаётся одно (`api/main.py`), новы
   | Задача | Модель |
   |---|---|
   | `GROUNDED_QA`, `EXPLAIN`, `CLASS_QUICK`, `TEST_SOLVE_TEXT`, `DOCUMENT_QA`, `TARGETED_REPAIR` | DeepSeek V4.1 Flash |
-  | `VISION_EXTRACT`, `RECALL_EVALUATE`, `FREE_RECALL_EVALUATE`, `ORAL_EVALUATE`, `ERROR_DIAGNOSIS`, `CLAIM_EVIDENCE_CHECK` | GPT-5.4 Mini |
+  | `VISION_EXTRACT`, `RECALL_EVALUATE`, `FREE_RECALL_EVALUATE`, `ORAL_EVALUATE`, `ERROR_DIAGNOSIS`, `CLAIM_EVIDENCE_CHECK` | GPT-6 Luna |
 
   Маппинг — конфигурация, не код. Никакого LLM-роутера на каждый запрос (§66).
 - `ModelProfile` (§60): provider, modelId, capabilities, supportsVision, supportsStructuredOutput,

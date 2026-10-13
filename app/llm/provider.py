@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 # Понятное пользователю сообщение: детали провайдера наружу не выносим.
 PROVIDER_ERROR_MESSAGE = "Произошла ошибка, попробуй позже."
 
-# У «рассуждающих» моделей OpenAI (GPT-5.x, o-серия) часть лимита вывода уходит на
+# У «рассуждающих» моделей OpenAI (GPT-5.x, GPT-6.x, o-серия) часть лимита вывода уходит на
 # «мысли»; при малом лимите ответ получается пустым — держим нижний порог.
 REASONING_MIN_OUTPUT_TOKENS = 2000
-_REASONING_MODEL = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
+_REASONING_MODEL = re.compile(r"^(gpt-[56]|o\d)", re.IGNORECASE)
 
 
 class LLMError(RuntimeError):
@@ -354,7 +354,7 @@ def _build_request(
 ) -> dict[str, Any]:
     """Тело запроса под конкретного провайдера и модель.
 
-    OpenAI: `max_completion_tokens` (его понимают и gpt-4.1, и GPT-5.x), а у
+    OpenAI: `max_completion_tokens` (его понимают и gpt-4.1, и GPT-5.x/6.x), а у
     рассуждающих моделей нет произвольной `temperature`, зато есть
     `reasoning_effort` — для разбора фото и оценки глубокие рассуждения не нужны.
     DeepSeek остаётся на классическом `max_tokens` + `temperature`.

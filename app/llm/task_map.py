@@ -54,7 +54,7 @@ class Task(str, Enum):
     CONTENT_CASE = "CONTENT_CASE"
     # Конспект по пунктам темы для сайта владельца (батч 30): КРАТКИЙ и ПОДРОБНЫЙ.
     CONSPECT_WRITE = "CONSPECT_WRITE"
-    # Восприятие и оценка студента — GPT-5.4 Mini (§56.2).
+    # Восприятие и оценка студента — GPT-6 Luna (§56.2; раньше GPT-5.4 Mini).
     VISION_EXTRACT = "VISION_EXTRACT"
     RECALL_EVALUATE = "RECALL_EVALUATE"
     FREE_RECALL_EVALUATE = "FREE_RECALL_EVALUATE"

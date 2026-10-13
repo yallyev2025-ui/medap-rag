@@ -172,7 +172,7 @@ async def evaluate_recall(
     source_type: str = SOURCE_TEXTBOOK,
     subject: str | None = None,
 ) -> EvaluationResult:
-    """Студент отвечает на КОНКРЕТНЫЙ вопрос — RECALL_EVALUATE (GPT-5.4 Mini, §56.2)."""
+    """Студент отвечает на КОНКРЕТНЫЙ вопрос — RECALL_EVALUATE (GPT-6 Luna, §56.2)."""
     return await _evaluate(question, student_answer, Task.RECALL_EVALUATE, source_type, subject)
 
 
@@ -195,7 +195,7 @@ async def evaluate_oral(
     filename: str = "voice.ogg",
 ) -> EvaluationResult:
     """Устный ответ (§20 ТЗ, этап 4A.7): аудио → транскрипт (Whisper) → та же
-    оценка, что и текстовый Recall (ORAL_EVALUATE, GPT-5.4 Mini). Сбой STT или
+    оценка, что и текстовый Recall (ORAL_EVALUATE, GPT-6 Luna). Сбой STT или
     неразборчивая запись — честная просьба перезаписать, а не угадывание
     содержания по обрывкам."""
     try:
