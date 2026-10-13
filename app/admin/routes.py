@@ -15,13 +15,15 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
+from app.admin import slides_bench
 from app.admin.health import system_health
 from app.admin.stats import dashboard_stats
 from app.evidence.viewer import fetch_evidence
@@ -1230,3 +1232,43 @@ async def evals_benchmark(request: Request):
         await session.commit()
     await audit("benchmark_run", details=", ".join(p["provider"] for p in report["providers"]))
     return RedirectResponse(url="/admin/evals#benchmark", status_code=303)
+
+
+@router.get("/slides-bench", response_class=HTMLResponse)
+async def slides_bench_page(request: Request):
+    """Стенд замеров стоимости презентаций (Medap Slide, этап 1): запуск из браузера."""
+    if not is_admin(request):
+        return _login_redirect()
+    return templates.TemplateResponse(
+        request,
+        "slides_bench.html",
+        {
+            "modes": slides_bench.MODES,
+            "node_ok": slides_bench.node_path() is not None,
+            "keys": slides_bench.keys_present(),
+            "usd_rub": settings.USD_RUB_RATE,
+            "error": request.query_params.get("error", ""),
+            "state": slides_bench.status(),
+            "log": slides_bench.read_log(),
+            "results": slides_bench.read_results(),
+        },
+    )
+
+
+@router.post("/slides-bench/start")
+async def slides_bench_start(request: Request, mode: str = Form(...), usd_rub: float = Form(...)):
+    if not is_admin(request):
+        return _login_redirect()
+    error = slides_bench.start(mode, usd_rub)
+    if error is None:
+        await audit("slides_bench_start", target=mode, details=f"usd_rub={usd_rub}")
+        return RedirectResponse(url="/admin/slides-bench", status_code=303)
+    return RedirectResponse(url="/admin/slides-bench?error=" + quote(error), status_code=303)
+
+
+@router.get("/slides-bench/state")
+async def slides_bench_state(request: Request):
+    """Живое состояние для автообновления страницы (без перезагрузки)."""
+    if not is_admin(request):
+        return JSONResponse({"error": "auth"}, status_code=401)
+    return {"state": slides_bench.status(), "log": slides_bench.read_log(), "results": slides_bench.read_results()}

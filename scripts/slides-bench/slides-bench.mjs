@@ -632,8 +632,9 @@ function runMerge() {
       const total = avg(sum);
       const ceil = CEILING_RUB[n];
       const totalRub = rub(total);
-      const flag = totalRub === null ? "" : totalRub <= ceil ? " ✅" : " ❌";
       const validPct = (rs.filter((r) => r.valid.jsonOk && r.valid.countOk && r.valid.typesOk && r.valid.fieldsOk).length / rs.length) * 100;
+      // пока модель не даёт валидный ответ, «уложились в потолок» ничего не значит: затраты неполные
+      const flag = totalRub === null ? "" : validPct < 50 ? " ⚠️ мало валидных ответов" : totalRub <= ceil ? " ✅" : " ❌";
       lines.push(
         `| ${model} | ${n} | ${f1(rub(avg((r) => phaseUsd(r, ["draft"]))))} | ${f1(rub(avg((r) => phaseUsd(r, ["design", "vision"]))))} | ${f1(rub(avg((r) => phaseUsd(r, ["rewrite", "notes"]))))} | **${f1(totalRub)}**${flag} | ${ceil} | ${f1(avg((r) => (r.phases.draft?.ms ?? 0) / 1000))} | ${validPct.toFixed(0)} |`,
       );

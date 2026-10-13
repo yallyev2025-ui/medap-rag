@@ -8,6 +8,7 @@ FROM python:3.12-slim
 # - tesseract-ocr + rus/eng — распознавание текста со сканов учебников
 # - poppler-utils — pdf2image конвертирует страницы PDF в картинки (pdftoppm)
 # - curl — healthcheck контейнера
+# - nodejs — стенд замеров презентаций в админке (scripts/slides-bench, Node 18+)
 # Повторы при скачивании: DNS сборщика Timeweb периодически не отвечает, одна
 # неудачная попытка не должна валить весь деплой.
 RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
@@ -16,6 +17,7 @@ RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 instal
         tesseract-ocr-eng \
         poppler-utils \
         curl \
+        nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
