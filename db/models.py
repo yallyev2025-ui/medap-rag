@@ -13,6 +13,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -412,4 +413,41 @@ class TaskModelOverride(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="admin")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SlidesBenchRun(Base):
+    """Прогон стенда замеров Medap Slide (админка → «Стенд презентаций»).
+
+    Результаты живут в БД, а не во временной папке контейнера: выкладка бота стирает /tmp,
+    а повторный прогон стоит денег (владелец 14.10.2026: «всё сохранять, чтобы заново не делать»).
+    """
+
+    __tablename__ = "slides_bench_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # list | check | dry | examples
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    # running → done | error
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    usd_rub: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    log: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Таблица стоимости (markdown) — только у прогона «examples»
+    table_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SlidesBenchFile(Base):
+    """Готовый файл прогона: PPTX/PDF презентации, JSON с черновиками, отчёт вёрстки."""
+
+    __tablename__ = "slides_bench_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(Integer, ForeignKey("slides_bench_runs.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

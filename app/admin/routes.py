@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
@@ -1236,9 +1236,11 @@ async def evals_benchmark(request: Request):
 
 @router.get("/slides-bench", response_class=HTMLResponse)
 async def slides_bench_page(request: Request):
-    """Стенд замеров стоимости презентаций (Medap Slide, этап 1): запуск из браузера."""
+    """Стенд замеров стоимости презентаций (Medap Slide, этап 1): примеры Luna и Sonnet готовыми файлами."""
     if not is_admin(request):
         return _login_redirect()
+    raw_run = request.query_params.get("run", "")
+    run, files = await slides_bench.run_details(int(raw_run) if raw_run.isdigit() else None)
     return templates.TemplateResponse(
         request,
         "slides_bench.html",
@@ -1249,8 +1251,11 @@ async def slides_bench_page(request: Request):
             "usd_rub": settings.USD_RUB_RATE,
             "error": request.query_params.get("error", ""),
             "state": slides_bench.status(),
-            "log": slides_bench.read_log(),
-            "results": slides_bench.read_results(),
+            "live_log": slides_bench.read_live_log(),
+            "run": run,
+            "files": files,
+            "fmap": {f["name"]: f["id"] for f in files},
+            "runs": await slides_bench.list_runs(),
         },
     )
 
@@ -1259,7 +1264,7 @@ async def slides_bench_page(request: Request):
 async def slides_bench_start(request: Request, mode: str = Form(...), usd_rub: float = Form(...)):
     if not is_admin(request):
         return _login_redirect()
-    error = slides_bench.start(mode, usd_rub)
+    error = await slides_bench.start(mode, usd_rub)
     if error is None:
         await audit("slides_bench_start", target=mode, details=f"usd_rub={usd_rub}")
         return RedirectResponse(url="/admin/slides-bench", status_code=303)
@@ -1271,4 +1276,27 @@ async def slides_bench_state(request: Request):
     """Живое состояние для автообновления страницы (без перезагрузки)."""
     if not is_admin(request):
         return JSONResponse({"error": "auth"}, status_code=401)
-    return {"state": slides_bench.status(), "log": slides_bench.read_log(), "results": slides_bench.read_results()}
+    state = slides_bench.status()
+    run, files = await slides_bench.run_details(state["run_id"]) if state["run_id"] else (None, [])
+    done = run is not None and run.status != "running"
+    return {
+        "state": state,
+        "log": run.log if done else slides_bench.read_live_log(),
+        "files": files if done else [],
+        "table": run.table_md if done else "",
+    }
+
+
+@router.get("/slides-bench/files/{file_id}")
+async def slides_bench_file(request: Request, file_id: int):
+    """Скачивание готового файла (PPTX, PDF, JSON) из БД."""
+    if not is_admin(request):
+        return _login_redirect()
+    row = await slides_bench.get_file(file_id)
+    if row is None:
+        return HTMLResponse("Файл не найден", status_code=404)
+    return Response(
+        content=row.content,
+        media_type=row.content_type,
+        headers={"Content-Disposition": f'attachment; filename="{row.name}"', "X-Content-SHA256": row.sha256},
+    )

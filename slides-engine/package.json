@@ -1,0 +1,12 @@
+{
+  "name": "medap-slides-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Движок вёрстки презентаций Medap Slide (копия собранного packages/slides из репозитория сайта). Ставится в образ бота отдельно, чтобы собирать PPTX и PDF прямо в админке.",
+  "dependencies": {
+    "fontkit": "2.0.4",
+    "pptxgenjs": "4.0.1",
+    "skia-canvas": "4.0.0"
+  }
+}

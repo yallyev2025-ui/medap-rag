@@ -44,8 +44,8 @@ const PRICES = {
   "gpt-6.1-sol": { input: 2, output: 10 },
 };
 
-/** Модели OpenAI по умолчанию; другие — флагом --openai-models (цену тогда добавить через --price) */
-const OPENAI_DEFAULT_MODELS = ["gpt-6-luna", "gpt-6.1-sol"];
+/** Модели OpenAI по умолчанию (Sol убран 14.10.2026: медленный, цена как у Sonnet); другие — флагом --openai-models */
+const OPENAI_DEFAULT_MODELS = ["gpt-6-luna"];
 
 const TOPICS = [
   { id: "med", kind: "lecture", title: "Хроническая сердечная недостаточность", about: "учебная лекция для студентов-медиков" },
@@ -57,12 +57,9 @@ const SIZES = [5, 10, 15, 20];
 
 const BLOCK_TYPES = ["statement", "text", "compare", "stat", "quote", "steps", "timeline", "table", "photo"];
 
-/** Что запускаем по поставщикам. `topics` ограничивает темы (Sonnet — только две, чтобы уложиться в баланс) */
+/** Что запускаем по поставщикам. Решение владельца 14.10.2026: только Luna и Sonnet (Haiku и Sol убраны), все три темы */
 const PLAN = {
-  anthropic: [
-    { model: "claude-haiku-5-5", vision: true },
-    { model: "claude-sonnet-5-5", vision: true, topics: ["med", "biz"] },
-  ],
+  anthropic: [{ model: "claude-sonnet-5-5", vision: true }],
   // DeepSeek выключен по решению владельца (13.10.2026). Вернуть: раскомментировать и запускать с --providers deepseek
   // deepseek: [
   //   { model: "deepseek-flash", vision: false },
@@ -136,6 +133,9 @@ if (flags.help || flags.h) {
   --sizes 5,10          только эти размеры (по умолчанию 5,10,15,20)
   --topics med,law,biz  только эти темы
   --openai-models a,b   id моделей OpenAI через запятую (по умолчанию gpt-6-luna и gpt-6.1-sol, цены уже зашиты)
+  --models luna,sonnet  оставить только модели, в названии которых есть эти слова
+  --no-pack             (merge) только таблица, без файла-пакета и безымянных черновиков
+  --phases draft        только черновик (без сокращения, зрения, пересказа и доклада): самый дешёвый прогон
   --price модель=вход/выход[,...]   своя цена в долларах за миллион токенов (нужна только для моделей, которых нет в таблице)
   --cap anthropic=0.9   потолок расхода по поставщику, доллары (по умолчанию anthropic=0.9)
   --budget-rub 300      общий потолок в рублях (нужен MEDAP_USD_RUB_RATE или --usd-rub)
@@ -422,6 +422,9 @@ async function benchOne(provider, spec, topic, n, sample) {
   }
   const slides = parsed.slides;
 
+  // --phases draft: только черновик (без сокращения, зрения, пересказа и доклада) — самый дешёвый прогон для примеров
+  if (flags.phases === "draft") return { out, spent };
+
   // 2) дизайн: сокращение самых длинных слайдов
   const k = Math.max(1, Math.ceil(n * 0.25));
   const longest = [...slides].map((s, i) => ({ s, i })).filter(({ s }) => !["title", "end"].includes(s?.blockType)).sort((a, b) => slideChars(b.s) - slideChars(a.s)).slice(0, k);
@@ -488,8 +491,10 @@ async function runBench() {
       console.log(`✗ ${provider}: ключ не найден в окружении (${ENDPOINTS[provider].key}) — пропускаю`);
       continue;
     }
+    const onlyModels = csv(flags.models);
     for (const spec0 of await specsFor(provider)) {
       const model = spec0.model;
+      if (onlyModels && !onlyModels.some((m) => model.includes(m))) continue;
       if (!prices[model]) {
         console.log(`✗ ${provider}/${model}: не задана цена. Добавьте --price ${model}=вход/выход (доллары за миллион токенов) — без неё не работает потолок расхода`);
         continue;
@@ -544,10 +549,11 @@ function dryRun(jobs, usdRub) {
   for (const j of jobs) {
     const p = prices[j.spec.model];
     const n = j.n;
-    const k = Math.max(1, Math.ceil(n * 0.25));
-    const m = j.spec.vision ? Math.max(1, Math.ceil(n * 0.3)) : 0;
-    const input = 700 + n * 120 + k * (500 + 150) + m * 2200 + 500 + (400 + n * 40);
-    const output = n * 330 + k * 150 + m * 60 + 200 + n * 120;
+    const draftOnly = flags.phases === "draft";
+    const k = draftOnly ? 0 : Math.max(1, Math.ceil(n * 0.25));
+    const m = !draftOnly && j.spec.vision ? Math.max(1, Math.ceil(n * 0.3)) : 0;
+    const input = 700 + n * 120 + k * (500 + 150) + m * 2200 + (draftOnly ? 0 : 500 + (400 + n * 40));
+    const output = n * 330 + k * 150 + m * 60 + (draftOnly ? 0 : 200 + n * 120);
     const usd = (input * p.input + output * p.output) / 1_000_000;
     total += usd;
     lines.push(`  ${j.spec.model.padEnd(18)} ${j.topic.id} ${String(n).padStart(2)} сл.  ≈ $${usd.toFixed(4)}`);
@@ -614,6 +620,7 @@ function runMerge() {
   const sum = (r) => Object.values(r.phases ?? {}).reduce((a, p) => a + p.usd, 0);
   const phaseUsd = (r, names) => names.reduce((a, n) => a + (r.phases?.[n]?.usd ?? 0), 0);
   const rub = (usd) => (usdRub ? usd * usdRub : null);
+  const hasPhase = (rs, names) => rs.some((r) => names.some((n) => r.phases?.[n]));
   const f1 = (v) => (v === null || v === undefined ? "—" : v.toFixed(1));
 
   const done = runs.filter((r) => r.phases && r.valid);
@@ -636,7 +643,7 @@ function runMerge() {
       // пока модель не даёт валидный ответ, «уложились в потолок» ничего не значит: затраты неполные
       const flag = totalRub === null ? "" : validPct < 50 ? " ⚠️ мало валидных ответов" : totalRub <= ceil ? " ✅" : " ❌";
       lines.push(
-        `| ${model} | ${n} | ${f1(rub(avg((r) => phaseUsd(r, ["draft"]))))} | ${f1(rub(avg((r) => phaseUsd(r, ["design", "vision"]))))} | ${f1(rub(avg((r) => phaseUsd(r, ["rewrite", "notes"]))))} | **${f1(totalRub)}**${flag} | ${ceil} | ${f1(avg((r) => (r.phases.draft?.ms ?? 0) / 1000))} | ${validPct.toFixed(0)} |`,
+        `| ${model} | ${n} | ${f1(rub(avg((r) => phaseUsd(r, ["draft"]))))} | ${hasPhase(rs, ["design", "vision"]) ? f1(rub(avg((r) => phaseUsd(r, ["design", "vision"])))) : "—"} | ${hasPhase(rs, ["rewrite", "notes"]) ? f1(rub(avg((r) => phaseUsd(r, ["rewrite", "notes"])))) : "—"} | **${f1(totalRub)}**${flag} | ${ceil} | ${f1(avg((r) => (r.phases.draft?.ms ?? 0) / 1000))} | ${validPct.toFixed(0)} |`,
       );
     }
   }
@@ -657,6 +664,12 @@ function runMerge() {
 
   const outFile = typeof flags.out === "string" ? flags.out : "stend-results.md";
   writeFileSync(outFile, lines.join("\n") + "\n");
+
+  // --no-pack: только таблица (админка собирает готовые файлы сама, пакет для передачи не нужен)
+  if (flags["no-pack"]) {
+    console.log(`Таблица: ${outFile}`);
+    return;
+  }
 
   // безымянные черновики для слепого сравнения: A, B, C … + ключ
   const dir = outFile.replace(/\.md$/, "") + "-blind";

@@ -8,7 +8,7 @@ FROM python:3.12-slim
 # - tesseract-ocr + rus/eng — распознавание текста со сканов учебников
 # - poppler-utils — pdf2image конвертирует страницы PDF в картинки (pdftoppm)
 # - curl — healthcheck контейнера
-# - nodejs — стенд замеров презентаций в админке (scripts/slides-bench, Node 18+)
+# - libfontconfig1 — нужен skia-canvas (PDF презентаций в админке, «Стенд презентаций»)
 # Повторы при скачивании: DNS сборщика Timeweb периодически не отвечает, одна
 # неудачная попытка не должна валить весь деплой.
 RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
@@ -17,7 +17,7 @@ RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 instal
         tesseract-ocr-eng \
         poppler-utils \
         curl \
-        nodejs \
+        libfontconfig1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -63,6 +63,19 @@ RUN if [ "$BUILD_ONNX_RERANKER" = "1" ]; then \
         python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" --per-channel --out /opt/models/reranker-onnx-int8-pc \
             || echo "Вариант -pc (per-channel) не собран"; \
     fi
+
+# Движок вёрстки презентаций (Medap Slide) для страницы админки «Стенд презентаций»: Node.js 22 из
+# официального архива (в apt-версии Node и npm старые) и зависимости движка в /opt/slides-engine.
+# Стоит ПОСЛЕ тяжёлых слоёв (torch, веса моделей): правка кода их не пересобирает.
+ARG NODE_VERSION=22.11.0
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+        | tar -xz -C /usr/local --strip-components=1 --exclude='*/share/doc' --exclude='*/CHANGELOG.md' \
+    && node -v && npm -v
+COPY slides-engine/package.json slides-engine/package-lock.json /opt/slides-engine/
+RUN cd /opt/slides-engine && npm ci --omit=dev --no-audit --no-fund
+COPY slides-engine/dist /opt/slides-engine/dist
+COPY slides-engine/fonts /opt/slides-engine/fonts
+COPY slides-engine/render-drafts.mjs /opt/slides-engine/render-drafts.mjs
 
 COPY . .
 

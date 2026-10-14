@@ -225,3 +225,5 @@ eval/last_*.txt
 
 # результаты стенда презентаций
 scripts/slides-bench/out*.json
+slides-engine/node_modules/
+!slides-engine/dist/

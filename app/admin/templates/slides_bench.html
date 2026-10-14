@@ -3,9 +3,8 @@
 {% block content %}
 <h1>Стенд презентаций</h1>
 <p class="sub">
-  Замер стоимости и скорости презентаций у моделей Claude и OpenAI (Medap Slide, этап 1). Делает настоящие запросы
-  и считает деньги по токенам, которые выставляют сами поставщики. Запуск идёт на сервере бота, поэтому
-  OpenAI и Anthropic отвечают без блокировки по стране.
+  Примеры презентаций от Luna и Sonnet готовыми файлами: нажмите кнопку, подождите пару минут — ниже появятся
+  PPTX и PDF, их можно скачать и открыть. Всё сохраняется в базе: выкладка бота ничего не стирает.
 </p>
 
 {% if error %}<p class="status-error">{{ error }}</p>{% endif %}
@@ -20,7 +19,7 @@
   <div class="card">
     <div class="label">Ключ {{ name }}</div>
     <div class="value {{ 'status-done' if ok else 'status-error' }}">{{ 'есть' if ok else 'нет' }}</div>
-    {% if not ok %}<div class="hint">без ключа этот поставщик пропускается</div>{% endif %}
+    {% if not ok %}<div class="hint">без ключа эта модель пропускается</div>{% endif %}
   </div>
   {% endfor %}
   <div class="card">
@@ -33,78 +32,110 @@
 <section>
   <h1 style="font-size:18px">Запуск</h1>
   <p class="note" style="margin-bottom:10px">
-    Порядок: 1) список моделей, 2) проверка ключей, 3) оценка расхода, 4) боевой прогон. Боевой прогон идёт
-    несколько минут и <b>тратит деньги</b> (по Claude остановится сам на $0,9). Страницу можно не закрывать и не
-    обновлять — она обновляется сама. Если бот перезапустится (выкладка), идущий прогон оборвётся.
+    Делает только черновик (без пересказов и перегенераций): 10 слайдов, три темы (медицина, право, бизнес),
+    модели Luna и Sonnet. Расход — несколько рублей. Страницу можно не обновлять: она обновляется сама.
+    Если бот перезапустится (выкладка) во время прогона, прогон оборвётся.
   </p>
   <div style="margin-bottom:12px; max-width:240px">
     <label for="rate">Курс, ₽ за доллар</label>
     <input id="rate" type="number" step="0.01" min="1" value="{{ usd_rub }}">
   </div>
-  <div style="display:flex; gap:8px; flex-wrap:wrap">
-    {% for key, label in modes.items() %}
-    <form method="post" action="/admin/slides-bench/start" class="inline" onsubmit="this.usd_rub.value=document.getElementById('rate').value;{% if key == 'run' %}return confirm('Боевой прогон тратит реальные деньги. Запустить?');{% endif %}">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+    <form method="post" action="/admin/slides-bench/start" class="inline" onsubmit="this.usd_rub.value=document.getElementById('rate').value;return confirm('Будут настоящие запросы к Luna и Sonnet (несколько рублей). Запустить?');">
+      <input type="hidden" name="mode" value="examples">
+      <input type="hidden" name="usd_rub" value="{{ usd_rub }}">
+      <button class="run-btn" style="padding:12px 18px;font-weight:650" {% if state.status == 'running' or not node_ok %}disabled{% endif %}>{{ modes['examples'] }}</button>
+    </form>
+    {% for key in ['list', 'check', 'dry'] %}
+    <form method="post" action="/admin/slides-bench/start" class="inline" onsubmit="this.usd_rub.value=document.getElementById('rate').value">
       <input type="hidden" name="mode" value="{{ key }}">
       <input type="hidden" name="usd_rub" value="{{ usd_rub }}">
-      <button class="run-btn" {% if state.status == 'running' or not node_ok %}disabled{% endif %}>{{ loop.index }}. {{ label }}</button>
+      <button class="run-btn ghost-btn" style="background:transparent;color:var(--ink);border:1px solid var(--line)" {% if state.status == 'running' or not node_ok %}disabled{% endif %}>{{ modes[key] }}</button>
     </form>
     {% endfor %}
   </div>
 </section>
 
-<section>
-  <h1 style="font-size:18px">Вывод</h1>
-  <pre id="log" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:420px;overflow:auto;white-space:pre-wrap;font-size:13px">{{ log or 'Пока пусто.' }}</pre>
+<section id="files-block" {% if not run or run.mode != 'examples' %}hidden{% endif %}>
+  <h1 style="font-size:18px">Готовые файлы{% if run %} (прогон №{{ run.id }}, {{ run.created_at.strftime('%d.%m.%Y %H:%M') if run.created_at else '' }}, {{ {'running': 'идёт', 'done': 'готово', 'error': 'ошибка'}[run.status] }}){% endif %}</h1>
+  <div style="overflow-x:auto">
+  <table>
+    <tr><th>Тема</th><th>Luna</th><th>Sonnet</th></tr>
+    {% for tid, tname in [('med', 'Медицина: хроническая сердечная недостаточность'), ('law', 'Право: договор подряда'), ('biz', 'Бизнес: запуск кофейни')] %}
+    <tr>
+      <td>{{ tname }}</td>
+      {% for m in ['luna', 'sonnet'] %}
+      <td>
+        {% for ext in ['pptx', 'pdf'] %}
+          {% set fname = tid ~ '-' ~ m ~ '.' ~ ext %}
+          {% if fname in fmap %}<a href="/admin/slides-bench/files/{{ fmap[fname] }}">{{ ext|upper }}</a> {% else %}<span class="note">{{ ext|upper }} —</span> {% endif %}
+        {% endfor %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="note" style="margin-top:8px">
+    Оформление у всех файлов одинаковое (временный стиль): сравнивайте тексты и структуру, а не дизайн.
+    Если в строке стоит «—», модель не вернула разбираемый черновик (причина в журнале ниже).
+    Прочее: {% for n in ['results.json', 'report-verstki.json'] %}{% if n in fmap %}<a href="/admin/slides-bench/files/{{ fmap[n] }}">{{ n }}</a> {% endif %}{% endfor %}
+  </p>
+  {% if run and run.table_md %}
+  <h1 style="font-size:16px; margin-top:16px">Стоимость и скорость</h1>
+  <pre style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;white-space:pre;font-size:12px">{{ run.table_md }}</pre>
+  {% endif %}
 </section>
 
-<section id="results" {% if not results.table and not results.pack %}hidden{% endif %}>
-  <h1 style="font-size:18px">Результат прогона</h1>
-  <p class="note" style="margin-bottom:8px">Таблица «модель × размер → рубли». Пришлите её мне вместе с файлом-пакетом ниже.</p>
-  <pre id="table" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;white-space:pre;font-size:12px">{{ results.table }}</pre>
-  <h1 style="font-size:16px; margin-top:16px">Файл-пакет для передачи</h1>
-  <p class="note" style="margin-bottom:8px">Одна длинная строка. Нажмите «Скопировать» и вставьте мне в чат целиком. Файл лежит во временной папке: после перезапуска бота он пропадёт, заберите его сразу.</p>
-  <textarea id="pack" readonly rows="6" style="width:100%;font:12px monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px">{{ results.pack }}</textarea>
-  <div style="margin-top:8px"><button type="button" id="copy">Скопировать</button> <span class="note" id="copied"></span></div>
+<section>
+  <h1 style="font-size:18px">Журнал</h1>
+  <pre id="log" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:420px;overflow:auto;white-space:pre-wrap;font-size:13px">{{ (live_log or (run.log if run else '')) or 'Пока пусто.' }}</pre>
+</section>
+
+<section>
+  <h1 style="font-size:18px">История прогонов</h1>
+  <div style="overflow-x:auto">
+  <table>
+    <tr><th>№</th><th>Когда</th><th>Режим</th><th>Статус</th><th></th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else '' }}</td>
+      <td>{{ modes.get(r.mode, r.mode) }}</td>
+      <td class="status-{{ r.status }}">{{ {'running': 'идёт', 'done': 'готово', 'error': 'ошибка'}[r.status] }}</td>
+      <td><a href="/admin/slides-bench?run={{ r.id }}">открыть</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="note">Прогонов ещё не было.</td></tr>
+    {% endfor %}
+  </table>
+  </div>
 </section>
 
 <script>
   (function () {
     var LABEL = {idle: 'ждёт', running: 'идёт', done: 'готово', error: 'ошибка'};
     var running = {{ 'true' if state.status == 'running' else 'false' }};
+    var timer = null;
     function fmt(sec) { return Math.floor(sec / 60) + ' мин ' + (sec % 60) + ' с'; }
-    function paint(d) {
-      var s = d.state;
-      document.getElementById('st-status').textContent = LABEL[s.status] || s.status;
-      document.getElementById('st-hint').textContent = s.mode ? (s.status === 'running' ? 'прошло ' : 'длилось ') + fmt(s.elapsed) : '';
-      var log = document.getElementById('log');
-      var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-      log.textContent = d.log || 'Пока пусто.';
-      if (atEnd) log.scrollTop = log.scrollHeight;
-      if (d.results.table || d.results.pack) {
-        document.getElementById('results').hidden = false;
-        document.getElementById('table').textContent = d.results.table;
-        document.getElementById('pack').value = d.results.pack;
-      }
-      var was = running;
-      running = s.status === 'running';
-      document.querySelectorAll('.run-btn').forEach(function (b) { b.disabled = running || {{ 'true' if not node_ok else 'false' }}; });
-      if (was && !running) { clearInterval(timer); }
-    }
     function poll() {
       fetch('/admin/slides-bench/state', {credentials: 'same-origin'})
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) { if (d) paint(d); })
+        .then(function (d) {
+          if (!d) return;
+          var s = d.state;
+          document.getElementById('st-status').textContent = LABEL[s.status] || s.status;
+          document.getElementById('st-hint').textContent = s.mode ? (s.status === 'running' ? 'прошло ' : 'длилось ') + fmt(s.elapsed) : '';
+          var log = document.getElementById('log');
+          var atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+          if (d.log) log.textContent = d.log;
+          if (atEnd) log.scrollTop = log.scrollHeight;
+          if (running && s.status !== 'running') { clearInterval(timer); location.reload(); }
+          running = s.status === 'running';
+        })
         .catch(function () {});
     }
-    var timer = running ? setInterval(poll, 3000) : null;
-    poll();
-    document.getElementById('copy').addEventListener('click', function () {
-      var t = document.getElementById('pack');
-      t.select();
-      var done = function () { document.getElementById('copied').textContent = 'Скопировано'; };
-      if (navigator.clipboard) { navigator.clipboard.writeText(t.value).then(done, function () { document.execCommand('copy'); done(); }); }
-      else { document.execCommand('copy'); done(); }
-    });
+    if (running) { timer = setInterval(poll, 3000); poll(); }
   })();
 </script>
 {% endblock %}
