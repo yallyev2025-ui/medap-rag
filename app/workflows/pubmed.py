@@ -84,6 +84,9 @@ class PubMedArticle:
     # Заполняются отбором (select_best): уровень доказательности 0 (лучший) … 4 и метка на русском.
     tier: int = 3
     design: str = "исследование"
+    # Для списка литературы презентаций: «Иванов А. А., Петров Б. Б.» и DOI (если есть в записи).
+    authors: str = ""
+    doi: str = ""
 
 
 @dataclass
@@ -227,6 +230,28 @@ def _parse_year(article_el: ET.Element) -> str | None:
     return None
 
 
+def _parse_authors(article_el: ET.Element) -> str:
+    """«Фамилия И. О.» через запятую; у коллективного автора — его название. Не больше шести, дальше «и др.»."""
+    names: list[str] = []
+    for author in article_el.findall(".//AuthorList/Author"):
+        last = (author.findtext("LastName") or "").strip()
+        initials = (author.findtext("Initials") or "").strip()
+        if last:
+            names.append(f"{last} {initials}".strip())
+        else:
+            collective = (author.findtext("CollectiveName") or "").strip()
+            if collective:
+                names.append(collective)
+    return ", ".join(names[:6]) + (" и др." if len(names) > 6 else "")
+
+
+def _parse_doi(article_el: ET.Element) -> str:
+    for el in article_el.findall(".//ArticleIdList/ArticleId"):
+        if el.get("IdType") == "doi" and (el.text or "").strip():
+            return (el.text or "").strip()
+    return ""
+
+
 def _parse_efetch_xml(xml_text: str) -> list[PubMedArticle]:
     root = ET.fromstring(xml_text)
     articles: list[PubMedArticle] = []
@@ -252,6 +277,8 @@ def _parse_efetch_xml(xml_text: str) -> list[PubMedArticle]:
                 year=_parse_year(article_el),
                 url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 pub_types=pub_types,
+                authors=_parse_authors(article_el),
+                doi=_parse_doi(article_el),
             )
         )
     return articles
@@ -302,6 +329,8 @@ def _parse_europepmc(data: dict) -> list[PubMedArticle]:
                 year=str(year) if year else None,
                 url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 pub_types=[str(t).strip() for t in raw_types if str(t).strip()],
+                authors=_clean(record.get("authorString")).rstrip("."),
+                doi=_clean(record.get("doi")),
             )
         )
     return articles

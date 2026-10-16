@@ -40,7 +40,8 @@ from app.workflows.user_documents import (
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
-from app.workflows.pubmed import PubMedResult, search_pubmed
+from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubmed
+from app.workflows import pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
@@ -1140,6 +1141,122 @@ async def pubmed_search_endpoint(payload: PubMedSearchRequest, request: Request)
     with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_SEARCH"):
         result = await search_pubmed(payload.query, payload.question)
     return _pubmed_response(result)
+
+
+# --- Статьи PubMed для презентаций: список на выбор и текст выбранных (без модели слайдов) -------
+# Бот только добывает: слайды по этому тексту пишет сайт. Полный текст — лишь из открытого подмножества
+# PMC (через Europe PMC); закрытое издательствами не берётся.
+
+
+class PubMedCandidate(BaseModel):
+    pmid: str
+    title: str
+    authors: str = ""
+    journal: str | None = None
+    year: str | None = None
+    design: str = ""
+    abstract: str = ""
+    doi: str = ""
+    url: str = ""
+    pmcid: str = ""
+    # true — полный текст открыт; false — закрыт; null — узнать не удалось
+    openAccess: bool | None = None
+    license: str = ""
+
+
+class PubMedCandidatesRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=300)
+    limit: int = Field(default=8, ge=1, le=10)
+    context: StudentAIContext
+
+
+class PubMedCandidatesResponse(BaseModel):
+    query: str
+    queryEn: str | None = None
+    source: str | None = None
+    articles: list[PubMedCandidate] = []
+    error: str | None = None
+    requestId: str | None = None
+
+
+class PubMedFulltextRequest(BaseModel):
+    pmids: list[str] = Field(min_length=1, max_length=4)
+    context: StudentAIContext
+
+
+class PubMedSectionModel(BaseModel):
+    title: str
+    text: str
+
+
+class PubMedArticleText(BaseModel):
+    pmid: str
+    title: str = ""
+    authors: str = ""
+    journal: str | None = None
+    year: str | None = None
+    doi: str = ""
+    url: str = ""
+    pmcid: str = ""
+    # fulltext | abstract | none
+    level: str = "none"
+    abstract: str = ""
+    sections: list[PubMedSectionModel] = []
+    truncated: bool = False
+    note: str = ""
+
+
+class PubMedFulltextResponse(BaseModel):
+    articles: list[PubMedArticleText] = []
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/pubmed/candidates", response_model=PubMedCandidatesResponse)
+async def pubmed_candidates_endpoint(payload: PubMedCandidatesRequest, request: Request) -> PubMedCandidatesResponse:
+    """До 10 статей по теме: аннотация, авторы, тип исследования и пометка «полный текст открыт» — на выбор человеку."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_CANDIDATES"):
+        try:
+            english, source, found = await pubmed_sources.candidates(payload.query, payload.limit)
+        except _SourcesUnavailable as exc:
+            logger.warning("PubMed: список статей не получен (%s / %s)", exc.ncbi_reason, exc.europepmc_reason)
+            return PubMedCandidatesResponse(query=payload.query, error="PubMed сейчас недоступен — попробуйте позже")
+    return PubMedCandidatesResponse(
+        query=payload.query,
+        queryEn=english if english != payload.query else None,
+        source=source,
+        articles=[
+            PubMedCandidate(
+                pmid=c.article.pmid, title=c.article.title, authors=c.authors, journal=c.article.journal,
+                year=c.article.year, design=c.article.design, abstract=c.article.abstract, doi=c.doi,
+                url=c.article.url, pmcid=c.pmcid, openAccess=c.open_access, license=c.license,
+            )
+            for c in found
+        ],
+    )
+
+
+@router.post("/pubmed/fulltext", response_model=PubMedFulltextResponse)
+async def pubmed_fulltext_endpoint(payload: PubMedFulltextRequest, request: Request) -> PubMedFulltextResponse:
+    """Текст выбранных статей: полный по разделам, если открыт, иначе аннотация. Модель не вызывается."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_FULLTEXT"):
+        try:
+            texts = await pubmed_sources.fulltext(payload.pmids)
+        except _SourcesUnavailable as exc:
+            logger.warning("PubMed: тексты статей не получены (%s)", exc.ncbi_reason)
+            return PubMedFulltextResponse(error="PubMed сейчас недоступен — попробуйте позже")
+    return PubMedFulltextResponse(
+        articles=[
+            PubMedArticleText(
+                pmid=t.pmid, title=t.title, authors=t.authors, journal=t.journal, year=t.year, doi=t.doi, url=t.url,
+                pmcid=t.pmcid, level=t.level, abstract=t.abstract, truncated=t.truncated, note=t.note,
+                sections=[PubMedSectionModel(title=s.title, text=s.text) for s in t.sections],
+            )
+            for t in texts
+        ]
+    )
 
 
 # --- Месячный расход (для лимита на сайте) ---------------------------------------------
