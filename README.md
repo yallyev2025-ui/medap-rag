@@ -179,6 +179,7 @@ curl -X POST https://<домен>/v1/chat \
    - `TELEGRAM_BOT_TOKEN` — токен бота от [@BotFather](https://t.me/BotFather)
    - `OPENAI_API_KEY` — доступ к OpenAI API (модель по умолчанию `gpt-6-luna`, запасные — `OPENAI_MODEL_FALLBACKS`)
    - `ANTHROPIC_API_KEY` — доступ к Claude (Sonnet 5.5) только для презентаций сайта: `POST /v1/presentations/complete` с `model: "sonnet"`. Без ключа Sonnet отключён словами в ответе, остальной бот и Luna работают как раньше. `ANTHROPIC_BASE_URL` — необязателен (шлюз), по умолчанию облако Anthropic
+   - Для презентаций сайта доступны `POST /v1/pubmed/candidates` (до 10 статей с аннотациями и пометкой об открытом полном тексте) и `POST /v1/pubmed/fulltext` (текст до 4 выбранных статей: полный из открытого PMC через Europe PMC или аннотация). Модель слайдов они не вызывают; ключей, кроме `SERVICE_TOKEN`, не требуют
    - `DATABASE_URL` — строка подключения к PostgreSQL с `pgvector`
    - `ADMIN_IDS_RAW` — Telegram ID администраторов через запятую
 3. Создать расширение `vector` и таблицы:
