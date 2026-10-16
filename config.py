@@ -10,6 +10,10 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = ""
     OPENAI_API_KEY: str = ""
+    # Claude Sonnet для презентаций сайта (посредник /v1/presentations/complete). Пустой ключ = Sonnet отключён,
+    # Luna работает как раньше. Адрес пустой = облако Anthropic.
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_BASE_URL: str = ""
     # Личные документы студента (батч 27): сколько документов можно держать одновременно.
     USER_DOCUMENTS_MAX: int = 10
     # Документ из не более чем стольких фрагментов (≈20 тыс. токенов) целиком отдаётся модели

@@ -38,6 +38,8 @@ from app.workflows.user_documents import (
     list_user_documents,
 )
 from app.workflows.vision import TestSolveResult, solve_from_image
+from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
+from app.workflows.presentations import RelayError, complete as presentation_complete
 from app.workflows.pubmed import PubMedResult, search_pubmed
 from app.workflows.web_research import WebResearchResult, research_url
 from app.workflows.web_search import WebSearchResult, search_and_answer
@@ -762,6 +764,56 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
         outputTokens=result.output_tokens,
         costUsd=round(usd, 6),
         costRub=round(to_rub(usd), 4),
+    )
+
+
+# --- Презентации сайта: посредник к Sonnet и Luna (этап 3 презентаций) ---------
+# Сайт собирает промпты и разбирает ответ сам; боту нужен только вызов модели: Sonnet и Luna доступны
+# лишь с этого сервера. Список моделей закрыт (имя называет сайт), потолки токенов и размера запроса
+# проверяются до платного вызова, расход возвращается сайту и пишется в AIUsageEvent.
+
+
+class PresentationCompleteRequest(BaseModel):
+    model: Literal["sonnet", "luna"]
+    step: str = Field(min_length=1, max_length=40)
+    system: str = Field(max_length=150_000)
+    user: str = Field(min_length=1, max_length=150_000)
+    maxTokens: int = Field(ge=1, le=PRESENTATION_MAX_TOKENS)
+    json_: bool = Field(default=False, alias="json")
+    context: StudentAIContext
+
+    model_config = {"populate_by_name": True}
+
+
+class PresentationCompleteResponse(BaseModel):
+    text: str = ""
+    inputTokens: int = 0
+    outputTokens: int = 0
+    model: str = ""
+    truncated: bool = False
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/presentations/complete", response_model=PresentationCompleteResponse)
+async def presentations_complete(payload: PresentationCompleteRequest, request: Request) -> PresentationCompleteResponse:
+    """Один вызов Sonnet или Luna по просьбе сайта. Ошибки поставщика возвращаются в поле `error` (не 5xx)."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PRESENTATION_COMPLETE"):
+        try:
+            result = await presentation_complete(
+                payload.model, payload.step, payload.system, payload.user, payload.maxTokens, payload.json_
+            )
+        except RelayError as exc:
+            logger.warning("Презентации: %s/%s — %s", payload.model, payload.step, exc)
+            return PresentationCompleteResponse(error=str(exc))
+
+    return PresentationCompleteResponse(
+        text=result.text,
+        inputTokens=result.input_tokens,
+        outputTokens=result.output_tokens,
+        model=result.model,
+        truncated=result.truncated,
     )
 
 
