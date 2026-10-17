@@ -57,8 +57,14 @@ def sizes_kb(tiers: list[dict[str, Any]], free_available: bool, free_max: int) -
     rows: list[list[tuple[str, str]]] = []
     if free_available:
         rows.append([(f"🎁 Бесплатная, до {free_max} слайдов", f"s:{free_max}")])
+    pair: list[tuple[str, str]] = []
     for t in tiers:
-        rows.append([(f"{t['label']} — {t['price']}", f"s:{t['maxSlides']}")])
+        pair.append((f"{t['label']} — {t['price']}", f"s:{t['maxSlides']}"))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
     return kb(rows)
 
 
