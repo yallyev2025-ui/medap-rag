@@ -228,6 +228,8 @@ curl -X POST https://<домен>/v1/chat \
 | `SERVICE_TOKEN` | service-to-service токен для `/v1` (`openssl rand -hex 32`) |
 | `ADMIN_WEB_PASSWORD`, `ADMIN_SESSION_SECRET` | вход в закрытую админку |
 | `RAG_API_KEY` | ключ старого `/search` для сценариста рилсов |
+| `SLIDES_BOT_TOKEN`, `SLIDES_BOT_USERNAME` | бот презентаций Medap Slide (отдельный бот в этом же процессе; без токена не запускается): токен от @BotFather и имя без @ |
+| `SLIDES_SITE_URL`, `SLIDES_SITE_SECRET` | адрес сайта и общий секрет для подписи запросов бота к сайту; на сайте записан такой же `SLIDES_SITE_SECRET` (от 16 символов, одинаковый на обеих сторонах) |
 
 Если ключ одного провайдера не задан, его задачи временно уходят на доступный, и
 каждый такой вызов помечается полем `fallbackFrom` — это видно в админке.
