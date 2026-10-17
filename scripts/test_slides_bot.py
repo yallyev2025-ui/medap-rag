@@ -106,6 +106,8 @@ class FakeSite:
         if action == "styles":
             return {"ok": True, "templates": [{"id": "cobalt", "name": "Кобальт"}, {"id": "mint", "name": "Мята"}]}
         if action == "create":
+            if getattr(self, "closed", False):
+                return {"ok": False, "error": "Презентации пока открыты только для команды Medap.", "closed": True}
             if self.pay_needed:
                 return {"ok": False, "error": "Не хватает денег", "payUrl": "https://pay.test/x", "shortfallKopecks": 3000}
             return {"ok": True, "runId": "run1"}
@@ -117,6 +119,8 @@ class FakeSite:
             return {"ok": True, "phase": "draft", "approved": False, "topic": "Гипертония", "editsLeft": 2, "slides": [{"n": 1, "title": "Гипертония", "text": "", "fixed": True, "fill": None}, {"n": 2, "title": "Причины", "text": "Первая строка", "fixed": False, "fill": None}]}
         if action == "edit":
             return {"ok": True, "index": p["index"], "note": None}
+        if action == "preview":
+            return {"ok": True, "base64": base64.b64encode(b"\x89PNG-test").decode()}
         if action == "approve":
             return {"ok": True}
         if action == "file":
@@ -157,6 +161,7 @@ class FakeCall:
 def fake_bot() -> MagicMock:
     bot = MagicMock()
     bot.send_message = AsyncMock()
+    bot.send_photo = AsyncMock()
     return bot
 
 
@@ -225,6 +230,9 @@ async def flow_checks() -> None:
     await asyncio.gather(*list(H._tasks))
     sent = bot.send_message.await_args_list
     ok(any("Черновик: Гипертония" in str(c.args[1]) for c in sent), "черновик пришёл сам после готовности")
+    photos = bot.send_photo.await_args_list
+    ok(len(photos) == 1 and "слайд 2" in photos[0].kwargs["caption"], "перед черновиком пришла картинка слайда")
+    ok([c for c in fs.calls if c[0] == "preview"][-1][2] == {"runId": "run1", "index": 1}, "превью запрошено у сайта для первого слайда с содержанием")
 
     # не хватает денег → ссылка на оплату, задание сохранено; возврат из оплаты → пишется
     fs.pay_needed = True
@@ -285,6 +293,15 @@ async def flow_checks() -> None:
     await H.cb_owner(call)
     ok("презентаций: 5" in texts_of(call.message) and "300 ₽" in texts_of(call.message), "владельцу — сводка")
     ok(any("Владелец" in b.text for row in T.main_menu(True).inline_keyboard for b in row) and not any("Владелец" in b.text for row in T.main_menu(False).inline_keyboard for b in row), "кнопка «Владелец» только в меню владельца")
+
+    # кабинет закрыт для не-команды: человеку понятный текст, ни оплаты, ни ожидания
+    fs.closed = True
+    await ctx().update_data(topic="Тема", kind="talk", total=10)
+    await ctx().set_state(H.Create.wishes)
+    m = FakeMessage()
+    await H.no_wishes(FakeCall("w:none", message=m), ctx(), fake_bot())
+    ok("только для команды" in texts_of(m) and "Следите" in texts_of(m), "закрыто: понятное сообщение")
+    fs.closed = False
 
     # сбой на сайте при ожидании: сообщение, не молчание
     fs.phase_seq = ["failed"]

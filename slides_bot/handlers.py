@@ -243,6 +243,9 @@ async def _create(message: Message, state: FSMContext, bot: Bot, tg: int, wishes
         need = T.money(int(r.get("shortfallKopecks", 0)))
         await message.answer(f"Для этой презентации не хватает {need}. Оплатите — и я сразу начну писать. Задание сохранено.", reply_markup=T.kb([], [[(f"💳 Оплатить {need}", str(r["payUrl"]))]]))
         return
+    if r.get("closed"):
+        await message.answer(str(r["error"]) + "\nСледите за новостями — как только откроем, бот сам напишет.")
+        return
     await message.answer(str(r.get("error") or "Не получилось создать презентацию"))
 
 
@@ -288,11 +291,23 @@ async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
             await bot.send_message(chat_id, "Презентация не получилась" + (f": {r['error']}" if r.get("error") else "") + ".\nЕсли вы платили, деньги вернулись на баланс.", reply_markup=T.main_menu(_is_owner(tg)))
             return
         if r.get("phase") in ("draft", "approved"):
-            await _send_draft(bot, chat_id, tg, run_id)
+            await _send_draft(bot, chat_id, tg, run_id, preview=1)
             return
 
 
-async def _send_draft(bot: Bot, chat_id: int, tg: int, run_id: str, edit_note: str = "") -> None:
+async def _send_preview(bot: Bot, chat_id: int, tg: int, run_id: str, index: int) -> None:
+    """Картинка слайда перед текстом черновика. Сбой не страшен: человек всё равно получит текст и кнопки."""
+    try:
+        r = await site().call("preview", tg, runId=run_id, index=index)
+        if r.get("ok"):
+            await bot.send_photo(chat_id, BufferedInputFile(base64.b64decode(str(r["base64"])), filename="slide.png"), caption=f"Так выглядит слайд {index + 1}")
+    except Exception:
+        logger.warning("Превью слайда не отправилось", exc_info=True)
+
+
+async def _send_draft(bot: Bot, chat_id: int, tg: int, run_id: str, edit_note: str = "", preview: int | None = None) -> None:
+    if preview is not None:
+        await _send_preview(bot, chat_id, tg, run_id, preview)
     d = await site().call("draft", tg, runId=run_id)
     if not d.get("ok"):
         await bot.send_message(chat_id, str(d.get("error") or "Не получилось открыть черновик"))
@@ -372,7 +387,7 @@ async def _do_edit(message: Message, bot: Bot, tg: int, run_id: str, index: int,
         await message.answer(str(r.get("error") or "Не получилось поправить"))
         await _send_draft(bot, message.chat.id, tg, run_id)
         return
-    await _send_draft(bot, message.chat.id, tg, run_id, edit_note=f"Слайд {int(r.get('index', index)) + 1} исправлен." + (f" {r['note']}" if r.get("note") else ""))
+    await _send_draft(bot, message.chat.id, tg, run_id, edit_note=f"Слайд {int(r.get('index', index)) + 1} исправлен." + (f" {r['note']}" if r.get("note") else ""), preview=int(r.get("index", index)))
 
 
 @router.callback_query(F.data.startswith("a:"))
