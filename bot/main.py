@@ -24,6 +24,7 @@ from bot.handlers import admin, fragments, menu, panel, query, recall, start, us
 from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 from db.init_db import init_db
+from slides_bot.runner import run_slides_bot
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,8 @@ async def main() -> None:
     warm_up_task = asyncio.create_task(_warm_up_models())  # noqa: F841 — держим ссылку, фоновая задача
     # Если один из двух упадёт — падает весь процесс (Railway перезапустит по
     # restartPolicy), а не тихо остаётся половина функциональности недоступна.
-    await asyncio.gather(_run_bot(), _run_api())
+    # Бот презентаций — отдельный Telegram-бот (свой токен), без токена сразу возвращается и ничего не меняет.
+    await asyncio.gather(_run_bot(), _run_api(), run_slides_bot())
 
 
 if __name__ == "__main__":
