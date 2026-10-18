@@ -93,6 +93,8 @@ class FakeSite:
         if action == "prices":
             return {"ok": True, "tiers": [{"id": "s", "label": "до 10 слайдов", "maxSlides": 10, "price": "30 ₽"}, {"id": "m", "label": "до 15 слайдов", "maxSlides": 15, "price": "40 ₽"}, {"id": "l", "label": "до 20 слайдов", "maxSlides": 20, "price": "50 ₽"}], "free": {"maxSlides": 7, "aiEdits": 2}}
         if action == "login_request":
+            if not p.get("consent"):
+                return {"ok": False, "error": "Нужно согласие на обработку персональных данных", "needConsent": True}
             return {"ok": True} if "@" in p["email"] else {"ok": False, "error": "Проверьте адрес почты"}
         if action == "login_verify":
             if p["code"] == "123456":
@@ -195,7 +197,18 @@ async def flow_checks() -> None:
     ok("Проверьте адрес" in texts_of(m) and await ctx().get_state() == H.Login.email.state, "плохая почта: остаёмся на шаге")
     m = FakeMessage(text="a@b.ru")
     await H.got_email(m, ctx())
-    ok(await ctx().get_state() == H.Login.code.state, "почта принята → ждём код")
+    ok(await ctx().get_state() == H.Login.consent.state and "Согласен" in str(m.sent), "почта принята → просим согласие кнопкой")
+    ok(not [c for c in fs.calls if c[0] == "login_request"], "без нажатия «Согласен» код не запрашивается")
+    call = FakeCall("c:no")
+    await H.cb_consent_no(call, ctx())
+    ok(await ctx().get_state() == H.Login.email.state and not [c for c in fs.calls if c[0] == "login_request"], "«Другая почта»: код не отправлен")
+    m = FakeMessage(text="a@b.ru")
+    await H.got_email(m, ctx())
+    call = FakeCall("c:ok")
+    await H.cb_consent_ok(call, ctx())
+    req = [c for c in fs.calls if c[0] == "login_request"][-1]
+    ok(req[2]["consent"] is True and req[1] == 111, "«Согласен» → код запрошен с согласием и Telegram-id")
+    ok(await ctx().get_state() == H.Login.code.state, "согласие дано → ждём код")
     m = FakeMessage(text="000000")
     await H.got_code(m, ctx())
     ok("не подошёл" in texts_of(m) or "неверный" in texts_of(m), "неверный код: сообщение")

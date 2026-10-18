@@ -30,6 +30,7 @@ POLL_LIMIT = 150  # ~15 минут; дальше человек сам нажм�
 
 class Login(StatesGroup):
     email = State()
+    consent = State()
     code = State()
 
 
@@ -115,13 +116,34 @@ async def cmd_menu(message: Message, state: FSMContext) -> None:
 @router.message(Login.email, F.text)
 async def got_email(message: Message, state: FSMContext) -> None:
     email = (message.text or "").strip()
-    r = await site().call("login_request", message.from_user.id, email=email)
-    if not r.get("ok"):
-        await message.answer(str(r.get("error") or "Не получилось отправить код"))
+    if "@" not in email or " " in email or len(email) > 200 or "." not in email.split("@")[-1]:
+        await message.answer("Проверьте адрес почты и пришлите его ещё раз.")
         return
     await state.update_data(email=email)
+    await state.set_state(Login.consent)
+    base = settings.SLIDES_SITE_URL.rstrip("/")
+    links = [[("Политика конфиденциальности", f"{base}/legal/privacy"), ("Согласие на обработку данных", f"{base}/legal/consent")]] if base else []
+    await message.answer(T.ASK_CONSENT.format(email=email), reply_markup=T.kb([[("✅ Согласен(на), прислать код", "c:ok")], [("✖ Другая почта", "c:no")]], links))
+
+
+@router.callback_query(Login.consent, F.data == "c:ok")
+async def cb_consent_ok(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    data = await state.get_data()
+    r = await site().call("login_request", call.from_user.id, email=data.get("email", ""), consent=True)
+    if not r.get("ok"):
+        await state.set_state(Login.email)
+        await call.message.answer(str(r.get("error") or "Не получилось отправить код") + "\nПришлите почту ещё раз.")
+        return
     await state.set_state(Login.code)
-    await message.answer(T.ASK_CODE)
+    await call.message.answer(T.ASK_CODE)
+
+
+@router.callback_query(Login.consent, F.data == "c:no")
+async def cb_consent_no(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.set_state(Login.email)
+    await call.message.answer("Хорошо, код не отправлен. Пришлите другую почту.")
 
 
 @router.message(Login.code, F.text)
