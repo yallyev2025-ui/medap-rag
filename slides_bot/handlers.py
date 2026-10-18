@@ -60,8 +60,17 @@ def _is_owner(tg_id: int) -> bool:
     return tg_id in settings.ADMIN_IDS
 
 
+async def _owner_confirmed(tg_id: int) -> bool:
+    """Раздел «Владелец» видит только тот, у кого и Telegram-id в списке владельцев, и аккаунт на сайте с ролью владельца или поддержки.
+    Обычному человеку не показываем ни кнопку, ни слова про «команду» и «владельца»."""
+    if not _is_owner(tg_id):
+        return False
+    me = await site().call("me", tg_id)
+    return bool(me.get("ok") and me.get("owner"))
+
+
 async def _menu(target: Message, tg_id: int, text: str = "Что дальше?") -> None:
-    await target.answer(text, reply_markup=T.main_menu(_is_owner(tg_id)))
+    await target.answer(text, reply_markup=T.main_menu(await _owner_confirmed(tg_id)))
 
 
 async def _ensure_login(message: Message, state: FSMContext, tg_id: int) -> dict[str, Any] | None:
@@ -183,7 +192,7 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     data = await state.get_data()
     if not data.get("topic"):
-        await call.message.answer("Начнём заново: нажмите «Создать презентацию».", reply_markup=T.main_menu(_is_owner(call.from_user.id)))
+        await call.message.answer("Начнём заново: нажмите «Создать презентацию».", reply_markup=T.main_menu(await _owner_confirmed(call.from_user.id)))
         return
     await state.update_data(kind=call.data[2:])
     prices, me = await asyncio.gather(site().call("prices"), site().call("me", call.from_user.id))
@@ -192,7 +201,7 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
         return
     free = bool(me.get("freeAvailable")) and not me.get("team")
     await call.message.answer(
-        f"Сколько слайдов? Баланс: {me.get('balance', '—')}." + (" Команде оплата не нужна." if me.get("team") else ""),
+        f"Сколько слайдов? Баланс: {me.get('balance', '—')}." + (" Оплата не нужна." if me.get("team") else ""),
         reply_markup=T.sizes_kb(prices["tiers"], free, int(prices["free"]["maxSlides"])),
     )
 
@@ -201,7 +210,7 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
 async def got_size(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     await state.update_data(total=int(call.data[2:]))
-    r = await site().call("styles")
+    r = await site().call("styles", call.from_user.id)
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or T.NO_SITE))
         return
@@ -288,7 +297,7 @@ async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
             await bot.send_message(chat_id, str(r.get("error") or "Не получилось узнать состояние"))
             return
         if r.get("phase") == "failed":
-            await bot.send_message(chat_id, "Презентация не получилась" + (f": {r['error']}" if r.get("error") else "") + ".\nЕсли вы платили, деньги вернулись на баланс.", reply_markup=T.main_menu(_is_owner(tg)))
+            await bot.send_message(chat_id, "Презентация не получилась" + (f": {r['error']}" if r.get("error") else "") + ".\nЕсли вы платили, деньги вернулись на баланс.", reply_markup=T.main_menu(await _owner_confirmed(tg)))
             return
         if r.get("phase") in ("draft", "approved"):
             await _send_draft(bot, chat_id, tg, run_id, preview=1)
@@ -336,7 +345,7 @@ async def cb_runs(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.answer(str(r.get("error") or T.NO_SITE))
         return
     if not r["runs"]:
-        await call.message.answer("Презентаций пока нет.", reply_markup=T.main_menu(_is_owner(call.from_user.id)))
+        await call.message.answer("Презентаций пока нет.", reply_markup=T.main_menu(await _owner_confirmed(call.from_user.id)))
         return
     await call.message.answer("Ваши презентации:", reply_markup=T.runs_kb(r["runs"]))
 
@@ -460,7 +469,7 @@ async def _topup(message: Message, tg: int, kopecks: int) -> None:
 @router.callback_query(F.data == "m:owner")
 async def cb_owner(call: CallbackQuery) -> None:
     await call.answer()
-    if not _is_owner(call.from_user.id):
+    if not await _owner_confirmed(call.from_user.id):
         return
     r = await site().call("stats", call.from_user.id, days=30)
     if not r.get("ok"):

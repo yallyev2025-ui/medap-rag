@@ -99,10 +99,11 @@ class FakeSite:
                 self.linked = True
                 return {"ok": True}
             return {"ok": False, "error": "Код неверный или устарел"}
-        if not self.linked:
+        if not self.linked or telegram_id is None:
+            # как настоящий сайт: без Telegram-id аккаунт не определить (раньше бот так «забывал» вошедшего на шаге выбора стиля)
             return {"ok": False, "error": "Сначала войдите", "needLogin": True}
         if action == "me":
-            return {"ok": True, "balance": self.balance, "freeAvailable": True, "team": False, "owner": False}
+            return {"ok": True, "balance": self.balance, "freeAvailable": True, "team": False, "owner": telegram_id == 999}
         if action == "styles":
             return {"ok": True, "templates": [{"id": "cobalt", "name": "Кобальт"}, {"id": "mint", "name": "Мята"}]}
         if action == "create":
@@ -219,6 +220,7 @@ async def flow_checks() -> None:
     ok(any("Бесплатная" in b for b in buttons) and any("30 ₽" in b for b in buttons) and any("50 ₽" in b for b in buttons), "в размерах — бесплатная и цены")
     call = FakeCall("s:10")
     await H.got_size(call, ctx())
+    ok("Выберите оформление" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после выбора размера бот предлагает оформление, а не просит войти снова: {texts_of(call.message)}")
     call = FakeCall("st:cobalt")
     await H.got_style(call, ctx())
     ok(await ctx().get_state() == H.Create.wishes.state, "ждём пожелания")
@@ -284,6 +286,14 @@ async def flow_checks() -> None:
     await ctx().set_state(H.Topup.amount)
     await H.got_amount(m, ctx())
     ok("число" in texts_of(m), "не число — просим число")
+
+    # обычному человеку в меню нет «Владелец», владельцу (и Telegram-id в списке, и роль на сайте) — есть
+    m = FakeMessage(tg=111)
+    await H._menu(m, 111)
+    ok(not any("Владелец" in b.text for row in m.sent[0][1].inline_keyboard for b in row), "обычному человеку кнопки «Владелец» нет")
+    m = FakeMessage(tg=999)
+    await H._menu(m, 999)
+    ok(any("Владелец" in b.text for row in m.sent[0][1].inline_keyboard for b in row), "владельцу кнопка есть")
 
     # владелец: только по ADMIN_IDS_RAW
     call = FakeCall("m:owner", tg=111)
