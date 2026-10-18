@@ -31,7 +31,13 @@ SONNET_MODEL = "claude-sonnet-5-5"
 LUNA_MODEL = "gpt-6-luna"
 
 # Шаги конвейера сайта: незнакомый шаг отклоняется (опечатка в сайте не должна молча уходить в модель).
-STEPS = frozenset({"outline", "write", "rewrite", "parse", "command", "notes", "verify"})
+STEPS = frozenset({"outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place"})
+
+# Снимки человека (шаг «look»): картинки уходят модели только на этом шаге; потолки защищают счёт и память.
+IMAGE_STEPS = frozenset({"look"})
+MAX_IMAGES = 12
+MAX_IMAGE_B64_CHARS = 600_000  # ~450 КБ файла
+IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 # Потолки: вывод одного вызова и размер запроса (знаков). Пачка из 5 слайдов «подробно» укладывается с запасом.
 MAX_OUTPUT_TOKENS = 16_000
@@ -72,8 +78,18 @@ class RelayResult:
     truncated: bool = False
 
 
-def check_request(system: str, user: str, max_tokens: int, step: str) -> None:
+def check_request(system: str, user: str, max_tokens: int, step: str, images: list[dict] | None = None) -> None:
     """Проверка потолков до любого платного вызова."""
+    if images:
+        if step not in IMAGE_STEPS:
+            raise RelayError(f"Шаг «{step}» не принимает картинки")
+        if len(images) > MAX_IMAGES:
+            raise RelayError(f"Картинок не больше {MAX_IMAGES}")
+        for img in images:
+            if img.get("mime") not in IMAGE_MIMES:
+                raise RelayError("Картинка должна быть JPEG, PNG или WebP")
+            if not img.get("data") or len(img["data"]) > MAX_IMAGE_B64_CHARS:
+                raise RelayError("Картинка пустая или слишком большая")
     if step not in STEPS:
         raise RelayError(f"Неизвестный шаг «{step}»")
     if max_tokens < 1 or max_tokens > MAX_OUTPUT_TOKENS:
@@ -84,14 +100,14 @@ def check_request(system: str, user: str, max_tokens: int, step: str) -> None:
         raise RelayError("Пустой запрос")
 
 
-def anthropic_body(system: str, user: str, max_tokens: int, json_mode: bool) -> dict:
+def anthropic_body(system: str, user: str, max_tokens: int, json_mode: bool, images: list[dict] | None = None) -> dict:
     """Тело запроса Sonnet. «Мысли» модели входят в выходные токены, поэтому усилие низкое: иначе дороже реального пути."""
     sys_text = f"{system}\n\nОтвет — ровно один JSON-объект, без пояснений и без markdown." if json_mode else system
     return {
         "model": SONNET_MODEL,
         "max_tokens": max_tokens,
         "system": sys_text,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
+        "messages": [{"role": "user", "content": [*[{"type": "image", "source": {"type": "base64", "media_type": i["mime"], "data": i["data"]}} for i in images or []], {"type": "text", "text": user}]}],
         "output_config": {"effort": "low"},
     }
 
@@ -111,12 +127,12 @@ def parse_anthropic(data: dict) -> RelayResult:
     )
 
 
-async def _sonnet(system: str, user: str, max_tokens: int, json_mode: bool) -> RelayResult:
+async def _sonnet(system: str, user: str, max_tokens: int, json_mode: bool, images: list[dict] | None = None) -> RelayResult:
     if not settings.ANTHROPIC_API_KEY:
         raise RelayError("Sonnet не подключён: в переменных бота нет ANTHROPIC_API_KEY")
     base = (settings.ANTHROPIC_BASE_URL or "https://api.anthropic.com").rstrip("/")
     headers = {"content-type": "application/json", "x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": ANTHROPIC_VERSION}
-    body = anthropic_body(system, user, max_tokens, json_mode)
+    body = anthropic_body(system, user, max_tokens, json_mode, images)
     async with httpx.AsyncClient(timeout=ANTHROPIC_TIMEOUT_S) as client:
         for attempt in (1, 2):
             try:
@@ -141,10 +157,13 @@ async def _sonnet(system: str, user: str, max_tokens: int, json_mode: bool) -> R
     raise RelayError("Anthropic не ответил")  # недостижимо, для типизации
 
 
-async def _luna(system: str, user: str, max_tokens: int, json_mode: bool) -> RelayResult:
+async def _luna(system: str, user: str, max_tokens: int, json_mode: bool, images: list[dict] | None = None) -> RelayResult:
     if not settings.OPENAI_API_KEY:
         raise RelayError("Luna не подключена: в переменных бота нет OPENAI_API_KEY")
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    content: object = user
+    if images:
+        content = [{"type": "text", "text": user}, *[{"type": "image_url", "image_url": {"url": f"data:{i['mime']};base64,{i['data']}"}} for i in images]]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     request = llm._build_request(OPENAI, LUNA_MODEL, messages, 0.2, max_tokens, json_mode)  # noqa: SLF001
     try:
         response = await llm._call_with_compat(OPENAI, llm._client(OPENAI), request)  # noqa: SLF001
@@ -163,14 +182,14 @@ async def _luna(system: str, user: str, max_tokens: int, json_mode: bool) -> Rel
 
 
 async def complete(
-    model: ModelKey, step: str, system: str, user: str, max_tokens: int, json_mode: bool
+    model: ModelKey, step: str, system: str, user: str, max_tokens: int, json_mode: bool, images: list[dict] | None = None
 ) -> RelayResult:
     """Один вызов модели по просьбе сайта; расход записывается в любом исходе."""
-    check_request(system, user, max_tokens, step)
+    check_request(system, user, max_tokens, step, images)
     started = time.monotonic()
     prof = SONNET_PROFILE if model == "sonnet" else dataclasses.replace(profile(OPENAI), model_id=LUNA_MODEL)
     try:
-        result = await (_sonnet if model == "sonnet" else _luna)(system, user, max_tokens, json_mode)
+        result = await (_sonnet if model == "sonnet" else _luna)(system, user, max_tokens, json_mode, images)
     except RelayError as exc:
         await record_usage(
             task="PRESENTATION_COMPLETE", profile=prof, input_tokens=0, cached_input_tokens=0, output_tokens=0,

@@ -50,13 +50,13 @@ async def fake_record(**kwargs) -> None:
     recorded.append(kwargs)
 
 
-async def fake_sonnet(system, user, max_tokens, json_mode):
+async def fake_sonnet(system, user, max_tokens, json_mode, images=None):
     calls.append(("sonnet", max_tokens, json_mode))
     return pr.RelayResult(text='{"slide":1}', input_tokens=1200, cached_input_tokens=0, output_tokens=300, model="claude-sonnet-5-5")
 
 
-async def fake_luna(system, user, max_tokens, json_mode):
-    calls.append(("luna", max_tokens, json_mode))
+async def fake_luna(system, user, max_tokens, json_mode, images=None):
+    calls.append(("luna", max_tokens, json_mode, len(images or [])))
     return pr.RelayResult(text="{}", input_tokens=500, cached_input_tokens=100, output_tokens=50, model="gpt-6-luna")
 
 
@@ -182,6 +182,23 @@ def main() -> None:
     })
     assert parsed.text == "АБ" and parsed.input_tokens == 150 and parsed.cached_input_tokens == 40 and parsed.output_tokens == 70
     assert parsed.truncated is True
+
+    # снимки человека: только на шаге look, до 12 штук, JPEG/PNG/WebP, потолок размера; формат для Sonnet и для Luna
+    pr._sonnet = fake_sonnet
+    img = {"mime": "image/jpeg", "data": "QUJD"}
+    n = len(calls)
+    r = post({**BASE, "model": "luna", "step": "look", "images": [img, img]})
+    assert r.status_code == 200 and r.json()["error"] is None and calls[-1] == ("luna", 2000, True, 2), (r.text, calls[-1])
+    r = post({**BASE, "step": "write", "images": [img]})
+    assert r.status_code == 200 and "не принимает картинки" in r.json()["error"], r.text
+    assert post({**BASE, "step": "look", "images": [img] * 13}).status_code == 422
+    assert post({**BASE, "step": "look", "images": [{"mime": "image/svg+xml", "data": "QUJD"}]}).status_code == 422
+    assert post({**BASE, "step": "look", "images": [{"mime": "image/png", "data": "я" * 600_001}]}).status_code == 422
+    n2 = len(calls)
+    assert n2 == n + 1, "платный вызов до проверки картинок"
+    b = pr.anthropic_body("С", "Запрос", 1500, True, [img])
+    blocks = b["messages"][0]["content"]
+    assert blocks[0] == {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "QUJD"}} and blocks[-1]["text"] == "Запрос", blocks
 
     check_sonnet_http()
     print("ok: посредник презентаций — токен, закрытый список, потолки, учёт расхода, ошибки поставщика")

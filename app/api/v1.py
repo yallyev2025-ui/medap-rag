@@ -774,6 +774,11 @@ async def content_conspect(payload: ConspectWriteRequest, request: Request) -> C
 # проверяются до платного вызова, расход возвращается сайту и пишется в AIUsageEvent.
 
 
+class PresentationImage(BaseModel):
+    mime: Literal["image/jpeg", "image/png", "image/webp"]
+    data: str = Field(min_length=1, max_length=600_000)
+
+
 class PresentationCompleteRequest(BaseModel):
     model: Literal["sonnet", "luna"]
     step: str = Field(min_length=1, max_length=40)
@@ -781,6 +786,7 @@ class PresentationCompleteRequest(BaseModel):
     user: str = Field(min_length=1, max_length=150_000)
     maxTokens: int = Field(ge=1, le=PRESENTATION_MAX_TOKENS)
     json_: bool = Field(default=False, alias="json")
+    images: list[PresentationImage] = Field(default_factory=list, max_length=12)
     context: StudentAIContext
 
     model_config = {"populate_by_name": True}
@@ -803,7 +809,8 @@ async def presentations_complete(payload: PresentationCompleteRequest, request: 
     with request_context(user_id=payload.context.userId, channel="api", workflow="PRESENTATION_COMPLETE"):
         try:
             result = await presentation_complete(
-                payload.model, payload.step, payload.system, payload.user, payload.maxTokens, payload.json_
+                payload.model, payload.step, payload.system, payload.user, payload.maxTokens, payload.json_,
+                [i.model_dump() for i in payload.images],
             )
         except RelayError as exc:
             logger.warning("Презентации: %s/%s — %s", payload.model, payload.step, exc)
