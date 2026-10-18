@@ -323,8 +323,18 @@ def text_checks() -> None:
                 ok(b.callback_data is None or len(b.callback_data.encode()) <= 64, f"callback_data ≤ 64 байт: {b.callback_data}")
 
 
+def runner_checks() -> None:
+    from slides_bot import runner
+    cfg = SimpleNamespace(SLIDES_BOT_USERNAME="Old_Name")
+    ok(any("SLIDES_SITE_URL" in p for p in runner.config_problems(cfg, site_configured=False)), "без настроек сайта владельцу говорят, какие переменные вписать")
+    ok(runner.config_problems(cfg, site_configured=True) == [], "настроено — предупреждений нет")
+    ok(any("@real_bot" in p for p in runner.config_problems(cfg, site_configured=True, username="real_bot")), "имя в переменной не совпало с настоящим — предупреждение")
+    ok(runner.config_problems(SimpleNamespace(SLIDES_BOT_USERNAME="@Real_Bot"), site_configured=True, username="real_bot") == [], "@ и регистр в имени не мешают")
+
+
 async def main() -> None:
     text_checks()
+    runner_checks()
     await client_checks()
     await flow_checks()
     print(f"OK: {checks} проверок")
