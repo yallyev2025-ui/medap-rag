@@ -115,6 +115,7 @@ class FakeSite:
                 "fonts": [f"Шрифт{i}" for i in range(10)],
                 "colorPresets": [{"id": "teal", "name": "Бирюза и янтарь", "colors": ["#2f6f73", "#d9822b", "#1d2b3a"]}],
                 "disciplines": [{"code": "therapy", "title": "Терапия"}, {"code": "surgery", "title": "Хирургия"}],
+                "uploads": [{"id": "up-0000000001", "fileName": "Конспект по кардиологии.pdf", "discipline": "Терапия"}, {"id": "up-0000000002", "fileName": "Лекция.docx", "discipline": "Хирургия"}],
                 "titleFields": {"talk": [["university", "Вуз"], ["student", "Докладчик (ФИО)"], ["year", "Год"]]},
                 "profile": {"student": "Иван Петров", "university": "ВолгГМУ", "year": "2026"},
                 "maxPhotos": 12,
@@ -264,8 +265,14 @@ async def flow_checks() -> None:
     ok("Настройте презентацию" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — экран «Настроить», а не просьба войти: {texts_of(call.message)}")
     ok(await ctx().get_state() == H.Create.setup.state, "ждём выборов")
     labels = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
-    for want in ("Источники", "Оформление", "Шрифты", "Цвета", "Заметки", "Титул", "Фото", "Пожелания", "Полная форма на сайте", "Создать презентацию"):
+    for want in ("С чего начинаем", "Источники", "Свои материалы", "Для кого", "Заметки", "Титул", "Фото", "Пожелания", "Оформление", "Полная форма на сайте", "Создать презентацию"):
         ok(any(want in x for x in labels), f"на экране «Настроить» есть «{want}»: {labels}")
+    ok(not any(x.strip() in ("🔤 Шрифты", "🎨 Цвета") for x in labels), "шрифты и цвета не на первом экране: они необязательны и спрятаны в «Оформление»")
+    ok("можно изменить на сайте потом" in texts_of(call.message), "на экране сказано, что оформление меняется на сайте потом")
+    call_d = FakeCall("o:des")
+    await H.cb_opt(call_d, ctx(), fake_bot())
+    labels_d = [b.text for row in call_d.message.sent[0][1].inline_keyboard for b in row]
+    ok(any("Шаблон" in x for x in labels_d) and any("Шрифты" in x for x in labels_d) and any("Цвета" in x for x in labels_d), f"в «Оформлении» — шаблон, шрифты, цвета: {labels_d}")
     ok("Источники: общие знания" in texts_of(call.message) and "Оформление: подберём сами" in texts_of(call.message), "на экране видно, что выбрано сейчас («авто»)")
 
     # источники: медицина, учебники → предмет, PubMed → список 10, выбор, «ещё 10», предел по числу слайдов
@@ -406,10 +413,77 @@ async def flow_checks() -> None:
     photos = bot.send_photo.await_args_list
     ok(len(photos) == 1 and "слайд 2" in photos[0].kwargs["caption"], "перед черновиком пришла картинка слайда")
     draft_msg = [c for c in sent if "Черновик: Гипертония" in str(c.args[1])][-1]
-    site_btn = [b for row in draft_msg.kwargs["reply_markup"].inline_keyboard for b in row if b.url]
-    ok(site_btn and site_btn[0].url == "https://site.test/t/ONETIME-run1", f"кнопка «Открыть на сайте» ведёт по одноразовой ссылке входа, а не на закрытую страницу: {[b.url for b in site_btn]}")
-    ok([c for c in fs.calls if c[0] == "open_link"][-1][2] == {"runId": "run1"}, "одноразовая ссылка запрошена именно на эту презентацию")
+    kb_rows = [b for row in draft_msg.kwargs["reply_markup"].inline_keyboard for b in row]
+    ok(not [b for b in kb_rows if b.url] and any(b.callback_data == "u:run1" for b in kb_rows), "«Открыть на сайте» под черновиком — обычная кнопка, а не готовая ссылка (готовая за минуты «умирала»)")
+    ok(not [c for c in fs.calls if c[0] == "open_link" and c[2].get("runId") == "run1"], "при отправке черновика ссылка входа НЕ создаётся")
+    tap = FakeCall("u:run1")
+    await H.cb_open_site(tap)
+    site_btn = [b for row in tap.message.sent[0][1].inline_keyboard for b in row if b.url]
+    ok(site_btn and site_btn[0].url == "https://site.test/t/ONETIME-run1", f"по нажатию создана одноразовая ссылка входа: {[b.url for b in site_btn]}")
+    ok([c for c in fs.calls if c[0] == "open_link"][-1][2] == {"runId": "run1"}, "ссылка запрошена именно на эту презентацию")
+    ok("15 минут" in texts_of(tap.message), "человеку сказано, сколько ссылка живёт")
+    # сайт не выдал ссылку: честное объяснение, а не молчаливая ссылка на форму входа
+    real_call2 = fs.call
+
+    async def no_link(action, telegram_id=None, **p):
+        return {"ok": False, "error": "Адрес сайта не настроен"} if action == "open_link" else await real_call2(action, telegram_id, **p)
+
+    fs.call = no_link
+    tap2 = FakeCall("u:run1")
+    await H.cb_open_site(tap2)
+    ok("попросит войти" in texts_of(tap2.message), "нет ссылки входа — человеку честно сказано, что сайт попросит войти")
+    fs.call = real_call2
     ok([c for c in fs.calls if c[0] == "preview"][-1][2] == {"runId": "run1", "index": 1}, "превью запрошено у сайта для первого слайда с содержанием")
+
+    # «С чего начинаем», «Для кого», «Свои материалы» — то, что на сайте после создания не поменять
+    await ctx().clear()
+    await ctx().update_data(topic="План доклада", kind="talk", total=8, o=T.default_opts())
+    await ctx().set_state(H.Create.setup)
+    call = FakeCall("o:mode")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Свой план" in str(call.message.sent) or "свой план" in texts_of(call.message), "экран «С чего начинаем» с тремя вариантами")
+    call = FakeCall("o:m:plan")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok(await ctx().get_state() == H.Create.plan.state and "Готово" in str(call.message.sent), "свой план: бот ждёт текст и показывает «Готово»")
+    m = FakeMessage(text="1. Причины")
+    await H.got_plan_text(m, ctx())
+    m = FakeMessage(text="2. Лечение")
+    await H.got_plan_text(m, ctx())
+    ok((await ctx().get_data())["o"]["planText"] == "1. Причины\n2. Лечение" and "Принято" in texts_of(m), "план приходит несколькими сообщениями и складывается")
+    await H.cb_opt(FakeCall("o:aud"), ctx(), fake_bot())
+    ok(await ctx().get_state() == H.Create.audience.state, "«Для кого»: ждём фразу")
+    m = FakeMessage(text="студенты 3 курса")
+    await H.got_audience(m, ctx())
+    ok((await ctx().get_data())["o"]["audience"] == "студенты 3 курса" and "Для кого: студенты 3 курса" in texts_of(m), "«Для кого» сохранено и видно на экране")
+    call = FakeCall("o:up")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Конспект по кардиологии" in str(call.message.sent), "свои материалы: список файлов с сайта")
+    await H.cb_opt(FakeCall("o:upt:0"), ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["uploadIds"] == ["up-0000000001"], "материал отмечен")
+    await H.cb_opt(FakeCall("o:pdone"), ctx(), fake_bot())
+    m = FakeMessage()
+    await H.cb_opt(FakeCall("o:go", message=m), ctx(), fake_bot())
+    create = [c for c in fs.calls if c[0] == "create"][-1]
+    ok(create[2]["mode"] == "plan" and create[2]["text"] == "1. Причины\n2. Лечение" and create[2]["audience"] == "студенты 3 курса" and create[2]["uploadIds"] == ["up-0000000001"], f"создание получило план, аудиторию и материалы: {create[2]}")
+
+    # режим без текста не создаёт презентацию молча
+    await ctx().clear()
+    await ctx().update_data(topic="Без текста", kind="talk", total=8, o={**T.default_opts(), "mode": "plan"})
+    await ctx().set_state(H.Create.setup)
+    n_create = len([c for c in fs.calls if c[0] == "create"])
+    m = FakeMessage()
+    await H.cb_opt(FakeCall("o:go", message=m), ctx(), fake_bot())
+    ok(len([c for c in fs.calls if c[0] == "create"]) == n_create and "текст не получен" in texts_of(m), "выбран «свой план», а текста нет — не создаём, объясняем")
+    ok(await ctx().get_state() == H.Create.setup.state and (await ctx().get_data()).get("topic") == "Без текста", "выборы сохранены, человек остаётся на экране")
+    # «готовый текст»: источники и пожелания сбрасываются и не показываются
+    await H.cb_opt(FakeCall("o:m:text"), ctx(), fake_bot())
+    m2 = FakeMessage(text="Слайд 1. Тема\nТекст")
+    await H.got_plan_text(m2, ctx())
+    call = FakeCall("o:pdone", message=FakeMessage())
+    await H.cb_opt(call, ctx(), fake_bot())
+    labels_t = [b.text for row in call.message.sent[-1][1].inline_keyboard for b in row]
+    ok(not any("Источники" in x or "Пожелания" in x or "материалы" in x for x in labels_t), f"в режиме готового текста нет источников, материалов и пожеланий: {labels_t}")
+    ok(await ctx().get_state() == H.Create.setup.state and H._create_payload(await ctx().get_data())["mode"] == "text", "режим «готовый текст» уходит на сайт")
 
     # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
     ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")

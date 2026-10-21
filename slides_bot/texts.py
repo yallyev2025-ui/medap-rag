@@ -24,6 +24,8 @@ ASK_TOPIC = "О чём презентация? Напишите тему одн�
 ASK_WISHES = "Есть пожелания? Например: «сделай упор на лечение», «поменьше текста», «добавь таблицу». Или нажмите «Без пожеланий»."
 TOPIC_SHORT = "Тема слишком короткая — напишите хотя бы пару слов."
 WORKING = "Пишу презентацию. Обычно это занимает 1–3 минуты. Пришлю черновик, когда будет готов."
+SITE_LINK_ONCE = "Ссылка для входа на сайт без регистрации. Она действует 15 минут и срабатывает один раз — откройте её сейчас."
+SITE_LINK_PLAIN = "Не удалось создать ссылку мгновенного входа, поэтому сайт попросит войти по почте (той же, что в боте). Откройте сайт:"
 NO_SITE = "Связь с сайтом не настроена. Напишите владельцу."
 SITE_OLD = "Сайт ещё не обновлён до новой версии: выбор источников, оформления, шрифтов и цветов заработает, когда сайт выложат вместе с ботом. Напишите владельцу."
 
@@ -96,7 +98,7 @@ DETAIL_NAMES = {"brief": "кратко", "detailed": "подробно"}
 
 def default_opts() -> dict[str, Any]:
     """Выборы по умолчанию: ничего не выбрано — сайт подберёт всё сам."""
-    return {"medical": False, "textbooks": False, "discipline": "", "disciplineName": "", "pmids": [], "pmOffset": 0, "styleId": "", "styleName": "", "fonts": None, "colors": [], "notes": "", "detail": "detailed", "numbers": False, "title": {}, "photoIds": [], "wishes": ""}
+    return {"medical": False, "textbooks": False, "discipline": "", "disciplineName": "", "pmids": [], "pmOffset": 0, "styleId": "", "styleName": "", "fonts": None, "colors": [], "notes": "", "detail": "detailed", "numbers": False, "title": {}, "photoIds": [], "wishes": "", "mode": "topic", "planText": "", "audience": "", "uploadIds": [], "uploadNames": {}}
 
 
 def max_pick(total: int) -> int:
@@ -126,36 +128,98 @@ def fonts_note(o: dict[str, Any]) -> str:
     return base + (", свои цвета" if o.get("colors") else "")
 
 
+MODE_NAMES = {"topic": "только тема", "plan": "тема и свой план", "text": "готовый текст по слайдам"}
+
+
 def setup_text(d: dict[str, Any]) -> str:
+    """Экран «Настроить». Сверху — то, что после создания на сайте НЕ поменять (поэтому спрашиваем здесь); ниже — оформление, его можно изменить на сайте потом, бесплатно."""
     o = d.get("o") or default_opts()
+    text_mode = o.get("mode") == "text"
+    notes = "подробно (мед. тема)" if o.get("medical") and not o.get("notes") else NOTES_NAMES.get(o.get("notes", ""), "не нужны")
     lines = [
-        "Настройте презентацию — всё необязательно, ничего не трогали — подберу сам.",
-        "",
+        "Настройте презентацию.",
         f"Тема: {d.get('topic', '')}",
         f"Вид: {KIND_NAMES.get(d.get('kind', 'talk'), 'Доклад')} · слайдов до {d.get('total', 10)}",
-        f"📚 Источники: {sources_note(o)}",
-        f"🎨 Оформление: {style_note(o)}",
-        f"🔤 Шрифты и цвета: {fonts_note(o)}",
-        f"📝 Заметки докладчика: {'подробно (мед. тема)' if o.get('medical') and not o.get('notes') else NOTES_NAMES.get(o.get('notes', ''), 'не нужны')} · слайды: {DETAIL_NAMES.get(o.get('detail', 'detailed'), 'подробно')}",
-        f"🧾 Титул: {'поправлено: ' + str(len(o['title'])) if o.get('title') else 'из вашего профиля'}",
-        f"🖼 Фото: {len(o['photoIds'])} (присылайте снимки прямо в чат)" if o.get("photoIds") else "🖼 Фото: нет (присылайте снимки прямо в чат)",
+        "",
+        "Выберите то, что нельзя поменять после создания (всё необязательно — ничего не трогали, подберу сам):",
+        f"🧩 С чего начинаем: {MODE_NAMES.get(o.get('mode', 'topic'), 'только тема')}" + (f" ({len(o['planText'])} знаков)" if o.get("planText") else ""),
     ]
-    if o.get("wishes"):
+    if not text_mode:
+        lines.append(f"📚 Источники: {sources_note(o)}")
+        lines.append(f"📎 Свои материалы: {len(o['uploadIds'])}" if o.get("uploadIds") else "📎 Свои материалы: нет")
+    lines.append(f"👥 Для кого: {o['audience']}" if o.get("audience") else "👥 Для кого: не указано")
+    lines.append(f"📝 Заметки докладчика: {notes} · слайды: {DETAIL_NAMES.get(o.get('detail', 'detailed'), 'подробно')}")
+    lines.append(f"🧾 Титул: {'поправлено: ' + str(len(o['title'])) if o.get('title') else 'из вашего профиля'}")
+    lines.append(f"🖼 Фото: {len(o['photoIds'])} (присылайте снимки прямо в чат)" if o.get("photoIds") else "🖼 Фото: нет (присылайте снимки прямо в чат)")
+    if o.get("wishes") and not text_mode:
         lines.append(f"💬 Пожелания: {o['wishes'][:120]}")
+    lines += ["", f"🎨 Оформление: {style_note(o)}; шрифты и цвета: {fonts_note(o)} — необязательно, это можно изменить на сайте потом."]
     return "\n".join(lines)
 
 
-def setup_kb(site_button: bool = True) -> InlineKeyboardMarkup:
-    rows = [
-        [("📚 Источники", "o:src"), ("🎨 Оформление", "o:sty:0")],
-        [("🔤 Шрифты", "o:fnt:h:0"), ("🎨 Цвета", "o:col")],
-        [("📝 Заметки и объём", "o:txt"), ("🧾 Титул", "o:ttl")],
-        [("🖼 Фото", "o:ph"), ("💬 Пожелания", "o:wsh")],
+def setup_kb(site_button: bool = True, o: dict[str, Any] | None = None) -> InlineKeyboardMarkup:
+    text_mode = bool(o and o.get("mode") == "text")
+    rows: list[list[tuple[str, str]]] = [[("🧩 С чего начинаем", "o:mode")]]
+    if not text_mode:
+        rows.append([("📚 Источники", "o:src"), ("📎 Свои материалы", "o:up")])
+    rows += [
+        [("👥 Для кого", "o:aud"), ("📝 Заметки и объём", "o:txt")],
+        [("🧾 Титул", "o:ttl"), ("🖼 Фото", "o:ph")],
     ]
+    if not text_mode:
+        rows.append([("💬 Пожелания", "o:wsh")])
+    rows.append([("🎨 Оформление, шрифты, цвета (необязательно)", "o:des")])
     if site_button:
         rows.append([("🖥 Полная форма на сайте", "o:site")])
     rows.append([("✅ Создать презентацию", "o:go")])
     return kb(rows)
+
+
+def design_kb() -> InlineKeyboardMarkup:
+    return kb([
+        [("🎨 Шаблон", "o:sty:0"), ("🔤 Шрифты", "o:fnt:h:0")],
+        [("🎨 Цвета", "o:col"), ("🔢 Номера слайдов", "o:num2")],
+        back_row(),
+    ])
+
+
+DESIGN_HELP = "Оформление необязательно: ничего не выберете — подберу сам под вас, а потом на сайте можно сменить шаблон, шрифты и цвета бесплатно и сколько угодно раз."
+
+
+def mode_kb(o: dict[str, Any]) -> InlineKeyboardMarkup:
+    m = o.get("mode", "topic")
+    return kb([
+        [(_mark(m == "topic", "Только тема — напишу сам"), "o:m:topic")],
+        [(_mark(m == "plan", "Тема и свой план"), "o:m:plan")],
+        [(_mark(m == "text", "Готовый текст по слайдам (не меняю формулировки)"), "o:m:text")],
+        back_row(),
+    ])
+
+
+MODE_HELP = "С чего начинаем. «Свой план» — вы присылаете пункты, я пишу по ним слайды. «Готовый текст» — вы присылаете текст каждого слайда, я его оформляю, формулировки не меняю (источники и пожелания в этом режиме не нужны)."
+PLAN_ASK = {
+    "plan": "Пришлите план по пунктам (можно несколькими сообщениями), как вам нужно. Когда всё отправили — нажмите «Готово».",
+    "text": "Пришлите текст по слайдам, например:\nСлайд 1. Заголовок\nТекст…\n\nСлайд 2. …\nМожно несколькими сообщениями. Когда всё отправили — нажмите «Готово».",
+}
+
+
+def plan_kb(has_text: bool) -> InlineKeyboardMarkup:
+    rows = [[("✅ Готово", "o:pdone")]]
+    if has_text:
+        rows.append([("Очистить и начать заново", "o:pclear")])
+    rows.append(back_row())
+    return kb(rows)
+
+
+def uploads_kb(items: list[dict[str, Any]], chosen: list[str]) -> InlineKeyboardMarkup:
+    rows = [[(_mark(x["id"] in chosen, f"{str(x['fileName'])[:30]} · {str(x.get('discipline') or '')[:14]}"), f"o:upt:{i}")] for i, x in enumerate(items[:10])]
+    rows.append(back_row())
+    return kb(rows)
+
+
+UPLOADS_HELP = "Свои материалы — файлы, которые вы загрузили на сайте (конспект, лекция, статья). По отмеченным (до 5) модель напишет слайды."
+UPLOADS_NONE = "Своих материалов пока нет. Загрузить файл можно на сайте — кнопка «Полная форма на сайте» — и вернуться сюда."
+AUD_ASK = "Для кого презентация? Например: «студенты 3 курса», «комиссия на защите», «школьники 9 класса». Пришлите одной фразой (или «-», чтобы убрать)."
 
 
 def back_row() -> list[tuple[str, str]]:
@@ -357,10 +421,13 @@ def draft_text(d: dict[str, Any]) -> str:
     return "\n".join(lines)[:3900]
 
 
-def draft_kb(d: dict[str, Any], run_id: str, site_url: str | None) -> InlineKeyboardMarkup:
-    rows = [[("✏️ Поправить слайд", f"e:{run_id}"), ("✅ Утвердить", f"a:{run_id}")]]
-    url_rows = [[("🖥 Открыть на сайте", site_url)]] if site_url else None
-    return kb(rows, url_rows)
+def draft_kb(d: dict[str, Any], run_id: str, site: bool = True) -> InlineKeyboardMarkup:
+    """«Открыть на сайте» — обычная кнопка: ссылка входа создаётся в момент нажатия (она живёт недолго и срабатывает один раз; созданная заранее, при отправке
+    сообщения, к нажатию «умирала», и сайт просил регистрироваться заново)."""
+    rows = [[("✏️ Поправить слайд", f"e:{run_id}"), ("✅ Утвердить", f"a:{run_id}")], [("🖼 Подобрать фото ИИ", f"ph:{run_id}")]]
+    if site:
+        rows.append([("🖥 Открыть на сайте", f"u:{run_id}")])
+    return kb(rows)
 
 
 def slides_pick_kb(d: dict[str, Any], run_id: str) -> InlineKeyboardMarkup:
@@ -387,10 +454,12 @@ def edit_actions_kb(run_id: str, index: int) -> InlineKeyboardMarkup:
     ])
 
 
-def files_kb(run_id: str, site_url: str | None) -> InlineKeyboardMarkup:
-    rows = [[("📄 PowerPoint", f"f:{run_id}:pptx"), ("📕 PDF", f"f:{run_id}:pdf")], [("⬅ В меню", "m:home")]]
-    url_rows = [[("🖥 Открыть на сайте", site_url)]] if site_url else None
-    return kb(rows, url_rows)
+def files_kb(run_id: str, site: bool = True) -> InlineKeyboardMarkup:
+    rows = [[("📄 PowerPoint", f"f:{run_id}:pptx"), ("📕 PDF", f"f:{run_id}:pdf")], [("🖼 Подобрать фото ИИ", f"ph:{run_id}")]]
+    if site:
+        rows.append([("🖥 Открыть на сайте (поправить текст и оформление)", f"u:{run_id}")])
+    rows.append([("⬅ В меню", "m:home")])
+    return kb(rows)
 
 
 def runs_kb(runs: list[dict[str, Any]]) -> InlineKeyboardMarkup:

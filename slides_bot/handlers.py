@@ -42,9 +42,12 @@ class Create(StatesGroup):
     wishes = State()
     colors = State()
     title_value = State()
+    plan = State()  # свой план или готовый текст по слайдам: приходит несколькими сообщениями
+    audience = State()
 
 
-SETUP_STATES = (Create.setup, Create.wishes, Create.colors, Create.title_value)
+SETUP_STATES = (Create.setup, Create.wishes, Create.colors, Create.title_value, Create.plan, Create.audience)
+MAX_PLAN_CHARS = 40_000
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 
 
@@ -61,19 +64,28 @@ def site():
     return slides_site.site
 
 
-async def _site_url(tg_id: int, run_id: str) -> str | None:
-    """Ссылка на презентацию на сайте. В боте человек вошёл, а на сайте сессии нет, поэтому берётся одноразовая ссылка входа
-    (действует 5 минут, один раз); не вышло — обычная ссылка (сайт попросит войти)."""
+async def _site_link(tg_id: int, *, run_id: str = "", path: str = "") -> tuple[str | None, bool]:
+    """Ссылка на сайт: (адрес, одноразовая_ли). В боте человек вошёл, а на сайте сессии нет, поэтому берётся одноразовая ссылка входа
+    (живёт 15 минут, срабатывает один раз) и создаётся ТОЛЬКО в момент нажатия кнопки. Не вышло — обычная ссылка (сайт попросит войти), и человеку об этом говорится."""
     base = settings.SLIDES_SITE_URL.rstrip("/")
     if not base:
-        return None
+        return None, False
     try:
-        r = await site().call("open_link", tg_id, runId=run_id)
+        r = await site().call("open_link", tg_id, **({"runId": run_id} if run_id else {"path": path or "/slides"}))
         if r.get("ok") and r.get("url"):
-            return str(r["url"])
+            return str(r["url"]), True
     except Exception:
         logger.warning("Одноразовая ссылка не получена", exc_info=True)
-    return f"{base}/slides/{run_id}"
+    return (f"{base}/slides/{run_id}" if run_id else f"{base}{path or '/slides'}"), False
+
+
+async def _send_site_link(msg: Message, tg_id: int, *, run_id: str = "", path: str = "", back: str = "m:home") -> None:
+    url, once = await _site_link(tg_id, run_id=run_id, path=path)
+    if not url:
+        await msg.answer(T.NO_SITE)
+        return
+    text = T.SITE_LINK_ONCE if once else T.SITE_LINK_PLAIN
+    await msg.answer(text, reply_markup=T.kb([[("⬅ Назад", back)]], [[("🖥 Открыть на сайте", url)]]))
 
 
 def _is_owner(tg_id: int) -> bool:
@@ -295,10 +307,11 @@ async def _screen(message: Message, text: str, markup: InlineKeyboardMarkup | No
 async def _open_setup(message: Message, state: FSMContext, edit: bool = False) -> None:
     await state.set_state(Create.setup)
     d = await state.get_data()
+    o = await _opts(state)
     if edit:
-        await _screen(message, T.setup_text(d), T.setup_kb())
+        await _screen(message, T.setup_text(d), T.setup_kb(o=o))
     else:
-        await message.answer(T.setup_text(d), reply_markup=T.setup_kb())
+        await message.answer(T.setup_text(d), reply_markup=T.setup_kb(o=o))
 
 
 async def _opts(state: FSMContext) -> dict[str, Any]:
@@ -333,13 +346,65 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     elif act == "go":
         await _create(msg, state, bot, tg)
     elif act == "site":
-        r = await site().call("open_link", tg, path="/slides/new")
-        base = settings.SLIDES_SITE_URL.rstrip("/")
-        url = str(r["url"]) if r.get("ok") and r.get("url") else (f"{base}/slides/new" if base else "")
-        if url:
-            await msg.answer("Полная форма на сайте: там можно загрузить свои материалы, выбрать оформление по образцам и пользоваться всем остальным. Ссылка входа действует 5 минут и срабатывает один раз.", reply_markup=T.kb([[("⬅ К настройкам", "o:home")]], [[("🖥 Открыть форму на сайте", url)]]))
+        await _send_site_link(msg, tg, path="/slides/new", back="o:home")
+    # --- с чего начинаем, для кого, свои материалы
+    elif act == "mode":
+        await state.set_state(Create.setup)
+        await _screen(msg, T.MODE_HELP, T.mode_kb(o))
+    elif act == "m":
+        if arg in ("topic", "plan", "text"):
+            o["mode"] = arg
+            if arg == "topic":
+                o["planText"] = ""
+            if arg == "text":
+                o.update(medical=False, textbooks=False, discipline="", disciplineName="", pmids=[], uploadIds=[], wishes="")
+            await _save(state, o)
+        if arg in ("plan", "text"):
+            await state.set_state(Create.plan)
+            await msg.answer(T.PLAN_ASK[arg], reply_markup=T.plan_kb(bool(o["planText"])))
         else:
-            await msg.answer(T.NO_SITE)
+            await _open_setup(msg, state, edit=True)
+    elif act == "pdone":
+        if o["mode"] != "topic" and not o["planText"].strip():
+            await msg.answer("Текст пока не получен — пришлите его сообщением или выберите «Только тема».")
+            return
+        await _open_setup(msg, state)
+    elif act == "pclear":
+        o["planText"] = ""
+        await _save(state, o)
+        await msg.answer("Очистил. Пришлите план или текст заново.", reply_markup=T.plan_kb(False))
+    elif act == "aud":
+        await state.set_state(Create.audience)
+        await msg.answer(T.AUD_ASK, reply_markup=T.kb([[("⬅ К настройкам", "o:home")]]))
+    elif act == "up":
+        cat = await _options_or_say(msg, tg)
+        if not cat:
+            return
+        items = cat.get("uploads", [])
+        o["uploadNames"] = {x["id"]: x["fileName"] for x in items}
+        await _save(state, o)
+        await _screen(msg, T.UPLOADS_HELP if items else T.UPLOADS_NONE, T.uploads_kb(items, o["uploadIds"]))
+    elif act == "upt":
+        cat = await _options_or_say(msg, tg)
+        items = (cat or {}).get("uploads", [])
+        if arg.isdigit() and int(arg) < len(items):
+            uid = items[int(arg)]["id"]
+            if uid in o["uploadIds"]:
+                o["uploadIds"].remove(uid)
+            elif len(o["uploadIds"]) >= 5:
+                await msg.answer("Можно выбрать не больше 5 материалов.")
+                return
+            else:
+                o["uploadIds"].append(uid)
+            await _save(state, o)
+        await _screen(msg, T.UPLOADS_HELP, T.uploads_kb(items, o["uploadIds"]))
+    # --- оформление (необязательно)
+    elif act == "des":
+        await _screen(msg, T.DESIGN_HELP, T.design_kb())
+    elif act == "num2":
+        o["numbers"] = not o["numbers"]
+        await _save(state, o)
+        await _screen(msg, T.DESIGN_HELP + f"\nНомера слайдов в углу: {'да' if o['numbers'] else 'нет'}.", T.design_kb())
     # --- источники
     elif act == "src":
         await state.set_state(Create.setup)
@@ -548,6 +613,30 @@ async def got_wishes(message: Message, state: FSMContext) -> None:
     await _open_setup(message, state)
 
 
+@router.message(Create.plan, F.text)
+async def got_plan_text(message: Message, state: FSMContext) -> None:
+    o = await _opts(state)
+    chunk = (message.text or "").strip()
+    if not chunk:
+        return
+    joined = (o["planText"] + "\n" + chunk).strip() if o["planText"] else chunk
+    if len(joined) > MAX_PLAN_CHARS:
+        await message.answer(f"Текст длиннее {MAX_PLAN_CHARS} знаков — сократите или разбейте презентацию на две.")
+        return
+    o["planText"] = joined
+    await _save(state, o)
+    await message.answer(f"Принято: {len(joined)} знаков. Можно прислать ещё или нажать «Готово».", reply_markup=T.plan_kb(True))
+
+
+@router.message(Create.audience, F.text)
+async def got_audience(message: Message, state: FSMContext) -> None:
+    o = await _opts(state)
+    v = (message.text or "").strip()
+    o["audience"] = "" if v == "-" else v[:200]
+    await _save(state, o)
+    await _open_setup(message, state)
+
+
 @router.message(Create.colors, F.text)
 async def got_colors(message: Message, state: FSMContext) -> None:
     codes = re.findall(r"#?[0-9a-fA-F]{6}\b", message.text or "")
@@ -614,6 +703,13 @@ def _create_payload(d: dict[str, Any]) -> dict[str, Any]:
     """Что отправить сайту: сначала обязательное, потом только то, что человек выбрал (остальное подберёт сайт)."""
     o = d.get("o") or T.default_opts()
     p: dict[str, Any] = {"topic": d["topic"], "kind": d.get("kind", "talk"), "total": d.get("total", 10), "styleId": o.get("styleId", ""), "wishes": o.get("wishes", "")}
+    if o.get("mode") in ("plan", "text"):
+        p["mode"] = o["mode"]
+        p["text"] = o.get("planText", "")
+    if o.get("audience"):
+        p["audience"] = o["audience"]
+    if o.get("uploadIds"):
+        p["uploadIds"] = list(o["uploadIds"])
     if o.get("medical"):
         p["medical"] = True
     if o.get("textbooks"):
@@ -644,6 +740,12 @@ async def _create(message: Message, state: FSMContext, bot: Bot, tg: int) -> Non
     await state.clear()
     if not data.get("topic"):
         await message.answer("Начнём заново: нажмите /menu.")
+        return
+    o = data.get("o") or {}
+    if o.get("mode") in ("plan", "text") and not str(o.get("planText", "")).strip():
+        await message.answer("Выбран режим со своим планом или текстом, но текст не получен. Откройте «С чего начинаем» и пришлите его или выберите «Только тема».")
+        await state.set_data(data)
+        await state.set_state(Create.setup)
         return
     r = await site().call("create", tg, **_create_payload(data))
     if r.get("ok"):
@@ -725,9 +827,15 @@ async def _send_draft(bot: Bot, chat_id: int, tg: int, run_id: str, edit_note: s
         return
     text = (edit_note + "\n\n" if edit_note else "") + T.draft_text(d)
     if d.get("approved"):
-        await bot.send_message(chat_id, text + "\n\nПрезентация утверждена. Выберите файл:", reply_markup=T.files_kb(run_id, await _site_url(tg, run_id)))
+        await bot.send_message(chat_id, text + "\n\nПрезентация утверждена. Выберите файл:", reply_markup=T.files_kb(run_id))
     else:
-        await bot.send_message(chat_id, text, reply_markup=T.draft_kb(d, run_id, await _site_url(tg, run_id)))
+        await bot.send_message(chat_id, text, reply_markup=T.draft_kb(d, run_id))
+
+
+@router.callback_query(F.data.startswith("u:"))
+async def cb_open_site(call: CallbackQuery) -> None:
+    await call.answer()
+    await _send_site_link(call.message, call.from_user.id, run_id=call.data[2:], back=f"d:{call.data[2:]}")
 
 
 @router.callback_query(F.data.startswith("d:"))
@@ -809,7 +917,7 @@ async def cb_approve(call: CallbackQuery, bot: Bot) -> None:
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or "Не получилось утвердить"))
         return
-    await call.message.answer("Утверждено. Какой файл прислать?", reply_markup=T.files_kb(run_id, await _site_url(call.from_user.id, run_id)))
+    await call.message.answer("Утверждено. Какой файл прислать?", reply_markup=T.files_kb(run_id))
 
 
 @router.callback_query(F.data.startswith("f:"))
