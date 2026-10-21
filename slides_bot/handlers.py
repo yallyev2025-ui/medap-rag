@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
+import time
 from typing import Any
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.integrations import slides_site
 from config import settings
@@ -36,7 +38,14 @@ class Login(StatesGroup):
 
 class Create(StatesGroup):
     topic = State()
+    setup = State()  # экран «Настроить»: всё выбирается кнопками, снимки присылаются в чат
     wishes = State()
+    colors = State()
+    title_value = State()
+
+
+SETUP_STATES = (Create.setup, Create.wishes, Create.colors, Create.title_value)
+MAX_PHOTO_BYTES = 8 * 1024 * 1024
 
 
 class Edit(StatesGroup):
@@ -241,41 +250,385 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("s:"))
 async def got_size(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
-    await state.update_data(total=int(call.data[2:]))
-    r = await site().call("styles", call.from_user.id)
+    await state.update_data(total=int(call.data[2:]), o=T.default_opts())
+    await _open_setup(call.message, state)
+
+
+# ---------- «Настроить»: те же выборы, что в мастере на сайте ----------
+
+_catalog: dict[int, tuple[float, dict[str, Any]]] = {}
+CATALOG_TTL = 600.0
+
+
+async def _options(tg: int) -> dict[str, Any] | None:
+    """Каталог выборов с сайта (шаблоны, шрифты, цвета, предметы, поля титула); на несколько минут запоминается, чтобы не дёргать сайт на каждое нажатие."""
+    now = time.monotonic()
+    hit = _catalog.get(tg)
+    if hit and now - hit[0] < CATALOG_TTL:
+        return hit[1]
+    r = await site().call("options", tg)
     if not r.get("ok"):
-        await call.message.answer(str(r.get("error") or T.NO_SITE))
+        return None
+    _catalog[tg] = (now, r)
+    return r
+
+
+async def _screen(message: Message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    """Показать экран на месте прошлого (без потока сообщений); если Telegram не даёт править — новым сообщением."""
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _open_setup(message: Message, state: FSMContext, edit: bool = False) -> None:
+    await state.set_state(Create.setup)
+    d = await state.get_data()
+    if edit:
+        await _screen(message, T.setup_text(d), T.setup_kb())
+    else:
+        await message.answer(T.setup_text(d), reply_markup=T.setup_kb())
+
+
+async def _opts(state: FSMContext) -> dict[str, Any]:
+    d = await state.get_data()
+    o = d.get("o")
+    if not isinstance(o, dict):
+        o = T.default_opts()
+        await state.update_data(o=o)
+    return o
+
+
+async def _save(state: FSMContext, o: dict[str, Any]) -> None:
+    await state.update_data(o=o)
+
+
+@router.callback_query(F.data.startswith("o:"))
+async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await call.answer()
+    tg = call.from_user.id
+    d = await state.get_data()
+    if not d.get("topic"):
+        await call.message.answer("Начнём заново: нажмите /menu.")
         return
-    await call.message.answer("Выберите оформление:", reply_markup=T.styles_kb(r["templates"]))
+    o = await _opts(state)
+    parts = call.data.split(":")  # o:<действие>[:аргументы]
+    act = parts[1]
+    arg = parts[2] if len(parts) > 2 else ""
+    msg = call.message
+
+    if act == "home":
+        await _open_setup(msg, state, edit=True)
+    elif act == "go":
+        await _create(msg, state, bot, tg)
+    elif act == "site":
+        r = await site().call("open_link", tg, path="/slides/new")
+        base = settings.SLIDES_SITE_URL.rstrip("/")
+        url = str(r["url"]) if r.get("ok") and r.get("url") else (f"{base}/slides/new" if base else "")
+        if url:
+            await msg.answer("Полная форма на сайте: там можно загрузить свои материалы, выбрать оформление по образцам и пользоваться всем остальным. Ссылка входа действует 5 минут и срабатывает один раз.", reply_markup=T.kb([[("⬅ К настройкам", "o:home")]], [[("🖥 Открыть форму на сайте", url)]]))
+        else:
+            await msg.answer(T.NO_SITE)
+    # --- источники
+    elif act == "src":
+        await state.set_state(Create.setup)
+        await _screen(msg, T.SOURCES_HELP, T.sources_kb(o))
+    elif act == "med":
+        o["medical"] = not o["medical"]
+        await _save(state, o)
+        await _screen(msg, T.SOURCES_HELP, T.sources_kb(o))
+    elif act == "tb":
+        if o["textbooks"]:
+            o.update(textbooks=False, discipline="", disciplineName="")
+            await _save(state, o)
+            await _screen(msg, T.SOURCES_HELP, T.sources_kb(o))
+        else:
+            await _show_disciplines(msg, tg, 0)
+    elif act == "dl":
+        await _show_disciplines(msg, tg, int(arg or 0))
+    elif act == "d":
+        cat = await _options(tg)
+        items = (cat or {}).get("disciplines", [])
+        if arg == "none":
+            o.update(textbooks=True, discipline="", disciplineName="")
+        elif arg.isdigit() and int(arg) < len(items):
+            o.update(textbooks=True, discipline=items[int(arg)]["code"], disciplineName=items[int(arg)]["title"])
+        await _save(state, o)
+        await _screen(msg, T.SOURCES_HELP, T.sources_kb(o))
+    elif act in ("pm", "pmm", "p", "pmx"):
+        await _pubmed(msg, state, tg, act, arg)
+    # --- оформление, шрифты, цвета
+    elif act == "sty":
+        cat = await _options(tg)
+        if not cat:
+            await msg.answer(T.NO_SITE)
+            return
+        await _screen(msg, "Выберите оформление. Смена бесплатна и без ИИ — потом можно поменять на сайте.", T.styles_page_kb(cat["templates"], int(arg or 0)))
+    elif act == "st":
+        if arg in ("auto", "plain"):
+            o.update(styleId="" if arg == "auto" else "plain", styleName="")
+        else:
+            cat = await _options(tg)
+            tpl = (cat or {}).get("templates", [])
+            if arg.isdigit() and int(arg) < len(tpl):
+                o.update(styleId=tpl[int(arg)]["id"], styleName=tpl[int(arg)]["name"])
+        await _save(state, o)
+        await _open_setup(msg, state, edit=True)
+    elif act == "fnt":
+        cat = await _options(tg)
+        if not cat:
+            await msg.answer(T.NO_SITE)
+            return
+        which = arg if arg in ("h", "b") else "h"
+        page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        title = "Шрифт заголовков:" if which == "h" else f"Шрифт текста (заголовки: {(o.get('fontsTmp') or '—')}):"
+        await _screen(msg, f"{title}\nШрифты работают парой: выберите оба — или ни одного (тогда возьмутся шрифты оформления).", T.fonts_page_kb(cat["fonts"], page, which))
+    elif act in ("fh", "fb"):
+        cat = await _options(tg)
+        fonts = (cat or {}).get("fonts", [])
+        if not (arg.isdigit() and int(arg) < len(fonts)):
+            return
+        if act == "fh":
+            o["fontsTmp"] = fonts[int(arg)]
+            await _save(state, o)
+            await _screen(msg, f"Заголовки: {fonts[int(arg)]}. Теперь шрифт текста:", T.fonts_page_kb(fonts, 0, "b"))
+        else:
+            o["fonts"] = {"heading": o.pop("fontsTmp", None) or fonts[int(arg)], "body": fonts[int(arg)]}
+            await _save(state, o)
+            await _open_setup(msg, state, edit=True)
+    elif act == "fx":
+        o["fonts"] = None
+        o.pop("fontsTmp", None)
+        await _save(state, o)
+        await _open_setup(msg, state, edit=True)
+    elif act == "col":
+        cat = await _options(tg)
+        if not cat:
+            await msg.answer(T.NO_SITE)
+            return
+        await _screen(msg, "Выберите набор цветов или пришлите свои. Из трёх цветов достроится вся палитра с проверкой читаемости.", T.colors_kb(cat["colorPresets"], bool(o["colors"])))
+    elif act == "cp":
+        cat = await _options(tg)
+        presets = (cat or {}).get("colorPresets", [])
+        if arg.isdigit() and int(arg) < len(presets):
+            o["colors"] = list(presets[int(arg)]["colors"])
+            await _save(state, o)
+        await _open_setup(msg, state, edit=True)
+    elif act == "cc":
+        await state.set_state(Create.colors)
+        await msg.answer(T.COLORS_HELP, reply_markup=T.kb([[("⬅ К настройкам", "o:home")]]))
+    elif act == "cx":
+        o["colors"] = []
+        await _save(state, o)
+        await _open_setup(msg, state, edit=True)
+    # --- текст
+    elif act == "txt":
+        await _screen(msg, T.TEXT_HELP, T.text_kb(o))
+    elif act == "n":
+        o["notes"] = "" if arg == "none" else arg if arg in ("brief", "detailed") else o["notes"]
+        await _save(state, o)
+        await _screen(msg, T.TEXT_HELP, T.text_kb(o))
+    elif act == "dd":
+        o["detail"] = arg if arg in ("brief", "detailed") else o["detail"]
+        await _save(state, o)
+        await _screen(msg, T.TEXT_HELP, T.text_kb(o))
+    elif act == "num":
+        o["numbers"] = not o["numbers"]
+        await _save(state, o)
+        await _screen(msg, T.TEXT_HELP, T.text_kb(o))
+    # --- титул
+    elif act == "ttl":
+        await _show_title(msg, state, tg)
+    elif act == "tf":
+        cat = await _options(tg)
+        fields = ((cat or {}).get("titleFields") or {}).get(d.get("kind", "talk"), [])
+        if arg.isdigit() and int(arg) < len(fields):
+            await state.set_state(Create.title_value)
+            await state.update_data(titleKey=fields[int(arg)][0])
+            await msg.answer(f"{fields[int(arg)][1]}: пришлите значение (знак «-» очищает поле).")
+    elif act == "tr":
+        o["title"] = {}
+        await _save(state, o)
+        await _show_title(msg, state, tg)
+    # --- фото и пожелания
+    elif act == "ph":
+        await _screen(msg, T.PHOTOS_HELP + (f"\n\nЗагружено: {len(o['photoIds'])}" if o["photoIds"] else ""), T.photos_kb(len(o["photoIds"])))
+    elif act == "phx":
+        o["photoIds"] = []
+        await _save(state, o)
+        await _screen(msg, "Фото убраны. " + T.PHOTOS_HELP, T.photos_kb(0))
+    elif act == "wsh":
+        await state.set_state(Create.wishes)
+        await msg.answer(T.ASK_WISHES, reply_markup=T.kb([[("Без пожеланий", "o:wno")], [("⬅ К настройкам", "o:home")]]))
+    elif act == "wno":
+        o["wishes"] = ""
+        await _save(state, o)
+        await _open_setup(msg, state)
 
 
-@router.callback_query(F.data.startswith("st:"))
-async def got_style(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    sid = call.data[3:]
-    await state.update_data(styleId="" if sid == "auto" else sid)
-    await state.set_state(Create.wishes)
-    await call.message.answer(T.ASK_WISHES, reply_markup=T.kb([[("Без пожеланий", "w:none")]]))
+async def _show_disciplines(msg: Message, tg: int, page: int) -> None:
+    cat = await _options(tg)
+    if not cat:
+        await msg.answer(T.NO_SITE)
+        return
+    items = cat.get("disciplines", [])
+    if not items:
+        await _screen(msg, "Предметов для учебников пока нет.", T.kb([[("⬅ Назад", "o:src")]]))
+        return
+    await _screen(msg, "Предмет для учебников — по нему бот найдёт план и текст:", T.disciplines_kb(items, page))
 
 
-@router.callback_query(Create.wishes, F.data == "w:none")
-async def no_wishes(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    await call.answer()
-    await _create(call.message, state, bot, call.from_user.id, "")
+async def _show_title(msg: Message, state: FSMContext, tg: int) -> None:
+    cat = await _options(tg)
+    if not cat:
+        await msg.answer(T.NO_SITE)
+        return
+    d = await state.get_data()
+    o = await _opts(state)
+    fields = (cat.get("titleFields") or {}).get(d.get("kind", "talk"), [])
+    await _screen(msg, T.title_text(fields, o["title"], cat.get("profile", {})), T.title_kb(fields))
+
+
+async def _pubmed(msg: Message, state: FSMContext, tg: int, act: str, arg: str) -> None:
+    """Выбор статей PubMed: 10 лучших по ценности, «ещё 10» (если нет учебников), выбор не больше числа слайдов — как на сайте."""
+    d = await state.get_data()
+    o = await _opts(state)
+    limit = T.max_pick(int(d.get("total", 10)))
+    page = list(d.get("pmList") or [])
+    if act == "pmx":
+        o["pmids"] = []
+        await _save(state, o)
+    elif act == "p":
+        if arg.isdigit() and int(arg) < len(page):
+            pmid = page[int(arg)]["pmid"]
+            if pmid in o["pmids"]:
+                o["pmids"].remove(pmid)
+            elif len(o["pmids"]) >= limit:
+                await msg.answer(f"Выбрать можно не больше {limit} — по числу слайдов. Снимите лишнюю статью.")
+                return
+            else:
+                o["pmids"].append(pmid)
+            await _save(state, o)
+    elif act == "pmm" or not page:
+        offset = int(o["pmOffset"]) + 10 if act == "pmm" else 0
+        r = await site().call("articles", tg, topic=d.get("topic", ""), offset=offset)
+        if not r.get("ok"):
+            await msg.answer(str(r.get("error") or "Не получилось подобрать статьи"))
+            return
+        page = list(r.get("articles", []))
+        o["pmOffset"] = offset
+        await _save(state, o)
+        await state.update_data(pmList=page)
+    more = not o.get("textbooks") and int(o["pmOffset"]) < 20
+    await _screen(msg, T.articles_text(page, o["pmids"], limit), T.articles_kb(page, o["pmids"], more))
 
 
 @router.message(Create.wishes, F.text)
-async def got_wishes(message: Message, state: FSMContext, bot: Bot) -> None:
-    await _create(message, state, bot, message.from_user.id, (message.text or "").strip()[:800])
+async def got_wishes(message: Message, state: FSMContext) -> None:
+    o = await _opts(state)
+    o["wishes"] = (message.text or "").strip()[:800]
+    await _save(state, o)
+    await _open_setup(message, state)
 
 
-async def _create(message: Message, state: FSMContext, bot: Bot, tg: int, wishes: str) -> None:
+@router.message(Create.colors, F.text)
+async def got_colors(message: Message, state: FSMContext) -> None:
+    codes = re.findall(r"#?[0-9a-fA-F]{6}\b", message.text or "")
+    colors = ["#" + c.lstrip("#").lower() for c in codes][:3]
+    if not colors:
+        await message.answer("Не нашёл цветов. Пришлите коды вида #2f6f73 (до трёх через пробел).")
+        return
+    o = await _opts(state)
+    o["colors"] = colors
+    await _save(state, o)
+    await _open_setup(message, state)
+
+
+@router.message(Create.title_value, F.text)
+async def got_title_value(message: Message, state: FSMContext) -> None:
+    d = await state.get_data()
+    key = d.get("titleKey")
+    o = await _opts(state)
+    if key:
+        v = (message.text or "").strip()
+        o["title"][key] = "" if v == "-" else v[:160]
+        await _save(state, o)
+    await state.set_state(Create.setup)
+    await _show_title(message, state, message.from_user.id)
+
+
+@router.message(F.photo | F.document, StateFilter(*SETUP_STATES))
+async def got_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Снимок из чата: уходит на сайт как загрузка в мастере, ждёт создания и после черновика встаёт на подходящий слайд."""
+    o = await _opts(state)
+    if len(o["photoIds"]) >= T.MAX_PHOTOS:
+        await message.answer(f"Уже {T.MAX_PHOTOS} снимков — больше не бывает. Уберите лишние в «Фото».")
+        return
+    if message.photo:
+        file_id, size = message.photo[-1].file_id, message.photo[-1].file_size or 0
+    elif message.document and str(message.document.mime_type or "").startswith("image/"):
+        file_id, size = message.document.file_id, message.document.file_size or 0
+    else:
+        await message.answer("Это не снимок. Пришлите JPEG, PNG или WebP.")
+        return
+    if size > MAX_PHOTO_BYTES:
+        await message.answer("Снимок больше 8 МБ — пришлите поменьше.")
+        return
+    buf = await bot.download(file_id)
+    data = buf.read() if buf is not None else b""
+    if not data:
+        await message.answer("Не получилось получить снимок из Telegram. Пришлите ещё раз.")
+        return
+    r = await site().call("photo_upload", message.from_user.id, base64=base64.b64encode(data).decode())
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Снимок не принят"))
+        return
+    o["photoIds"].append(str(r["photoId"]))
+    await _save(state, o)
+    await message.answer(f"🖼 Снимок принят ({len(o['photoIds'])}). Можно прислать ещё или нажать «Создать» в настройках.", reply_markup=T.kb([[("⬅ К настройкам", "o:home")]]))
+
+
+@router.callback_query(F.data.startswith("st:") | F.data.startswith("w:"))
+async def cb_stale(call: CallbackQuery) -> None:
+    await call.answer("Эта кнопка устарела — нажмите /menu", show_alert=True)
+
+
+def _create_payload(d: dict[str, Any]) -> dict[str, Any]:
+    """Что отправить сайту: сначала обязательное, потом только то, что человек выбрал (остальное подберёт сайт)."""
+    o = d.get("o") or T.default_opts()
+    p: dict[str, Any] = {"topic": d["topic"], "kind": d.get("kind", "talk"), "total": d.get("total", 10), "styleId": o.get("styleId", ""), "wishes": o.get("wishes", "")}
+    if o.get("medical"):
+        p["medical"] = True
+    if o.get("textbooks"):
+        p["textbooks"] = True
+        if o.get("discipline"):
+            p["discipline"] = o["discipline"]
+    if o.get("pmids"):
+        p["pmids"] = list(o["pmids"])
+    if o.get("notes"):
+        p["notes"] = o["notes"]
+    if o.get("detail") == "brief":
+        p["detail"] = "brief"
+    if o.get("fonts"):
+        p["fonts"] = o["fonts"]
+    if o.get("colors"):
+        p["colors"] = list(o["colors"])
+    if o.get("numbers"):
+        p["numbers"] = True
+    if o.get("title"):
+        p["titleFields"] = dict(o["title"])
+    if o.get("photoIds"):
+        p["photoIds"] = list(o["photoIds"])
+    return p
+
+
+async def _create(message: Message, state: FSMContext, bot: Bot, tg: int) -> None:
     data = await state.get_data()
     await state.clear()
     if not data.get("topic"):
         await message.answer("Начнём заново: нажмите /menu.")
         return
-    r = await site().call("create", tg, topic=data["topic"], kind=data.get("kind", "talk"), total=data.get("total", 10), styleId=data.get("styleId", ""), wishes=wishes)
+    r = await site().call("create", tg, **_create_payload(data))
     if r.get("ok"):
         await message.answer(T.WORKING)
         _watch(bot, message.chat.id, tg, str(r["runId"]))

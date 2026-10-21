@@ -108,6 +108,23 @@ class FakeSite:
             return {"ok": True, "url": f"https://site.test/t/ONETIME-{p.get('runId', '')}"}
         if action == "me":
             return {"ok": True, "balance": self.balance, "freeAvailable": True, "team": False, "owner": telegram_id == 999}
+        if action == "options":
+            return {
+                "ok": True,
+                "templates": [{"id": f"t{i}", "name": f"Шаблон {i}"} for i in range(12)],
+                "fonts": [f"Шрифт{i}" for i in range(10)],
+                "colorPresets": [{"id": "teal", "name": "Бирюза и янтарь", "colors": ["#2f6f73", "#d9822b", "#1d2b3a"]}],
+                "disciplines": [{"code": "therapy", "title": "Терапия"}, {"code": "surgery", "title": "Хирургия"}],
+                "titleFields": {"talk": [["university", "Вуз"], ["student", "Докладчик (ФИО)"], ["year", "Год"]]},
+                "profile": {"student": "Иван Петров", "university": "ВолгГМУ", "year": "2026"},
+                "maxPhotos": 12,
+            }
+        if action == "articles":
+            off = p.get("offset", 0)
+            return {"ok": True, "articles": [{"pmid": f"{off + i}00", "title": f"Статья {off + i}", "journal": "Lancet", "year": "2024", "design": "обзор", "abstract": "аннотация " * 30, "openAccess": i % 2 == 0} for i in range(1, 11)]}
+        if action == "photo_upload":
+            self.photos = getattr(self, "photos", 0) + 1
+            return {"ok": True, "photoId": f"photo-{self.photos:012d}", "width": 400, "height": 300}
         if action == "styles":
             return {"ok": True, "templates": [{"id": "cobalt", "name": "Кобальт"}, {"id": "mint", "name": "Мята"}]}
         if action == "create":
@@ -144,8 +161,13 @@ class FakeMessage:
         self.text = text
         self.sent: list[tuple[str, object]] = []
         self.docs: list[tuple[str, bytes]] = []
+        self.photo = None
+        self.document = None
 
     async def answer(self, text: str, reply_markup=None, **_):
+        self.sent.append((text, reply_markup))
+
+    async def edit_text(self, text: str, reply_markup=None, **_):
         self.sent.append((text, reply_markup))
 
     async def answer_document(self, document, caption=None, **_):
@@ -167,6 +189,7 @@ def fake_bot() -> MagicMock:
     bot = MagicMock()
     bot.send_message = AsyncMock()
     bot.send_photo = AsyncMock()
+    bot.download = AsyncMock(side_effect=lambda _id: __import__("io").BytesIO(b"\x89PNG-from-telegram"))
     return bot
 
 
@@ -235,14 +258,137 @@ async def flow_checks() -> None:
     ok(any("Бесплатная" in b for b in buttons) and any("30 ₽" in b for b in buttons) and any("50 ₽" in b for b in buttons), "в размерах — бесплатная и цены")
     call = FakeCall("s:10")
     await H.got_size(call, ctx())
-    ok("Выберите оформление" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после выбора размера бот предлагает оформление, а не просит войти снова: {texts_of(call.message)}")
-    call = FakeCall("st:cobalt")
-    await H.got_style(call, ctx())
+    ok("Настройте презентацию" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — экран «Настроить», а не просьба войти: {texts_of(call.message)}")
+    ok(await ctx().get_state() == H.Create.setup.state, "ждём выборов")
+    labels = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    for want in ("Источники", "Оформление", "Шрифты", "Цвета", "Заметки", "Титул", "Фото", "Пожелания", "Полная форма на сайте", "Создать презентацию"):
+        ok(any(want in x for x in labels), f"на экране «Настроить» есть «{want}»: {labels}")
+    ok("Источники: общие знания" in texts_of(call.message) and "Оформление: подберём сами" in texts_of(call.message), "на экране видно, что выбрано сейчас («авто»)")
+
+    # источники: медицина, учебники → предмет, PubMed → список 10, выбор, «ещё 10», предел по числу слайдов
+    call = FakeCall("o:src")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Откуда брать материал" in texts_of(call.message), "экран источников")
+    await H.cb_opt(FakeCall("o:med"), ctx(), fake_bot())
+    call = FakeCall("o:tb")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Предмет для учебников" in texts_of(call.message) and "Терапия" in str(call.message.sent), "учебники → просим выбрать предмет")
+    await H.cb_opt(FakeCall("o:d:0"), ctx(), fake_bot())
+    call = FakeCall("o:pm")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Статья 1" in texts_of(call.message) and "Статья 10" in texts_of(call.message) and "🔓" in texts_of(call.message), "PubMed: список 10 статей с аннотациями и пометкой открытого текста")
+    btns = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("Ещё 10 статей" not in btns, "при включённых учебниках «ещё 10» не показывается (как на сайте)")
+    await H.cb_opt(FakeCall("o:p:0"), ctx(), fake_bot())
+    await H.cb_opt(FakeCall("o:p:2"), ctx(), fake_bot())
+    o = (await ctx().get_data())["o"]
+    ok(o["pmids"] == ["100", "300"] and o["textbooks"] and o["medical"] and o["discipline"] == "therapy", f"выбор источников запомнен: {o}")
+    await H.cb_opt(FakeCall("o:p:0"), ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["pmids"] == ["300"], "повторное нажатие снимает статью")
+    await H.cb_opt(FakeCall("o:tb"), ctx(), fake_bot())  # снять учебники → «ещё 10» вернётся
+    call = FakeCall("o:pm")
+    await H.cb_opt(call, ctx(), fake_bot())
+    btns = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("Ещё 10 статей" in btns, "без учебников есть «Ещё 10 статей»")
+    call = FakeCall("o:pmm")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Статья 11" in texts_of(call.message) and [c for c in fs.calls if c[0] == "articles"][-1][2]["offset"] == 10, "«Ещё 10» просит вторую страницу (offset 10)")
+    await ctx().update_data(total=3)
+    for k in range(10):
+        await H.cb_opt(FakeCall(f"o:p:{k}"), ctx(), fake_bot())
+    ok(len((await ctx().get_data())["o"]["pmids"]) == 3, "выбрать можно не больше, чем слайдов (3)")
+    await ctx().update_data(total=10)
+    await H.cb_opt(FakeCall("o:pmx"), ctx(), fake_bot())
+
+    # оформление, шрифты, цвета, заметки, титул
+    call = FakeCall("o:sty:0")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаблон 0" in str(call.message.sent) and "Чистый лист" in str(call.message.sent), "список шаблонов с «чистым листом» и «подберите сами»")
+    call = FakeCall("o:sty:1")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаблон 8" in str(call.message.sent) and "Шаблон 0" not in str(call.message.sent), "вторая страница шаблонов")
+    await H.cb_opt(FakeCall("o:st:3"), ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["styleId"] == "t3", "шаблон выбран")
+    call = FakeCall("o:fnt:h:0")
+    await H.cb_opt(call, ctx(), fake_bot())
+    await H.cb_opt(FakeCall("o:fh:2"), ctx(), fake_bot())
+    call = FakeCall("o:fb:5")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["fonts"] == {"heading": "Шрифт2", "body": "Шрифт5"}, "шрифты — парой: заголовки и текст")
+    await H.cb_opt(FakeCall("o:cp:0"), ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["colors"] == ["#2f6f73", "#d9822b", "#1d2b3a"], "набор цветов выбран")
+    await H.cb_opt(FakeCall("o:cc"), ctx(), fake_bot())
+    ok(await ctx().get_state() == H.Create.colors.state, "свои цвета: ждём коды")
+    m = FakeMessage(text="ерунда")
+    await H.got_colors(m, ctx())
+    ok("Не нашёл цветов" in texts_of(m) and await ctx().get_state() == H.Create.colors.state, "не цвета — просим ещё раз")
+    m = FakeMessage(text="#112233 AABBCC 445566 ffffff")
+    await H.got_colors(m, ctx())
+    ok((await ctx().get_data())["o"]["colors"] == ["#112233", "#aabbcc", "#445566"] and await ctx().get_state() == H.Create.setup.state, "свои цвета: до трёх, нижний регистр, возврат к настройкам")
+    await H.cb_opt(FakeCall("o:n:detailed"), ctx(), fake_bot())
+    await H.cb_opt(FakeCall("o:dd:brief"), ctx(), fake_bot())
+    await H.cb_opt(FakeCall("o:num"), ctx(), fake_bot())
+    call = FakeCall("o:ttl")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Иван Петров" in texts_of(call.message) and "ВолгГМУ" not in texts_of(call.message) or "Вуз: ВолгГМУ" in texts_of(call.message), "титул показывает значения из профиля")
+    await H.cb_opt(FakeCall("o:tf:0"), ctx(), fake_bot())
+    ok(await ctx().get_state() == H.Create.title_value.state, "поле титула: ждём значение")
+    m = FakeMessage(text="МГУ")
+    await H.got_title_value(m, ctx())
+    ok((await ctx().get_data())["o"]["title"] == {"university": "МГУ"} and "Вуз: МГУ" in texts_of(m), "значение поля титула сохранено и показано")
+    await H.cb_opt(FakeCall("o:tf:1"), ctx(), fake_bot())
+    await H.got_title_value(FakeMessage(text="-"), ctx())
+    ok((await ctx().get_data())["o"]["title"]["student"] == "", "«-» очищает поле")
+
+    # фото из чата: идут на сайт, запоминаются; не снимок и огромный файл отклоняются
+    bot_ph = fake_bot()
+    m = FakeMessage()
+    m.photo = [SimpleNamespace(file_id="small", file_size=1000), SimpleNamespace(file_id="big", file_size=200000)]
+    await H.got_photo(m, ctx(), bot_ph)
+    bot_ph.download.assert_awaited_with("big")
+    up = [c for c in fs.calls if c[0] == "photo_upload"][-1]
+    ok(base64.b64decode(up[2]["base64"]) == b"\x89PNG-from-telegram" and up[1] == 111, "снимок из чата ушёл на сайт (самый крупный размер)")
+    ok(len((await ctx().get_data())["o"]["photoIds"]) == 1 and "принят" in texts_of(m), "снимок принят и посчитан")
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="doc", file_size=1000, mime_type="application/pdf")
+    await H.got_photo(m, ctx(), bot_ph)
+    ok("не снимок" in texts_of(m), "не снимок отклонён")
+    m = FakeMessage()
+    m.photo = [SimpleNamespace(file_id="huge", file_size=9 * 1024 * 1024)]
+    await H.got_photo(m, ctx(), bot_ph)
+    ok("больше 8 МБ" in texts_of(m), "слишком большой снимок отклонён до скачивания")
+    await ctx().update_data(o={**(await ctx().get_data())["o"], "photoIds": [f"p{i:011d}" for i in range(12)]})
+    m = FakeMessage()
+    m.photo = [SimpleNamespace(file_id="x", file_size=10)]
+    await H.got_photo(m, ctx(), bot_ph)
+    ok("больше не бывает" in texts_of(m), "13-й снимок не принимается")
+    await ctx().update_data(o={**(await ctx().get_data())["o"], "photoIds": ["photo-000000000001"]})
+    await H.cb_opt(FakeCall("o:ph"), ctx(), fake_bot())
+
+    # «Открыть полную форму на сайте» — одноразовая ссылка на /slides/new
+    call = FakeCall("o:site")
+    await H.cb_opt(call, ctx(), fake_bot())
+    link_btn = [b for row in call.message.sent[0][1].inline_keyboard for b in row if b.url]
+    ok(link_btn and link_btn[0].url == "https://site.test/t/ONETIME-" and [c for c in fs.calls if c[0] == "open_link"][-1][2] == {"path": "/slides/new"}, f"кнопка полной формы ведёт по одноразовой ссылке: {[b.url for b in link_btn]}")
+
+    # пожелания
+    await H.cb_opt(FakeCall("o:wsh"), ctx(), fake_bot())
     ok(await ctx().get_state() == H.Create.wishes.state, "ждём пожелания")
     m = FakeMessage(text="поменьше текста")
-    await H.got_wishes(m, ctx(), bot)
+    await H.got_wishes(m, ctx())
+    ok("Пожелания: поменьше текста" in texts_of(m) and await ctx().get_state() == H.Create.setup.state, "пожелания сохранены, вернулись к настройкам")
+
+    # создание получает ровно то, что выбрано
+    await H.cb_opt(FakeCall("o:med"), ctx(), fake_bot())  # medical был включён в начале → снять и снова включить, чтобы проверить переключатель
+    await H.cb_opt(FakeCall("o:med"), ctx(), fake_bot())
+    m = FakeMessage()
+    await H.cb_opt(FakeCall("o:go", message=m), ctx(), bot)
     create = [c for c in fs.calls if c[0] == "create"][-1]
-    ok(create[2] == {"topic": "Артериальная гипертония", "kind": "talk", "total": 10, "styleId": "cobalt", "wishes": "поменьше текста"}, f"создание получило всё выбранное: {create[2]}")
+    ok(create[2] == {
+        "topic": "Артериальная гипертония", "kind": "talk", "total": 10, "styleId": "t3", "wishes": "поменьше текста",
+        "medical": True, "notes": "detailed", "detail": "brief", "fonts": {"heading": "Шрифт2", "body": "Шрифт5"},
+        "colors": ["#112233", "#aabbcc", "#445566"], "numbers": True, "titleFields": {"university": "МГУ", "student": ""}, "photoIds": ["photo-000000000001"],
+    }, f"создание получило всё выбранное: {create[2]}")
     ok(T.WORKING in texts_of(m) and await ctx().get_state() is None, "создано, состояние очищено")
     await asyncio.gather(*list(H._tasks))
     sent = bot.send_message.await_args_list
@@ -255,13 +401,19 @@ async def flow_checks() -> None:
     ok([c for c in fs.calls if c[0] == "open_link"][-1][2] == {"runId": "run1"}, "одноразовая ссылка запрошена именно на эту презентацию")
     ok([c for c in fs.calls if c[0] == "preview"][-1][2] == {"runId": "run1", "index": 1}, "превью запрошено у сайта для первого слайда с содержанием")
 
+    # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
+    ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")
+    # потерянное состояние (бот перезапускался): понятное сообщение
+    m = FakeMessage()
+    await H.cb_opt(FakeCall("o:src", message=m), ctx(), fake_bot())
+    ok("Начнём заново" in texts_of(m), "кнопка настроек без состояния — «начнём заново»")
+
     # не хватает денег → ссылка на оплату, задание сохранено; возврат из оплаты → пишется
     fs.pay_needed = True
-    c0 = FakeCall("st:auto")
-    await ctx().update_data(topic="Тема", kind="talk", total=15)
-    await ctx().set_state(H.Create.wishes)
+    await ctx().update_data(topic="Тема", kind="talk", total=15, o=T.default_opts())
+    await ctx().set_state(H.Create.setup)
     m = FakeMessage()
-    await H.no_wishes(FakeCall("w:none", message=m), ctx(), bot)
+    await H.cb_opt(FakeCall("o:go", message=m), ctx(), bot)
     pay = [b for row in m.sent[0][1].inline_keyboard for b in row if b.url]
     ok(pay and pay[0].url == "https://pay.test/x" and "30 ₽" in pay[0].text, "кнопка оплаты на недостающую сумму")
     m = FakeMessage(text="/start paid_int1")
@@ -325,10 +477,10 @@ async def flow_checks() -> None:
 
     # кабинет закрыт для не-команды: человеку понятный текст, ни оплаты, ни ожидания
     fs.closed = True
-    await ctx().update_data(topic="Тема", kind="talk", total=10)
-    await ctx().set_state(H.Create.wishes)
+    await ctx().update_data(topic="Тема", kind="talk", total=10, o=T.default_opts())
+    await ctx().set_state(H.Create.setup)
     m = FakeMessage()
-    await H.no_wishes(FakeCall("w:none", message=m), ctx(), fake_bot())
+    await H.cb_opt(FakeCall("o:go", message=m), ctx(), fake_bot())
     ok("только для команды" in texts_of(m) and "Следите" in texts_of(m), "закрыто: понятное сообщение")
     fs.closed = False
 
