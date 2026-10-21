@@ -41,6 +41,7 @@ from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
 from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubmed
+from app.workflows import images as image_relay
 from app.workflows import pubmed_ru, pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
 from app.workflows.web_search import WebSearchResult, search_and_answer
@@ -823,6 +824,36 @@ async def presentations_complete(payload: PresentationCompleteRequest, request: 
         model=result.model,
         truncated=result.truncated,
     )
+
+
+class PresentationImageRequest(BaseModel):
+    prompt: str = Field(min_length=10, max_length=image_relay.MAX_PROMPT_CHARS)
+    aspect: Literal["wide", "square", "tall"] = "wide"
+    context: StudentAIContext
+
+
+class PresentationImageResponse(BaseModel):
+    imageBase64: str = ""
+    mime: str = ""
+    width: int = 0
+    height: int = 0
+    model: str = ""
+    costUsd: float = 0.0
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/images/generate", response_model=PresentationImageResponse)
+async def images_generate(payload: PresentationImageRequest, request: Request) -> PresentationImageResponse:
+    """Одна картинка по описанию сайта (Flux Schnell). Ошибки поставщика и потолки возвращаются в поле `error` (не 5xx)."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PRESENTATION_IMAGE"):
+        try:
+            result = await image_relay.generate(payload.context.userId, payload.prompt, payload.aspect)
+        except image_relay.ImageError as exc:
+            logger.warning("Картинки: %s", exc)
+            return PresentationImageResponse(error=str(exc))
+    return PresentationImageResponse(imageBase64=image_relay.to_b64(result), mime=result.mime, width=result.width, height=result.height, model=result.model, costUsd=result.cost_usd)
 
 
 # --- Документы пользователя (§18 ТЗ, этап 4A.5) --------------------------------

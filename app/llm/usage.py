@@ -35,9 +35,11 @@ async def record_usage(
     image_units: int = 0,
     audio_seconds: float = 0.0,
     error: str | None = None,
+    fixed_cost_usd: float | None = None,
 ) -> None:
     ctx = current()
-    usd = cost_usd(profile, input_tokens, cached_input_tokens, output_tokens, audio_seconds)
+    # Картинки тарифицируются за штуку, а не за токены: цену передаёт вызывающий
+    usd = fixed_cost_usd if fixed_cost_usd is not None else cost_usd(profile, input_tokens, cached_input_tokens, output_tokens, audio_seconds)
 
     event = AIUsageEvent(
         user_id=ctx.user_id if ctx else None,
