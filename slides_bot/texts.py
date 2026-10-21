@@ -483,3 +483,29 @@ def owner_text(s: dict[str, Any], days: int = 30) -> str:
         f"расход на модели: {s.get('costRub', 0)} ₽"
         + (("\nзащита отказала в бесплатной: " + ", ".join(f"{DENY_NAMES.get(k, k)} — {v}" for k, v in s["freeDenied"].items())) if s.get("freeDenied") else "")
     )
+
+
+# ---------- подбор фото ИИ ----------
+
+PHOTO_WAIT = "Подбираю фото: ИИ смотрит слайды, ищет картинки там, где они помогают, и сам отсеивает лишнее. Обычно до минуты, пришлю результат."
+PHOTO_NONE = "ИИ посмотрел слайды и решил, что картинки им не нужны — это нормально: слайд без картинки лучше слайда с лишней."
+
+
+def photo_notes_text(notes: list[dict[str, Any]], added: int) -> str:
+    lines = [f"Готово: предложено картинок — {added}." if added else "Подходящих картинок не нашлось.", ""]
+    for n in notes:
+        lines.append(f"{'✓' if n.get('ok') else '—'} Слайд {n['slide']}" + (f" «{n['title']}»" if n.get("title") else "") + f": {n['text']}")
+    return "\n".join(lines)[:3900]
+
+
+def suggestion_caption(it: dict[str, Any]) -> str:
+    where = f"Слайд {it['slide']}" if it.get("slide") else "Слайд подберу сам"
+    origin = "Нарисовано ИИ" if it.get("origin") == "ai" else "Из интернета"
+    lines = [f"{origin} · {where}", f"Зачем: {it.get('why') or '—'}", f"Подпись внизу слайда: {it.get('credit') or '—'}"]
+    if it.get("sourceUrl"):
+        lines.append(str(it["sourceUrl"]))
+    return "\n".join(lines)[:1000]
+
+
+def suggestion_kb(run_id: str, photo_id: str) -> InlineKeyboardMarkup:
+    return kb([[("✅ Поставить на слайд", f"pa:{run_id}:{photo_id}"), ("🗑 Убрать", f"pd:{run_id}:{photo_id}")]])

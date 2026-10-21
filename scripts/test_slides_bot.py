@@ -93,6 +93,18 @@ class FakeSite:
         self.calls.append((action, telegram_id, p))
         if action == "prices":
             return {"ok": True, "tiers": [{"id": "s", "label": "до 10 слайдов", "maxSlides": 10, "price": "30 ₽"}, {"id": "m", "label": "до 15 слайдов", "maxSlides": 15, "price": "40 ₽"}, {"id": "l", "label": "до 20 слайдов", "maxSlides": 20, "price": "50 ₽"}], "free": {"maxSlides": 7, "aiEdits": 2}}
+        if action == "suggest_photos":
+            return {"ok": True, "jobId": "job-1"}
+        if action == "suggest_status":
+            return {"ok": True, "state": "done", "added": 2, "notes": [{"slide": 3, "title": "Причины", "text": "предложено фото (Wikimedia Commons, Jane Doe)", "ok": True}, {"slide": 5, "title": "Лечение", "text": "ни одна найденная картинка не подошла (клише)", "ok": False}]}
+        if action == "suggestions":
+            return {"ok": True, "items": [{"id": "ph-0000000001", "origin": "web", "credit": "Фото: Jane Doe, CC BY-SA 4.0, Wikimedia Commons", "why": "Показать, как измеряют давление", "slide": 3, "sourceUrl": "https://commons.wikimedia.org/wiki/File:X.jpg"}, {"id": "ph-0000000002", "origin": "ai", "credit": "Иллюстрация создана ИИ (Flux)", "why": "Спокойный фон", "slide": 5, "sourceUrl": ""}]}
+        if action == "photo_get":
+            return {"ok": True, "mime": "image/jpeg", "base64": base64.b64encode(b"JPEG-test").decode()}
+        if action == "photo_accept":
+            return {"ok": True, "slideIndex": 2}
+        if action == "photo_dismiss":
+            return {"ok": True}
         if action == "version":
             return {"ok": True, "version": V.BOT_VERSION, "features": list(V.NEEDS)}
         if action == "login_request":
@@ -490,6 +502,26 @@ async def flow_checks() -> None:
 
     # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
     ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")
+    # «Подобрать фото ИИ»: запуск → ожидание → заметки по слайдам → предложения с картинкой и кнопками → «Поставить» (картинка слайда) и «Убрать»
+    H.PHOTO_POLL_SECONDS = 0
+    bot_p = fake_bot()
+    call = FakeCall("ph:run1")
+    await H.cb_photos(call, bot_p)
+    ok(T.PHOTO_WAIT in texts_of(call.message) and [c for c in fs.calls if c[0] == "suggest_photos"][-1][2] == {"runId": "run1"}, "кнопка «Подобрать фото ИИ» запускает подбор на сайте и говорит человеку подождать")
+    await asyncio.gather(*list(H._tasks))
+    sent_p = [str(c.args[1]) for c in bot_p.send_message.await_args_list]
+    ok(any("предложено картинок — 2" in t and "Слайд 5" in t and "клише" in t for t in sent_p), f"по слайдам объяснено, что получилось и почему нет: {sent_p}")
+    photos_p = bot_p.send_photo.await_args_list
+    ok(len(photos_p) == 2 and "Wikimedia" in photos_p[0].kwargs["caption"] and "создано ИИ" in photos_p[1].kwargs["caption"].lower().replace("создана", "создано") or "Иллюстрация создана ИИ" in photos_p[1].kwargs["caption"], "каждая предложенная картинка пришла фото с подписью автора и зачем")
+    kb_p = [b.callback_data for row in photos_p[0].kwargs["reply_markup"].inline_keyboard for b in row]
+    ok(kb_p == ["pa:run1:ph-0000000001", "pd:run1:ph-0000000001"] and all(len(x) <= 64 for x in kb_p), "кнопки «Поставить» и «Убрать» укладываются в лимит данных Telegram")
+    bot_a = fake_bot()
+    call = FakeCall("pa:run1:ph-0000000001")
+    await H.cb_photo_accept(call, bot_a)
+    ok("слайд 3" in texts_of(call.message) and bot_a.send_photo.await_count == 1, "«Поставить» ставит фото и присылает картинку слайда")
+    call = FakeCall("pd:run1:ph-0000000002")
+    await H.cb_photo_dismiss(call)
+    ok("Убрал" in texts_of(call.message), "«Убрать» убирает предложение")
     # команда /version на настоящем сайте (поддельном): отчёт совпал
     m = FakeMessage(text="/version")
     await H.cmd_version(m)

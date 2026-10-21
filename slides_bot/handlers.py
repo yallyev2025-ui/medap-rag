@@ -843,6 +843,82 @@ async def _send_draft(bot: Bot, chat_id: int, tg: int, run_id: str, edit_note: s
         await bot.send_message(chat_id, text, reply_markup=T.draft_kb(d, run_id))
 
 
+# ---------- подбор фото ИИ ----------
+
+PHOTO_POLL_SECONDS = 4
+PHOTO_POLL_LIMIT = 75  # ~5 минут
+
+
+@router.callback_query(F.data.startswith("ph:"))
+async def cb_photos(call: CallbackQuery, bot: Bot) -> None:
+    """«Подобрать фото ИИ»: сайт делает подбор фоном, бот ждёт и показывает предложения с кнопками «Поставить» и «Убрать»."""
+    await call.answer()
+    run_id = call.data[3:]
+    tg = call.from_user.id
+    r = await site().call("suggest_photos", tg, runId=run_id)
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось начать подбор"))
+        return
+    await call.message.answer(T.PHOTO_WAIT)
+    t = asyncio.create_task(_poll_photos(bot, call.message.chat.id, tg, run_id, str(r["jobId"])))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+
+
+async def _poll_photos(bot: Bot, chat_id: int, tg: int, run_id: str, job_id: str) -> None:
+    for _ in range(PHOTO_POLL_LIMIT):
+        await asyncio.sleep(PHOTO_POLL_SECONDS)
+        r = await site().call("suggest_status", tg, jobId=job_id)
+        if not r.get("ok"):
+            if r.get("network"):
+                continue
+            await bot.send_message(chat_id, str(r.get("error") or "Не получилось подобрать фото"))
+            return
+        if r.get("state") == "pending":
+            continue
+        notes = list(r.get("notes") or [])
+        added = int(r.get("added") or 0)
+        if not notes and not added:
+            await bot.send_message(chat_id, T.PHOTO_NONE)
+            return
+        await bot.send_message(chat_id, T.photo_notes_text(notes, added))
+        if added:
+            await _send_suggestions(bot, chat_id, tg, run_id)
+        return
+    await bot.send_message(chat_id, "Подбор занимает слишком долго. Нажмите «Подобрать фото ИИ» ещё раз через минуту.")
+
+
+async def _send_suggestions(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
+    r = await site().call("suggestions", tg, runId=run_id)
+    for it in (r.get("items") or [])[:8]:
+        pic = await site().call("photo_get", tg, photoId=it["id"])
+        if not pic.get("ok"):
+            continue
+        await bot.send_photo(chat_id, BufferedInputFile(base64.b64decode(str(pic["base64"])), filename="photo.jpg"), caption=T.suggestion_caption(it), reply_markup=T.suggestion_kb(run_id, str(it["id"])))
+
+
+@router.callback_query(F.data.startswith("pa:"))
+async def cb_photo_accept(call: CallbackQuery, bot: Bot) -> None:
+    await call.answer()
+    _, run_id, photo_id = call.data.split(":")
+    tg = call.from_user.id
+    r = await site().call("photo_accept", tg, runId=run_id, photoId=photo_id)
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось поставить фото"))
+        return
+    idx = int(r.get("slideIndex", 0))
+    await call.message.answer(f"Поставил на слайд {idx + 1}.")
+    await _send_preview(bot, call.message.chat.id, tg, run_id, idx)
+
+
+@router.callback_query(F.data.startswith("pd:"))
+async def cb_photo_dismiss(call: CallbackQuery) -> None:
+    await call.answer()
+    _, run_id, photo_id = call.data.split(":")
+    r = await site().call("photo_dismiss", call.from_user.id, runId=run_id, photoId=photo_id)
+    await call.message.answer("Убрал." if r.get("ok") else str(r.get("error") or "Не получилось убрать"))
+
+
 @router.callback_query(F.data.startswith("u:"))
 async def cb_open_site(call: CallbackQuery) -> None:
     await call.answer()
