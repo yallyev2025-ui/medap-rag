@@ -15,7 +15,7 @@ from slides_bot import handlers
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = [BotCommand(command="start", description="Начать"), BotCommand(command="menu", description="Меню")]
+COMMANDS = [BotCommand(command="start", description="Начать"), BotCommand(command="menu", description="Меню"), BotCommand(command="version", description="Версия бота и сайта")]
 
 
 def build_dispatcher() -> Dispatcher:
@@ -66,7 +66,8 @@ async def run_slides_bot() -> None:
         await bot.set_my_commands(COMMANDS, scope=BotCommandScopeDefault())
         problems = config_problems(username=me.username)
         logger.info("Бот презентаций запущен: @%s", me.username)
-        await _tell_owners(f"Бот презентаций запущен: @{me.username}. Откройте его и нажмите «Начать»." + ("".join(f"\n⚠ {p}" for p in problems)))
+        report = await handlers.version_report()
+        await _tell_owners(f"Бот презентаций запущен: @{me.username}. Откройте его и нажмите «Начать».\n{report}" + ("".join(f"\n⚠ {p}" for p in problems)))
         await build_dispatcher().start_polling(bot)
     except TelegramUnauthorizedError:
         logger.error("Telegram не принял SLIDES_BOT_TOKEN")

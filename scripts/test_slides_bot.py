@@ -26,6 +26,7 @@ from app.integrations import slides_site  # noqa: E402
 from config import settings  # noqa: E402
 from slides_bot import handlers as H  # noqa: E402
 from slides_bot import texts as T  # noqa: E402
+from slides_bot import version as V  # noqa: E402
 
 SECRET = "s" * 32
 checks = 0
@@ -92,6 +93,8 @@ class FakeSite:
         self.calls.append((action, telegram_id, p))
         if action == "prices":
             return {"ok": True, "tiers": [{"id": "s", "label": "до 10 слайдов", "maxSlides": 10, "price": "30 ₽"}, {"id": "m", "label": "до 15 слайдов", "maxSlides": 15, "price": "40 ₽"}, {"id": "l", "label": "до 20 слайдов", "maxSlides": 20, "price": "50 ₽"}], "free": {"maxSlides": 7, "aiEdits": 2}}
+        if action == "version":
+            return {"ok": True, "version": V.BOT_VERSION, "features": list(V.NEEDS)}
         if action == "login_request":
             if not p.get("consent"):
                 return {"ok": False, "error": "Нужно согласие на обработку персональных данных", "needConsent": True}
@@ -487,6 +490,10 @@ async def flow_checks() -> None:
 
     # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
     ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")
+    # команда /version на настоящем сайте (поддельном): отчёт совпал
+    m = FakeMessage(text="/version")
+    await H.cmd_version(m)
+    ok("✅" in texts_of(m) and V.BOT_VERSION in texts_of(m), "/version показывает, что версии совпали")
     # сайт старой версии (не знает «options»): человек получает точное объяснение, а не «связь не настроена»
     real_call = fs.call
 
@@ -591,6 +598,20 @@ async def flow_checks() -> None:
     ok("не получилась" in str(bot4.send_message.await_args_list[-1].args[1]), "сбой генерации сообщён человеку")
 
 
+def version_checks() -> None:
+    """Сверка версий бота и сайта: владелец по /version понимает, выложено ли всё вместе."""
+    good = V.compare({"ok": True, "version": V.BOT_VERSION, "features": list(V.NEEDS)})
+    ok("✅" in good and V.BOT_VERSION in good, "версии совпали — «выложено вместе»")
+    old = V.compare({"ok": False, "error": "Неизвестное действие"})
+    ok("СТАРАЯ" in old and "claude/stage-4-cd2vk8" in old, "старый сайт (не знает проверки версии) назван прямо, с веткой для выкладки")
+    part = V.compare({"ok": True, "version": "2026-10-20.1", "features": ["options"]})
+    ok("не хватает" in part and "articles" in part, "сайт без новых возможностей — перечислено, чего не хватает")
+    diff = V.compare({"ok": True, "version": "2026-01-01.1", "features": list(V.NEEDS)})
+    ok("версии разные" in diff, "все возможности есть, но номера разные — мягкое предупреждение")
+    net = V.compare({"ok": False, "error": "Сайт сейчас не отвечает", "network": True})
+    ok("не отвечает" in net, "сайт недоступен — так и сказано")
+
+
 def text_checks() -> None:
     ok(T.money(3000) == "30 ₽" and T.money(2550) == "25,50 ₽", "деньги")
     d = {"topic": "Т", "editsLeft": 1, "slides": [{"n": i, "title": f"З{i}", "text": "слово " * 80, "fixed": i == 1, "fill": None} for i in range(1, 21)]}
@@ -614,6 +635,7 @@ def runner_checks() -> None:
 
 async def main() -> None:
     text_checks()
+    version_checks()
     runner_checks()
     await client_checks()
     await flow_checks()

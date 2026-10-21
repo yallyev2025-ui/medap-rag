@@ -22,6 +22,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup
 from app.integrations import slides_site
 from config import settings
 from slides_bot import texts as T
+from slides_bot import version as V
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -135,6 +136,16 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
     if arg == "paid":
         await message.answer(f"Оплата получена. Баланс: {me.get('balance', '—')}.")
     await _menu(message, tg, f"Здравствуйте! Баланс: {me.get('balance', '—')}." + (" Бесплатная презентация ещё доступна." if me.get("freeAvailable") else ""))
+
+
+async def version_report() -> str:
+    """Версии бота и сайта человеческим языком (команда /version и сообщение владельцам при запуске)."""
+    return V.compare(await site().call("version"))
+
+
+@router.message(Command("version"))
+async def cmd_version(message: Message) -> None:
+    await message.answer(await version_report())
 
 
 @router.message(Command("menu"))
