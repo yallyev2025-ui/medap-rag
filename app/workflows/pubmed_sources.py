@@ -34,6 +34,8 @@ _PMID = re.compile(r"^\d{1,9}$")
 _PMCID = re.compile(r"^PMC\d{4,10}$")
 
 MAX_CANDIDATES = 10
+# «Ещё 10»: страницы по 10 лучших; дальше трёх страниц список не растёт (качество падает, запросы дорожают)
+MAX_OFFSET = 20
 MAX_FULLTEXT_ARTICLES = 4
 # Потолок текста одной статьи: хватает на методы, результаты и обсуждение; длиннее — хвост отбрасывается честно (truncated).
 MAX_FULLTEXT_CHARS = 60_000
@@ -211,11 +213,14 @@ async def _fulltext_xml(pmcid: str) -> str | None:
 # --- Публичные шаги ------------------------------------------------------------------------
 
 
-async def candidates(query: str, limit: int = 8) -> tuple[str, str, list[Candidate]]:
+async def candidates(query: str, limit: int = 10, offset: int = 0) -> tuple[str, str, list[Candidate]]:
     """(английский запрос, источник, статьи) — лучшие по уровню доказательности и свежести. Модель — только перевод запроса."""
     limit = max(1, min(limit, MAX_CANDIDATES))
+    offset = max(0, min(offset, MAX_OFFSET))
     english, _translated = await translate_query(query)
-    articles, source = await _find_articles(english, 25, limit)
+    # ранжирование общее (уровень доказательности, свежесть): страница — срез общего списка; чем дальше страница, тем больше берётся кандидатов
+    articles, source = await _find_articles(english, 25 + offset * 2, offset + limit)
+    articles = articles[offset:offset + limit]
     meta = await oa_meta([a.pmid for a in articles])
     out: list[Candidate] = []
     for a in articles:

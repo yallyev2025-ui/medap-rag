@@ -107,6 +107,21 @@ async def test_candidates_and_fulltext() -> None:
     ps.translate_query, ps._find_articles, ps.oa_meta = fake_translate, fake_find, fake_meta
     english, source, found = await ps.candidates("сердечная недостаточность", 3)
     assert (english, source) == ("heart failure", "PubMed")
+    # «Ещё 10»: вторая страница — срез общего списка, кандидатов берётся больше
+    asked = {}
+
+    async def fake_find2(query, candidates, limit):
+        asked.update(candidates=candidates, limit=limit)
+        return [art(str(i)) for i in range(100, 100 + limit)], "PubMed"
+
+    keep = ps._find_articles
+    ps._find_articles = fake_find2
+    _e2, _s2, page2 = await ps.candidates("сердечная недостаточность", 10, 10)
+    assert asked == {"candidates": 45, "limit": 20}, asked
+    assert [c.article.pmid for c in page2] == [str(i) for i in range(110, 120)], "вторая страница — вторые десять"
+    _e3, _s3, page_far = await ps.candidates("сердечная недостаточность", 10, 99)
+    assert asked["limit"] == 30, "дальше третьей страницы список не растёт"
+    ps._find_articles = keep
     assert [c.open_access for c in found] == [True, False, None], "для статьи, которой нет у Europe PMC, доступ «неизвестно»"
     assert found[0].authors == "Ivanov AA, Petrov B" and found[0].doi == "10.1000/xyz"
 
@@ -170,7 +185,7 @@ def test_endpoints() -> None:
     client = TestClient(app)
     ctx = {"userId": "u1"}
 
-    async def fake_cands(query, limit):
+    async def fake_cands(query, limit, offset=0):
         c = ps.Candidate(article=art("111", abstract="Annotation"), pmcid="PMC123456", open_access=True, authors="Ivanov AA", doi="10.1000/xyz", license="cc by")
         return "heart failure", "PubMed", [c]
 
@@ -181,6 +196,8 @@ def test_endpoints() -> None:
     assert a["openAccess"] is True and a["abstract"] == "Annotation" and a["authors"] == "Ivanov AA" and a["doi"] == "10.1000/xyz", a
     assert r.json()["queryEn"] == "heart failure"
     assert client.post("/v1/pubmed/candidates", json={"query": "x", "context": ctx}, headers=head).status_code == 422
+    assert client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "limit": 10, "offset": 10, "context": ctx}, headers=head).status_code == 200
+    assert client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "offset": 40, "context": ctx}, headers=head).status_code == 422
     assert client.post("/v1/pubmed/candidates", json={"query": "сердце", "limit": 99, "context": ctx}, headers=head).status_code == 422
     assert client.post("/v1/pubmed/candidates", json={"query": "сердце", "context": ctx}).status_code == 401
 

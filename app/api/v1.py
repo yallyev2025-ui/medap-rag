@@ -1173,7 +1173,9 @@ class PubMedCandidate(BaseModel):
 
 class PubMedCandidatesRequest(BaseModel):
     query: str = Field(min_length=2, max_length=300)
-    limit: int = Field(default=8, ge=1, le=10)
+    limit: int = Field(default=10, ge=1, le=10)
+    # «Ещё 10»: сколько статей пропустить в общем списке (0, 10, 20)
+    offset: int = Field(default=0, ge=0, le=20)
     context: StudentAIContext
 
 
@@ -1225,7 +1227,7 @@ async def pubmed_candidates_endpoint(payload: PubMedCandidatesRequest, request: 
     rate_limiter.check(payload.context.userId)
     with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_CANDIDATES"):
         try:
-            english, source, found = await pubmed_sources.candidates(payload.query, payload.limit)
+            english, source, found = await pubmed_sources.candidates(payload.query, payload.limit, payload.offset)
         except _SourcesUnavailable as exc:
             logger.warning("PubMed: список статей не получен (%s / %s)", exc.ncbi_reason, exc.europepmc_reason)
             return PubMedCandidatesResponse(query=payload.query, error="PubMed сейчас недоступен — попробуйте позже")
