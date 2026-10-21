@@ -104,6 +104,8 @@ class FakeSite:
         if not self.linked or telegram_id is None:
             # как настоящий сайт: без Telegram-id аккаунт не определить (раньше бот так «забывал» вошедшего на шаге выбора стиля)
             return {"ok": False, "error": "Сначала войдите", "needLogin": True}
+        if action == "open_link":
+            return {"ok": True, "url": f"https://site.test/t/ONETIME-{p.get('runId', '')}"}
         if action == "me":
             return {"ok": True, "balance": self.balance, "freeAvailable": True, "team": False, "owner": telegram_id == 999}
         if action == "styles":
@@ -247,6 +249,10 @@ async def flow_checks() -> None:
     ok(any("Черновик: Гипертония" in str(c.args[1]) for c in sent), "черновик пришёл сам после готовности")
     photos = bot.send_photo.await_args_list
     ok(len(photos) == 1 and "слайд 2" in photos[0].kwargs["caption"], "перед черновиком пришла картинка слайда")
+    draft_msg = [c for c in sent if "Черновик: Гипертония" in str(c.args[1])][-1]
+    site_btn = [b for row in draft_msg.kwargs["reply_markup"].inline_keyboard for b in row if b.url]
+    ok(site_btn and site_btn[0].url == "https://site.test/t/ONETIME-run1", f"кнопка «Открыть на сайте» ведёт по одноразовой ссылке входа, а не на закрытую страницу: {[b.url for b in site_btn]}")
+    ok([c for c in fs.calls if c[0] == "open_link"][-1][2] == {"runId": "run1"}, "одноразовая ссылка запрошена именно на эту презентацию")
     ok([c for c in fs.calls if c[0] == "preview"][-1][2] == {"runId": "run1", "index": 1}, "превью запрошено у сайта для первого слайда с содержанием")
 
     # не хватает денег → ссылка на оплату, задание сохранено; возврат из оплаты → пишется

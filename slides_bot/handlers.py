@@ -52,9 +52,19 @@ def site():
     return slides_site.site
 
 
-def _site_url(run_id: str) -> str | None:
+async def _site_url(tg_id: int, run_id: str) -> str | None:
+    """Ссылка на презентацию на сайте. В боте человек вошёл, а на сайте сессии нет, поэтому берётся одноразовая ссылка входа
+    (действует 5 минут, один раз); не вышло — обычная ссылка (сайт попросит войти)."""
     base = settings.SLIDES_SITE_URL.rstrip("/")
-    return f"{base}/slides/{run_id}" if base else None
+    if not base:
+        return None
+    try:
+        r = await site().call("open_link", tg_id, runId=run_id)
+        if r.get("ok") and r.get("url"):
+            return str(r["url"])
+    except Exception:
+        logger.warning("Одноразовая ссылка не получена", exc_info=True)
+    return f"{base}/slides/{run_id}"
 
 
 def _is_owner(tg_id: int) -> bool:
@@ -345,9 +355,9 @@ async def _send_draft(bot: Bot, chat_id: int, tg: int, run_id: str, edit_note: s
         return
     text = (edit_note + "\n\n" if edit_note else "") + T.draft_text(d)
     if d.get("approved"):
-        await bot.send_message(chat_id, text + "\n\nПрезентация утверждена. Выберите файл:", reply_markup=T.files_kb(run_id, _site_url(run_id)))
+        await bot.send_message(chat_id, text + "\n\nПрезентация утверждена. Выберите файл:", reply_markup=T.files_kb(run_id, await _site_url(tg, run_id)))
     else:
-        await bot.send_message(chat_id, text, reply_markup=T.draft_kb(d, run_id, _site_url(run_id)))
+        await bot.send_message(chat_id, text, reply_markup=T.draft_kb(d, run_id, await _site_url(tg, run_id)))
 
 
 @router.callback_query(F.data.startswith("d:"))
@@ -429,7 +439,7 @@ async def cb_approve(call: CallbackQuery, bot: Bot) -> None:
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or "Не получилось утвердить"))
         return
-    await call.message.answer("Утверждено. Какой файл прислать?", reply_markup=T.files_kb(run_id, _site_url(run_id)))
+    await call.message.answer("Утверждено. Какой файл прислать?", reply_markup=T.files_kb(run_id, await _site_url(call.from_user.id, run_id)))
 
 
 @router.callback_query(F.data.startswith("f:"))
