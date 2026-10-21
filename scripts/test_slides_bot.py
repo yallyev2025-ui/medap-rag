@@ -413,6 +413,21 @@ async def flow_checks() -> None:
 
     # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
     ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")
+    # сайт старой версии (не знает «options»): человек получает точное объяснение, а не «связь не настроена»
+    real_call = fs.call
+
+    async def old_site(action, telegram_id=None, **p):
+        return {"ok": False, "error": "Неизвестное действие"} if action == "options" else await real_call(action, telegram_id, **p)
+
+    fs.call = old_site
+    H._catalog.clear()
+    await ctx().update_data(topic="Тема", kind="talk", total=10, o=T.default_opts())
+    m = FakeMessage()
+    await H.cb_opt(FakeCall("o:sty:0", message=m), ctx(), fake_bot())
+    ok("ещё не обновлён" in texts_of(m) and "не настроена" not in texts_of(m), f"старый сайт: понятное объяснение: {texts_of(m)}")
+    fs.call = real_call
+    H._catalog.clear()
+    await ctx().clear()
     # потерянное состояние (бот перезапускался): понятное сообщение
     m = FakeMessage()
     await H.cb_opt(FakeCall("o:src", message=m), ctx(), fake_bot())

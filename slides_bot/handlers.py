@@ -273,6 +273,17 @@ async def _options(tg: int) -> dict[str, Any] | None:
     return r
 
 
+async def _options_or_say(msg: Message, tg: int) -> dict[str, Any] | None:
+    """Каталог выборов или понятное объяснение, почему его нет: «сайт старый» (не выложен вместе с ботом) отличается от «связь не настроена»."""
+    cat = await _options(tg)
+    if cat:
+        return cat
+    r = await site().call("options", tg)
+    err = str(r.get("error") or "")
+    await msg.answer(T.SITE_OLD if "Неизвестное действие" in err else (err or T.NO_SITE))
+    return None
+
+
 async def _screen(message: Message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     """Показать экран на месте прошлого (без потока сообщений); если Telegram не даёт править — новым сообщением."""
     try:
@@ -359,9 +370,8 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         await _pubmed(msg, state, tg, act, arg)
     # --- оформление, шрифты, цвета
     elif act == "sty":
-        cat = await _options(tg)
+        cat = await _options_or_say(msg, tg)
         if not cat:
-            await msg.answer(T.NO_SITE)
             return
         await _screen(msg, "Выберите оформление. Смена бесплатна и без ИИ — потом можно поменять на сайте.", T.styles_page_kb(cat["templates"], int(arg or 0)))
     elif act == "st":
@@ -375,9 +385,8 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         await _save(state, o)
         await _open_setup(msg, state, edit=True)
     elif act == "fnt":
-        cat = await _options(tg)
+        cat = await _options_or_say(msg, tg)
         if not cat:
-            await msg.answer(T.NO_SITE)
             return
         which = arg if arg in ("h", "b") else "h"
         page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
@@ -402,9 +411,8 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         await _save(state, o)
         await _open_setup(msg, state, edit=True)
     elif act == "col":
-        cat = await _options(tg)
+        cat = await _options_or_say(msg, tg)
         if not cat:
-            await msg.answer(T.NO_SITE)
             return
         await _screen(msg, "Выберите набор цветов или пришлите свои. Из трёх цветов достроится вся палитра с проверкой читаемости.", T.colors_kb(cat["colorPresets"], bool(o["colors"])))
     elif act == "cp":
@@ -467,9 +475,8 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
 
 async def _show_disciplines(msg: Message, tg: int, page: int) -> None:
-    cat = await _options(tg)
+    cat = await _options_or_say(msg, tg)
     if not cat:
-        await msg.answer(T.NO_SITE)
         return
     items = cat.get("disciplines", [])
     if not items:
@@ -479,9 +486,8 @@ async def _show_disciplines(msg: Message, tg: int, page: int) -> None:
 
 
 async def _show_title(msg: Message, state: FSMContext, tg: int) -> None:
-    cat = await _options(tg)
+    cat = await _options_or_say(msg, tg)
     if not cat:
-        await msg.answer(T.NO_SITE)
         return
     d = await state.get_data()
     o = await _opts(state)
