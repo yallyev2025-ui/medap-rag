@@ -202,20 +202,38 @@ def pager(page: int, count: int, prefix: str) -> list[tuple[str, str]]:
     return row
 
 
-def articles_text(articles: list[dict[str, Any]], chosen: list[str], limit: int) -> str:
-    lines = [f"Статьи PubMed по теме (выбрано {len(chosen)} из {limit}). Лучшие по ценности — сверху.", ""]
+def articles_chunks(articles: list[dict[str, Any]], chosen: list[str], limit: int, budget: int = 3700) -> list[str]:
+    """Список статей одним или несколькими сообщениями: аннотация каждой статьи видна сразу и целиком (по-русски), а не за нажатием.
+    Telegram режет сообщение на 4096 знаках, поэтому статьи раскладываются по сообщениям, ни одна не режется посередине."""
+    head = f"Статьи PubMed по теме (выбрано {len(chosen)} из {limit}). Лучшие по ценности — сверху."
+    tail = "🔓 — полный текст открыт. Нажмите номер под списком, чтобы выбрать или снять статью."
+    blocks: list[str] = []
     for i, a in enumerate(articles, 1):
         mark = "✅ " if a["pmid"] in chosen else ""
         meta = " · ".join(x for x in [str(a.get("journal") or ""), str(a.get("year") or ""), str(a.get("design") or "")] if x)
         free = " 🔓" if a.get("openAccess") else ""
-        lines.append(f"{mark}{i}. {a['title']}{free}")
+        lines = [f"{mark}{i}. {a['title']}{free}"]
         if meta:
             lines.append(f"   {meta}")
         ab = " ".join(str(a.get("abstract", "")).split())
         if ab:
-            lines.append(f"   {ab[:130]}{'…' if len(ab) > 130 else ''}")
-    lines.append("\n🔓 — полный текст открыт. Нажмите номер, чтобы выбрать или снять.")
-    return "\n".join(lines)[:3900]
+            lines.append(f"   {ab}")
+        blocks.append("\n".join(lines)[:1500])
+    chunks: list[str] = []
+    cur = head
+    for blk in blocks:
+        if len(cur) + len(blk) + 2 > budget:
+            chunks.append(cur)
+            cur = blk
+        else:
+            cur += "\n\n" + blk
+    if len(cur) + len(tail) + 2 > budget:
+        chunks.append(cur)
+        cur = tail
+    else:
+        cur += "\n\n" + tail
+    chunks.append(cur)
+    return chunks
 
 
 def articles_kb(articles: list[dict[str, Any]], chosen: list[str], more: bool) -> InlineKeyboardMarkup:
@@ -224,7 +242,7 @@ def articles_kb(articles: list[dict[str, Any]], chosen: list[str], more: bool) -
     tail = []
     if more:
         tail.append(("Ещё 10 статей", "o:pmm"))
-    tail.append(("Готово", "o:src"))
+    tail.append((f"Готово ({len(chosen)})" if chosen else "Готово", "o:src"))
     rows.append(tail)
     if chosen:
         rows.append([("Снять все", "o:pmx")])

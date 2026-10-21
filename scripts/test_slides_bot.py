@@ -170,6 +170,9 @@ class FakeMessage:
     async def edit_text(self, text: str, reply_markup=None, **_):
         self.sent.append((text, reply_markup))
 
+    async def edit_reply_markup(self, reply_markup=None, **_):
+        self.sent.append(("(кнопки обновлены)", reply_markup))
+
     async def answer_document(self, document, caption=None, **_):
         self.docs.append((document.filename, document.data))
 
@@ -299,6 +302,13 @@ async def flow_checks() -> None:
     ok(len((await ctx().get_data())["o"]["pmids"]) == 3, "выбрать можно не больше, чем слайдов (3)")
     await ctx().update_data(total=10)
     await H.cb_opt(FakeCall("o:pmx"), ctx(), fake_bot())
+
+    # длинные аннотации: список режется по сообщениям, каждая аннотация видна целиком и сразу, ни одно сообщение не длиннее лимита Telegram
+    long = [{"pmid": f"{i}", "title": f"Статья {i}", "journal": "Lancet", "year": "2024", "design": "обзор", "abstract": ("Результаты: " + "предложение. " * 50).strip(), "openAccess": True} for i in range(1, 11)]
+    chunks = T.articles_chunks(long, [], 10)
+    ok(len(chunks) >= 2 and all(len(c) <= 4096 for c in chunks), f"длинный список статей — несколько сообщений, каждое в пределах лимита: {[len(c) for c in chunks]}")
+    ok(all(x in "\n".join(chunks) for x in [f"{i}. Статья {i}" for i in range(1, 11)]) and "\n".join(chunks).count("Результаты:") == 10, "в списке все 10 статей и у каждой аннотация")
+    ok(chunks[-1].rstrip().endswith("снять статью."), "подсказка про номера — в последнем сообщении, рядом с кнопками")
 
     # оформление, шрифты, цвета, заметки, титул
     call = FakeCall("o:sty:0")

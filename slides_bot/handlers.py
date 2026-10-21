@@ -520,7 +520,18 @@ async def _pubmed(msg: Message, state: FSMContext, tg: int, act: str, arg: str) 
         await _save(state, o)
         await state.update_data(pmList=page)
     more = not o.get("textbooks") and int(o["pmOffset"]) < 20
-    await _screen(msg, T.articles_text(page, o["pmids"], limit), T.articles_kb(page, o["pmids"], more))
+    markup = T.articles_kb(page, o["pmids"], more)
+    if act in ("p", "pmx"):
+        # отметка статьи — меняются только кнопки (✅ у номера), список не присылается заново
+        try:
+            await msg.edit_reply_markup(reply_markup=markup)
+        except Exception:
+            await msg.answer(f"Выбрано статей: {len(o['pmids'])} из {limit}.", reply_markup=markup)
+        return
+    chunks = T.articles_chunks(page, o["pmids"], limit)
+    for part in chunks[:-1]:
+        await msg.answer(part)
+    await msg.answer(chunks[-1], reply_markup=markup)
 
 
 @router.message(Create.wishes, F.text)

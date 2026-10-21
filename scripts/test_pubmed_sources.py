@@ -32,7 +32,9 @@ for _ in range(30):
 import httpx  # noqa: E402
 
 from app.workflows import pubmed as pm  # noqa: E402
+from app.workflows import pubmed_ru  # noqa: E402
 from app.workflows import pubmed_sources as ps  # noqa: E402
+from app.workflows.presentations import RelayError, RelayResult  # noqa: E402
 from config import settings  # noqa: E402
 
 JATS = """<?xml version="1.0"?><article><front><article-meta><title-group><article-title>Заглавие</article-title></title-group></article-meta></front>
@@ -190,10 +192,32 @@ def test_endpoints() -> None:
         return "heart failure", "PubMed", [c]
 
     ps.candidates = fake_cands
+    sent: list[str] = []
+
+    async def fake_luna(model, step, system, user, max_tokens, json_mode, images=None):
+        sent.append(user)
+        assert model == "luna" and step == "parse" and json_mode, (model, step)
+        return RelayResult(text='```json\n{"items":[{"pmid":"111","title":"Название по-русски","abstract":"Введение: аннотация."},{"pmid":"666","title":"Чужая","abstract":"не из списка"}]}\n```', input_tokens=10, cached_input_tokens=0, output_tokens=10, model="gpt-6-luna")
+
+    pubmed_ru.complete = fake_luna
+    pubmed_ru._cache.clear()
     r = client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "limit": 8, "context": ctx}, headers=head)
     assert r.status_code == 200, r.text
     a = r.json()["articles"][0]
     assert a["openAccess"] is True and a["abstract"] == "Annotation" and a["authors"] == "Ivanov AA" and a["doi"] == "10.1000/xyz", a
+    assert a["titleRu"] == "Название по-русски" and a["abstractRu"] == "Введение: аннотация." and a["abstract"] == "Annotation", "перевод рядом с оригиналом, оригинал цел"
+    assert "Annotation" in sent[0] and "<articles>" in sent[0], "модели ушла аннотация в тегах-данных"
+    client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "limit": 8, "context": ctx}, headers=head)
+    assert len(sent) == 1, "повторно переведённая статья берётся из памяти, модель не зовётся"
+
+    async def broken_luna(*_a, **_k):
+        raise RelayError("Luna не подключена")
+
+    pubmed_ru._cache.clear()
+    pubmed_ru.complete = broken_luna
+    r = client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "limit": 8, "context": ctx}, headers=head)
+    a = r.json()["articles"][0]
+    assert r.status_code == 200 and a["titleRu"] == "" and a["abstractRu"] == "" and a["abstract"] == "Annotation", "сбой перевода не ломает список: приходит оригинал"
     assert r.json()["queryEn"] == "heart failure"
     assert client.post("/v1/pubmed/candidates", json={"query": "x", "context": ctx}, headers=head).status_code == 422
     assert client.post("/v1/pubmed/candidates", json={"query": "сердечная недостаточность", "limit": 10, "offset": 10, "context": ctx}, headers=head).status_code == 200
@@ -205,6 +229,7 @@ def test_endpoints() -> None:
         raise pm._SourcesUnavailable("таймаут", "нет соединения")
 
     ps.candidates = down
+    pubmed_ru.complete = fake_luna
     r = client.post("/v1/pubmed/candidates", json={"query": "сердце", "context": ctx}, headers=head)
     assert r.status_code == 200 and "недоступен" in r.json()["error"] and r.json()["articles"] == []
 

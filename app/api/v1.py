@@ -41,7 +41,7 @@ from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
 from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubmed
-from app.workflows import pubmed_sources
+from app.workflows import pubmed_ru, pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
@@ -1163,6 +1163,9 @@ class PubMedCandidate(BaseModel):
     year: str | None = None
     design: str = ""
     abstract: str = ""
+    # Перевод для показа человеку (пусто, если перевести не получилось — тогда видно оригинал)
+    titleRu: str = ""
+    abstractRu: str = ""
     doi: str = ""
     url: str = ""
     pmcid: str = ""
@@ -1231,6 +1234,12 @@ async def pubmed_candidates_endpoint(payload: PubMedCandidatesRequest, request: 
         except _SourcesUnavailable as exc:
             logger.warning("PubMed: список статей не получен (%s / %s)", exc.ncbi_reason, exc.europepmc_reason)
             return PubMedCandidatesResponse(query=payload.query, error="PubMed сейчас недоступен — попробуйте позже")
+        # русский перевод названий и аннотаций для показа; сбой перевода не мешает списку
+        try:
+            ru = await pubmed_ru.translate([{"pmid": c.article.pmid, "title": c.article.title, "abstract": c.article.abstract} for c in found])
+        except Exception:
+            logger.warning("PubMed: перевод списка не получен", exc_info=True)
+            ru = {}
     return PubMedCandidatesResponse(
         query=payload.query,
         queryEn=english if english != payload.query else None,
@@ -1238,7 +1247,8 @@ async def pubmed_candidates_endpoint(payload: PubMedCandidatesRequest, request: 
         articles=[
             PubMedCandidate(
                 pmid=c.article.pmid, title=c.article.title, authors=c.authors, journal=c.article.journal,
-                year=c.article.year, design=c.article.design, abstract=c.article.abstract, doi=c.doi,
+                year=c.article.year, design=c.article.design, abstract=c.article.abstract,
+                titleRu=ru.get(c.article.pmid, ("", ""))[0], abstractRu=ru.get(c.article.pmid, ("", ""))[1], doi=c.doi,
                 url=c.article.url, pmcid=c.pmcid, openAccess=c.open_access, license=c.license,
             )
             for c in found
