@@ -31,10 +31,10 @@ SONNET_MODEL = "claude-sonnet-5-5"
 LUNA_MODEL = "gpt-6-luna"
 
 # Шаги конвейера сайта: незнакомый шаг отклоняется (опечатка в сайте не должна молча уходить в модель).
-STEPS = frozenset({"outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place"})
+STEPS = frozenset({"outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place", "photoplan", "photojudge"})
 
-# Снимки человека (шаг «look»): картинки уходят модели только на этом шаге; потолки защищают счёт и память.
-IMAGE_STEPS = frozenset({"look"})
+# Снимки человека (шаг «look») и найденные/нарисованные картинки на строгом отборе (шаг «photojudge»): картинки уходят модели только на этом шаге; потолки защищают счёт и память.
+IMAGE_STEPS = frozenset({"look", "photojudge"})
 MAX_IMAGES = 12
 MAX_IMAGE_B64_CHARS = 600_000  # ~450 КБ файла
 IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})

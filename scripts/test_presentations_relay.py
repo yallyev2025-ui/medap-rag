@@ -191,6 +191,14 @@ def main() -> None:
     assert r.status_code == 200 and r.json()["error"] is None and calls[-1] == ("luna", 2000, True, 2), (r.text, calls[-1])
     r = post({**BASE, "step": "write", "images": [img]})
     assert r.status_code == 200 and "не принимает картинки" in r.json()["error"], r.text
+    # строгий отбор картинок (этап 7): шаг photojudge принимает картинки, photoplan — нет
+    r = post({**BASE, "model": "luna", "step": "photojudge", "images": [img]})
+    assert r.status_code == 200 and r.json()["error"] is None, r.text
+    r = post({**BASE, "model": "luna", "step": "photoplan"})
+    assert r.status_code == 200 and r.json()["error"] is None, r.text
+    r = post({**BASE, "step": "photoplan", "images": [img]})
+    assert "не принимает картинки" in r.json()["error"], r.text
+    n += 2  # два платных вызова выше — это шаги этапа 7, а не проверка «до платного вызова»
     assert post({**BASE, "step": "look", "images": [img] * 13}).status_code == 422
     assert post({**BASE, "step": "look", "images": [{"mime": "image/svg+xml", "data": "QUJD"}]}).status_code == 422
     assert post({**BASE, "step": "look", "images": [{"mime": "image/png", "data": "я" * 600_001}]}).status_code == 422
