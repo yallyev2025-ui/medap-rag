@@ -98,7 +98,17 @@ class FakeSite:
         if action == "suggest_status":
             return {"ok": True, "state": "done", "added": 2, "notes": [{"slide": 3, "title": "Причины", "text": "предложено фото (Wikimedia Commons, Jane Doe)", "ok": True}, {"slide": 5, "title": "Лечение", "text": "ни одна найденная картинка не подошла (клише)", "ok": False}]}
         if action == "suggestions":
-            return {"ok": True, "items": [{"id": "ph-0000000001", "origin": "web", "credit": "Фото: Jane Doe, CC BY-SA 4.0, Wikimedia Commons", "why": "Показать, как измеряют давление", "slide": 3, "sourceUrl": "https://commons.wikimedia.org/wiki/File:X.jpg"}, {"id": "ph-0000000002", "origin": "ai", "credit": "Иллюстрация создана ИИ (Flux)", "why": "Спокойный фон", "slide": 5, "sourceUrl": ""}]}
+            return {"ok": True, "left": {"runs": 3, "images": 8}, "items": [{"id": "ph-0000000001", "origin": "web", "credit": "Фото: Jane Doe, CC BY-SA 4.0, Wikimedia Commons", "why": "Показать, как измеряют давление", "slide": 3, "sourceUrl": "https://commons.wikimedia.org/wiki/File:X.jpg"}, {"id": "ph-0000000002", "origin": "ai", "credit": "Иллюстрация создана ИИ (Flux)", "why": "Спокойный фон", "slide": 5, "sourceUrl": ""}]}
+        if action == "photo_auto":
+            seq = getattr(self, "auto_seq", ["none"])
+            st = seq.pop(0) if len(seq) > 1 else seq[0]
+            return {"ok": True, "state": st, "left": {"runs": 3, "images": 8}}
+        if action == "upload_file":
+            self.files = getattr(self, "files", 0) + 1
+            return {"ok": True, "uploadId": f"file-{self.files:010d}"}
+        if action == "upload_status":
+            st = getattr(self, "upload_state", "ready")
+            return {"ok": True, "items": [{"id": i, "fileName": "Книга.pdf", "status": st, "failureReason": "пустой файл" if st == "failed" else None, "pages": 10, "slides": 8} for i in p.get("uploadIds", [])]}
         if action == "photo_get":
             return {"ok": True, "mime": "image/jpeg", "base64": base64.b64encode(b"JPEG-test").decode()}
         if action == "photo_accept":
@@ -277,13 +287,97 @@ async def flow_checks() -> None:
     ok(any("Бесплатная" in b for b in buttons) and any("30 ₽" in b for b in buttons) and any("50 ₽" in b for b in buttons), "в размерах — бесплатная и цены")
     call = FakeCall("s:10")
     await H.got_size(call, ctx())
-    ok("Настройте презентацию" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — экран «Настроить», а не просьба войти: {texts_of(call.message)}")
-    ok(await ctx().get_state() == H.Create.setup.state, "ждём выборов")
+    ok("Шаг 1 из 7" in texts_of(call.message) and "С чего начинаем" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — первый вопрос мастера, а не меню и не просьба войти: {texts_of(call.message)}")
+    ok(await ctx().get_state() == H.Create.setup.state, "ждём выбора")
+    labels1 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok(any("Только тема" in x for x in labels1) and any("свой план" in x for x in labels1) and any("Готовый текст" in x for x in labels1) and any("Отмена" in x for x in labels1) and not any("Назад" in x for x in labels1), f"первый вопрос: три варианта и «Отмена», «Назад» нет: {labels1}")
+
+    # мастер идёт по одному вопросу; «Назад» возвращает; текстовые вопросы ждут текст
+    call = FakeCall("o:m:topic")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 2 из 7" in texts_of(call.message) and "Для кого" in texts_of(call.message) and await ctx().get_state() == H.Create.audience.state, "второй вопрос «Для кого» ждёт текст")
+    labels2 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("Пропустить" in labels2 and any("Назад" in x for x in labels2), f"у текстового вопроса — «Пропустить» и «Назад»: {labels2}")
+    call = FakeCall("o:wz:b")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 1 из 7" in texts_of(call.message), "«Назад» вернул к первому вопросу")
+    await H.cb_opt(FakeCall("o:m:topic"), ctx(), fake_bot())
+    call = FakeCall("o:wz:n")  # для кого — пропустить
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 3 из 7" in texts_of(call.message) and "Откуда брать материал" in texts_of(call.message), "третий вопрос — источники")
+    labels3 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok(any("Медицинская" in x for x in labels3) and any("Учебники" in x for x in labels3) and any("PubMed" in x for x in labels3) and any("Далее" in x for x in labels3), f"источники отмечаются кнопками, «Далее» ведёт дальше: {labels3}")
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 4 из 7" in texts_of(call.message) and "Свои файлы" in texts_of(call.message) and "до 5" in texts_of(call.message) and "20 МБ" in texts_of(call.message), "четвёртый вопрос — свои файлы (до 5, до 20 МБ)")
+
+    # файлы: PDF уходит на сайт и считается; чужой формат, огромный файл и шестой файл отклоняются
+    bot_f = fake_bot()
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="pdf1", file_name="Книга.pdf", file_size=3 * 1024 * 1024, mime_type="application/pdf")
+    await H.got_photo(m, ctx(), bot_f)
+    up_f = [c for c in fs.calls if c[0] == "upload_file"][-1]
+    ok(up_f[2]["fileName"] == "Книга.pdf" and base64.b64decode(up_f[2]["base64"]) == b"\x89PNG-from-telegram" and up_f[1] == 111, "файл из чата ушёл на сайт с именем")
+    ok((await ctx().get_data())["o"]["uploadIds"] == ["file-0000000001"] and "Принял «Книга.pdf» (1 из 5)" in texts_of(m), "файл принят и посчитан")
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="x", file_name="архив.zip", file_size=1000, mime_type="application/zip")
+    await H.got_photo(m, ctx(), bot_f)
+    ok("Такой формат не разбираю" in texts_of(m), "неподдерживаемый формат отклонён")
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="x", file_name="огромный.pdf", file_size=25 * 1024 * 1024, mime_type="application/pdf")
+    await H.got_photo(m, ctx(), bot_f)
+    ok("больше 20 МБ" in texts_of(m), "файл больше 20 МБ отклонён до скачивания")
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="scan", file_name="скан.jpg", file_size=1000, mime_type="image/jpeg")
+    await H.got_photo(m, ctx(), bot_f)
+    ok(len((await ctx().get_data())["o"]["uploadIds"]) == 2 and not (await ctx().get_data())["o"]["photoIds"], "на шаге файлов фото-файл — это скан страницы (материал), а не снимок для слайда")
+    for k in range(3):
+        m = FakeMessage()
+        m.document = SimpleNamespace(file_id=f"p{k}", file_name=f"ещё{k}.pdf", file_size=1000, mime_type="application/pdf")
+        await H.got_photo(m, ctx(), bot_f)
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="p9", file_name="лишний.pdf", file_size=1000, mime_type="application/pdf")
+    await H.got_photo(m, ctx(), bot_f)
+    ok("Уже 5 файлов" in texts_of(m) and len((await ctx().get_data())["o"]["uploadIds"]) == 5, "шестой файл не принимается")
+    call = FakeCall("o:upx")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok((await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 4 из 7" in texts_of(call.message), "«Убрать все файлы» очищает выбор и остаётся на этом вопросе")
+    # файл не разобрался: «Далее» убирает его и объясняет
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="bad", file_name="Пустой.pdf", file_size=1000, mime_type="application/pdf")
+    await H.got_photo(m, ctx(), bot_f)
+    fs.upload_state = "failed"
+    call = FakeCall("o:wz:n", message=FakeMessage())
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("не разобрался: пустой файл" in texts_of(call.message) and (await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 4 из 7" in texts_of(call.message), "неразобранный файл убран с понятной причиной, человек остаётся на вопросе про файлы")
+    fs.upload_state = "ready"
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 5 из 7" in texts_of(call.message) and "Фото" in texts_of(call.message), "пятый вопрос — фото")
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 6 из 7" in texts_of(call.message) and await ctx().get_state() == H.Create.wishes.state, "шестой вопрос — пожелания, ждёт текст")
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 7 из 7" in texts_of(call.message) and "Титульный лист" in texts_of(call.message) and "не отправляют в модель" in texts_of(call.message), "седьмой вопрос — титул, сказано, что ФИО не уходят в модель")
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Всё спросил" in texts_of(call.message) and "Настройте презентацию" in texts_of(call.message), f"в конце — сводка с «Создать» и пунктами для изменения: {texts_of(call.message)}")
+    ok(await ctx().get_state() == H.Create.setup.state and (await ctx().get_data()).get("wz") is None, "мастер закончен, дальше обычное меню изменений")
     labels = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
     for want in ("С чего начинаем", "Источники", "Свои материалы", "Для кого", "Заметки", "Титул", "Фото", "Пожелания", "Оформление", "Полная форма на сайте", "Создать презентацию"):
-        ok(any(want in x for x in labels), f"на экране «Настроить» есть «{want}»: {labels}")
+        ok(any(want in x for x in labels), f"в сводке есть «{want}»: {labels}")
     ok(not any(x.strip() in ("🔤 Шрифты", "🎨 Цвета") for x in labels), "шрифты и цвета не на первом экране: они необязательны и спрятаны в «Оформление»")
     ok("можно изменить на сайте потом" in texts_of(call.message), "на экране сказано, что оформление меняется на сайте потом")
+    # отмена на любом вопросе
+    await ctx().update_data(wz=2)
+    call = FakeCall("o:cancel")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok(await ctx().get_state() is None and "Отменил" in texts_of(call.message), "«Отмена» сбрасывает мастер")
+    await ctx().update_data(topic="Артериальная гипертония", kind="talk", total=10, o=T.default_opts(), wz=None)
+    await ctx().set_state(H.Create.setup)
+    call = FakeCall("o:home")
+    await H.cb_opt(call, ctx(), fake_bot())
     call_d = FakeCall("o:des")
     await H.cb_opt(call_d, ctx(), fake_bot())
     labels_d = [b.text for row in call_d.message.sent[0][1].inline_keyboard for b in row]
@@ -384,7 +478,12 @@ async def flow_checks() -> None:
     m = FakeMessage()
     m.document = SimpleNamespace(file_id="doc", file_size=1000, mime_type="application/pdf")
     await H.got_photo(m, ctx(), bot_ph)
-    ok("не снимок" in texts_of(m), "не снимок отклонён")
+    ok("Принял «файл.pdf»" in texts_of(m) and (await ctx().get_data())["o"]["uploadIds"] == ["file-0000000007"], f"PDF-документ вне шага файлов — это материал для презентации, а не снимок: {texts_of(m)}")
+    await H.cb_opt(FakeCall("o:upx"), ctx(), fake_bot())
+    m = FakeMessage()
+    m.document = SimpleNamespace(file_id="doc", file_name="a.exe", file_size=1000, mime_type="application/octet-stream")
+    await H.got_photo(m, ctx(), bot_ph)
+    ok("Такой формат не разбираю" in texts_of(m), "неподдерживаемый документ отклонён")
     m = FakeMessage()
     m.photo = [SimpleNamespace(file_id="huge", file_size=9 * 1024 * 1024)]
     await H.got_photo(m, ctx(), bot_ph)
@@ -502,6 +601,37 @@ async def flow_checks() -> None:
 
     # ничего не выбрано → создание как раньше (минимум полей), всё остальное подберёт сайт
     ok(H._create_payload({"topic": "Т", "kind": "lecture", "total": 7}) == {"topic": "Т", "kind": "lecture", "total": 7, "styleId": "", "wishes": ""}, "без выборов — только тема, вид, размер")
+    # автоподбор фото сразу после черновика: бот ждёт, показывает предложения, «Поставить все» / «Не нужны» / «Предложить другие»
+    H.PHOTO_POLL_SECONDS = 0
+    fs.auto_seq = ["running", "running", "done"]
+    bot_auto = fake_bot()
+    H._watch_auto_photos(bot_auto, 111, 111, "run1")
+    await asyncio.gather(*list(H._tasks))
+    msgs_a = [str(c.args[1]) for c in bot_auto.send_message.await_args_list]
+    ok(T.PHOTO_AUTO_WAIT in msgs_a[0], f"пока ИИ подбирает, человеку сказано, что картинки скоро придут: {msgs_a}")
+    ok(len(bot_auto.send_photo.await_args_list) == 2, "после готовности пришли обе предложенные картинки")
+    group = [c for c in bot_auto.send_message.await_args_list if "Предложено картинок: 2" in str(c.args[1])]
+    data_a = [b.callback_data for row in group[0].kwargs["reply_markup"].inline_keyboard for b in row]
+    labels_a = [b.text for row in group[0].kwargs["reply_markup"].inline_keyboard for b in row]
+    ok(data_a == ["pall:run1", "pnone:run1", "ph:run1"] and any("осталось запусков: 3" in x for x in labels_a), f"общие кнопки: поставить все, не нужны, предложить другие с остатком: {labels_a}")
+    ok(all(len(x) <= 64 for x in data_a), "данные кнопок в лимите Telegram")
+    fs.auto_seq = ["none"]
+    bot_none = fake_bot()
+    H._watch_auto_photos(bot_none, 111, 111, "run1")
+    await asyncio.gather(*list(H._tasks))
+    ok(not bot_none.send_message.await_args_list and not bot_none.send_photo.await_args_list, "подбор не запускался или сайт старый — бот молчит, ничего не навязывает")
+    bot_all = fake_bot()
+    n_acc = len([c for c in fs.calls if c[0] == "photo_accept"])
+    call = FakeCall("pall:run1")
+    await H.cb_photo_accept_all(call, bot_all)
+    ok(len([c for c in fs.calls if c[0] == "photo_accept"]) == n_acc + 2 and "Поставил картинок: 2" in texts_of(call.message), "«Поставить все» ставит каждую предложенную и сообщает сколько")
+    ok(len(bot_all.send_photo.await_args_list) == 1, "после «Поставить все» приходит картинка слайда с фото")
+    n_dis = len([c for c in fs.calls if c[0] == "photo_dismiss"])
+    call = FakeCall("pnone:run1")
+    await H.cb_photo_dismiss_all(call)
+    labels_n = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok(len([c for c in fs.calls if c[0] == "photo_dismiss"]) == n_dis + 2 and any("Предложить другие" in x for x in labels_n), "«Не нужны» убирает все и предлагает другие")
+
     # «Подобрать фото ИИ»: запуск → ожидание → заметки по слайдам → предложения с картинкой и кнопками → «Поставить» (картинка слайда) и «Убрать»
     H.PHOTO_POLL_SECONDS = 0
     bot_p = fake_bot()

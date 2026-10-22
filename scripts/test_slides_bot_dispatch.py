@@ -159,21 +159,37 @@ async def full_flow(dp) -> None:
     out = await press("k:talk")
     ok("слайдов" in texts_in(out).lower(), "после вида — размер")
     out = await press("s:10")
+    ok("Шаг 1 из 7" in texts_in(out) and "С чего начинаем" in texts_in(out), f"после размера — первый вопрос мастера: {texts_in(out)[:80]}")
+    out = await press("o:m:topic")
+    ok("Шаг 2 из 7" in texts_in(out) and "Для кого" in texts_in(out), "ответ кнопкой → следующий вопрос")
+    out = await say("студенты 3 курса")
+    ok("Шаг 3 из 7" in texts_in(out) and "Откуда брать материал" in texts_in(out), f"текстовый ответ на «Для кого» попал в нужный обработчик (состояние живёт между обновлениями) и мастер пошёл дальше: {texts_in(out)[:100]}")
+    await press("o:med")
+    out = await press("o:home")
+    ok("Шаг 4 из 7" in texts_in(out) and "Свои файлы" in texts_in(out), "«Готово» на подэкране источников ведёт к следующему вопросу")
+    out = await press("o:wz:b")
+    ok("Шаг 3 из 7" in texts_in(out), "«Назад» через настоящий диспетчер")
+    await press("o:wz:n")
+    out = await press("o:wz:n")
+    ok("Шаг 5 из 7" in texts_in(out) and "Фото" in texts_in(out), "пятый вопрос — фото")
+    out = await press("o:wz:n")
+    ok("Шаг 6 из 7" in texts_in(out), "шестой вопрос — пожелания")
+    out = await say("поменьше текста")
+    ok("Шаг 7 из 7" in texts_in(out) and "Титульный лист" in texts_in(out), f"ответ-текст на пожелания принят, мастер пошёл дальше: {texts_in(out)[:100]}")
+    out = await press("o:wz:n")
     labels = buttons(out)
-    ok("Настройте презентацию" in texts_in(out), f"после размера — экран «Настроить»: {texts_in(out)[:80]}")
+    ok("Всё спросил" in texts_in(out) and "Настройте презентацию" in texts_in(out), f"в конце — сводка: {texts_in(out)[:80]}")
     for want in ("С чего начинаем", "Источники", "Свои материалы", "Для кого", "Заметки", "Титул", "Фото", "Оформление", "Полная форма", "Создать"):
         ok(any(want in x for x in labels), f"через настоящий диспетчер доходит кнопка «{want}»: {labels}")
     out = await press("o:src")
-    ok("Откуда брать материал" in texts_in(out), "кнопка «Источники» отвечает")
-    await press("o:med")
+    ok("Откуда брать материал" in texts_in(out), "после мастера «Источники» открываются из сводки")
+    out = await press("o:home")
+    ok("Настройте презентацию" in texts_in(out), "из сводки «Готово» возвращает в сводку, а не запускает мастер заново")
     out = await press("o:des")
     ok(any("Шрифты" in x for x in buttons(out)), "«Оформление» открывает шаблон/шрифты/цвета")
     out = await press("o:sty:0")
     ok("Шаблон 0" in str(buttons(out)), "список шаблонов приходит с сайта")
     await press("o:st:auto")
-    await press("o:aud")
-    out = await say("студенты 3 курса")
-    ok("Для кого: студенты 3 курса" in texts_in(out), "текстовый ответ после кнопки «Для кого» попал в нужный обработчик (состояние живёт между обновлениями)")
     out = await press("o:go")
     ok("Пишу презентацию" in texts_in(out), f"«Создать» запускает написание: {texts_in(out)}")
     create = [c for c in site.calls if c[0] == "create"][-1]
@@ -211,84 +227,6 @@ class FlowSite:
         if action == "version":
             return {"ok": False, "error": "Неизвестное действие"}
         return {"ok": True, "base64": "UE5H"}
-
-
-def cbq(uid: int, data: str, n: int) -> Update:
-    cb = CallbackQuery(id=str(n), from_user=User(id=uid, is_bot=False, first_name="Тест"), chat_instance="x", data=data, message=Message(message_id=n, date=datetime.now(), chat=Chat(id=uid, type="private"), text="экран"))
-    return Update(update_id=n, callback_query=cb)
-
-
-async def full_flow(dp) -> None:
-    """Весь путь создания через НАСТОЯЩИЙ диспетчер: /start → создать → тема → вид → размер → «Настроить» → выборы → создать.
-    Ловит то, чего не видят прямые вызовы обработчиков: фильтры, порядок обработчиков, состояние между обновлениями."""
-    from slides_bot import handlers as H
-
-    H.POLL_SECONDS = 0
-    H._catalog.clear()
-    site = FlowSite()
-    slides_site.site = site
-    session = FakeSession()
-    bot = Bot(token="123456:TEST", session=session)
-    uid, n = 321, 100
-
-    async def press(data: str) -> list:
-        nonlocal n
-        n += 1
-        before = len(session.sent)
-        await dp.feed_update(bot, cbq(uid, data, n))
-        return session.sent[before:]
-
-    async def say(text: str) -> list:
-        nonlocal n
-        n += 1
-        before = len(session.sent)
-        await dp.feed_update(bot, update(uid, text, n))
-        return session.sent[before:]
-
-    def texts_in(items) -> str:
-        return "\n".join(str(getattr(m, "text", "") or "") for m in items)
-
-    def buttons(items) -> list[str]:
-        out: list[str] = []
-        for m in items:
-            kb = getattr(m, "reply_markup", None)
-            if kb is not None:
-                out += [b.text for row in kb.inline_keyboard for b in row]
-        return out
-
-    await say("/start")
-    out = await press("m:new")
-    ok("О чём презентация" in texts_in(out), f"«Создать» → просят тему: {texts_in(out)}")
-    out = await say("Артериальная гипертония")
-    ok("вид" in texts_in(out).lower(), "после темы — вид презентации")
-    out = await press("k:talk")
-    ok("слайдов" in texts_in(out).lower(), "после вида — размер")
-    out = await press("s:10")
-    labels = buttons(out)
-    ok("Настройте презентацию" in texts_in(out), f"после размера — экран «Настроить»: {texts_in(out)[:80]}")
-    for want in ("С чего начинаем", "Источники", "Свои материалы", "Для кого", "Заметки", "Титул", "Фото", "Оформление", "Полная форма", "Создать"):
-        ok(any(want in x for x in labels), f"через настоящий диспетчер доходит кнопка «{want}»: {labels}")
-    out = await press("o:src")
-    ok("Откуда брать материал" in texts_in(out), "кнопка «Источники» отвечает")
-    await press("o:med")
-    out = await press("o:des")
-    ok(any("Шрифты" in x for x in buttons(out)), "«Оформление» открывает шаблон/шрифты/цвета")
-    out = await press("o:sty:0")
-    ok("Шаблон 0" in str(buttons(out)), "список шаблонов приходит с сайта")
-    await press("o:st:auto")
-    await press("o:aud")
-    out = await say("студенты 3 курса")
-    ok("Для кого: студенты 3 курса" in texts_in(out), "текстовый ответ после кнопки «Для кого» попал в нужный обработчик (состояние живёт между обновлениями)")
-    out = await press("o:go")
-    ok("Пишу презентацию" in texts_in(out), f"«Создать» запускает написание: {texts_in(out)}")
-    create = [c for c in site.calls if c[0] == "create"][-1]
-    ok(create[2]["topic"] == "Артериальная гипертония" and create[2]["medical"] is True and create[2]["audience"] == "студенты 3 курса" and create[2]["total"] == 10, f"на сайт ушло всё выбранное: {create[2]}")
-    await asyncio.gather(*list(H._tasks))
-    ok(any(isinstance(m, SendMessage) and "Черновик" in (m.text or "") for m in session.sent), "черновик пришёл сам")
-    out = await press("u:run1")
-    ok(any(b.url == "https://site.test/t/ONCE" for m in out for row in (m.reply_markup.inline_keyboard if getattr(m, "reply_markup", None) else []) for b in row), "«Открыть на сайте» выдаёт ссылку входа по нажатию")
-    out = await say("/version")
-    ok("СТАРАЯ" in texts_in(out), f"/version при старом сайте говорит прямо: {texts_in(out)[:120]}")
 
 
 async def main() -> None:

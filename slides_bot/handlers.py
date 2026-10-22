@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -273,8 +274,8 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("s:"))
 async def got_size(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
-    await state.update_data(total=int(call.data[2:]), o=T.default_opts())
-    await _open_setup(call.message, state)
+    await state.update_data(total=int(call.data[2:]), o=T.default_opts(), wz=0)
+    await _wz_show(call.message, state)
 
 
 # ---------- «Настроить»: те же выборы, что в мастере на сайте ----------
@@ -315,14 +316,60 @@ async def _screen(message: Message, text: str, markup: InlineKeyboardMarkup | No
         await message.answer(text, reply_markup=markup)
 
 
-async def _open_setup(message: Message, state: FSMContext, edit: bool = False) -> None:
+async def _open_setup(message: Message, state: FSMContext, edit: bool = False, final: bool = False) -> None:
     await state.set_state(Create.setup)
     d = await state.get_data()
     o = await _opts(state)
+    text = T.final_text(d) if final else T.setup_text(d)
     if edit:
-        await _screen(message, T.setup_text(d), T.setup_kb(o=o))
+        await _screen(message, text, T.setup_kb(o=o))
     else:
-        await message.answer(T.setup_text(d), reply_markup=T.setup_kb(o=o))
+        await message.answer(text, reply_markup=T.setup_kb(o=o))
+
+
+# ---------- мастер: вопросы по одному ----------
+
+async def _wz_show(message: Message, state: FSMContext, edit: bool = False) -> None:
+    """Показать текущий вопрос мастера. Шаги, не нужные в выбранном режиме, пропускаются; после последнего — итоговый экран."""
+    d = await state.get_data()
+    o = await _opts(state)
+    steps = T.wz_steps(o)
+    i = d.get("wz")
+    if i is None:
+        await _open_setup(message, state, edit=edit)
+        return
+    i = int(i)
+    if i >= len(steps):
+        await state.update_data(wz=None)
+        await _open_setup(message, state, edit=edit, final=True)
+        return
+    step = steps[i]
+    # какие сообщения человека ждём: на вопросах «для кого» и «пожелания» — текст, на остальных — нажатия и файлы
+    await state.set_state({"aud": Create.audience, "wish": Create.wishes}.get(step, Create.setup))
+    await state.update_data(wz=i)
+    text, markup = T.wz_text(step, i, len(steps), o), T.wz_kb(step, o, first=i == 0)
+    if edit:
+        await _screen(message, text, markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _wz_move(message: Message, state: FSMContext, delta: int, edit: bool) -> None:
+    d = await state.get_data()
+    if d.get("wz") is None:
+        await _open_setup(message, state, edit=edit)
+        return
+    await state.update_data(wz=max(0, int(d["wz"]) + delta))
+    await _wz_show(message, state, edit=edit)
+
+
+async def _return(message: Message, state: FSMContext, edit: bool = False) -> None:
+    """Подэкран закончен («Готово», ответ текстом): в мастере — следующий вопрос, в меню «Изменить» — итоговый экран."""
+    d = await state.get_data()
+    if d.get("wz") is None:
+        await _open_setup(message, state, edit=edit)
+    else:
+        await _wz_move(message, state, 1, edit)
 
 
 async def _opts(state: FSMContext) -> dict[str, Any]:
@@ -353,7 +400,23 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     msg = call.message
 
     if act == "home":
-        await _open_setup(msg, state, edit=True)
+        await _return(msg, state, edit=True)
+    elif act == "wz":
+        if arg == "b":
+            await _wz_move(msg, state, -1, True)
+        else:
+            if _current_step(d, o) == "up" and not await _check_uploads(msg, state, tg, final=False):
+                await _wz_show(msg, state)  # файл не разобрался: остаёмся на вопросе про файлы
+                return
+            await _wz_move(msg, state, 1, True)
+    elif act == "cancel":
+        await state.clear()
+        await msg.answer("Отменил. Выберите, что дальше.", reply_markup=T.main_menu(await _owner_confirmed(tg)))
+    elif act == "upx":
+        o["uploadIds"] = []
+        o["uploadNames"] = {}
+        await _save(state, o)
+        await _wz_show(msg, state, edit=True)
     elif act == "go":
         await _create(msg, state, bot, tg)
     elif act == "site":
@@ -374,12 +437,12 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
             await state.set_state(Create.plan)
             await msg.answer(T.PLAN_ASK[arg], reply_markup=T.plan_kb(bool(o["planText"])))
         else:
-            await _open_setup(msg, state, edit=True)
+            await _return(msg, state, edit=True)
     elif act == "pdone":
         if o["mode"] != "topic" and not o["planText"].strip():
             await msg.answer("Текст пока не получен — пришлите его сообщением или выберите «Только тема».")
             return
-        await _open_setup(msg, state)
+        await _return(msg, state)
     elif act == "pclear":
         o["planText"] = ""
         await _save(state, o)
@@ -547,7 +610,7 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     elif act == "wno":
         o["wishes"] = ""
         await _save(state, o)
-        await _open_setup(msg, state)
+        await _return(msg, state)
 
 
 async def _show_disciplines(msg: Message, tg: int, page: int) -> None:
@@ -621,7 +684,7 @@ async def got_wishes(message: Message, state: FSMContext) -> None:
     o = await _opts(state)
     o["wishes"] = (message.text or "").strip()[:800]
     await _save(state, o)
-    await _open_setup(message, state)
+    await _return(message, state)
 
 
 @router.message(Create.plan, F.text)
@@ -645,7 +708,7 @@ async def got_audience(message: Message, state: FSMContext) -> None:
     v = (message.text or "").strip()
     o["audience"] = "" if v == "-" else v[:200]
     await _save(state, o)
-    await _open_setup(message, state)
+    await _return(message, state)
 
 
 @router.message(Create.colors, F.text)
@@ -674,16 +737,101 @@ async def got_title_value(message: Message, state: FSMContext) -> None:
     await _show_title(message, state, message.from_user.id)
 
 
+FILE_EXT = {".pdf", ".docx", ".pptx", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
+MIME_EXT = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "text/plain": ".txt",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
+MAX_FILE_BYTES = T.FILE_MB * 1024 * 1024  # больше Telegram всё равно не отдаёт боту
+
+
+def _current_step(d: dict[str, Any], o: dict[str, Any]) -> str | None:
+    i = d.get("wz")
+    steps = T.wz_steps(o)
+    return steps[int(i)] if i is not None and int(i) < len(steps) else None
+
+
+async def _check_uploads(msg: Message, state: FSMContext, tg: int, final: bool) -> bool:
+    """Разобраны ли присланные файлы. Не разобравшиеся убираются с объяснением; при создании («final») ещё разбирающиеся ждём."""
+    o = await _opts(state)
+    ids = list(o.get("uploadIds") or [])
+    if not ids:
+        return True
+    r = await site().call("upload_status", tg, uploadIds=ids)
+    if not r.get("ok"):
+        return True  # сайт старый или не ответил: создание само отфильтрует неготовое
+    pending, bad = [], []
+    for it in r.get("items", []):
+        if it.get("status") == "failed":
+            bad.append(it)
+        elif it.get("status") != "ready":
+            pending.append(it)
+    if bad:
+        o["uploadIds"] = [x for x in ids if x not in {b["id"] for b in bad}]
+        await _save(state, o)
+        for b in bad:
+            await msg.answer(f"Файл «{b.get('fileName', 'без имени')}» не разобрался: {b.get('failureReason') or 'не удалось прочитать'}. Пришлите другой.")
+        return False
+    if pending and final:
+        await msg.answer("Файлы ещё разбираются (обычно до минуты). Подождите немного и нажмите «Создать» ещё раз.")
+        return False
+    return True
+
+
+async def _got_file(message: Message, state: FSMContext, bot: Bot, tg: int) -> None:
+    """Файл для презентации: уходит на сайт, там разбирается, попадает в «Мои материалы» (можно удалить) и в векторную базу бота."""
+    o = await _opts(state)
+    if len(o["uploadIds"]) >= T.FILES_MAX:
+        await message.answer(f"Уже {T.FILES_MAX} файлов — больше не бывает. Уберите лишние кнопкой «Убрать все файлы».")
+        return
+    doc = message.document
+    name = getattr(doc, "file_name", None) or "файл"
+    if os.path.splitext(name.lower())[1] not in FILE_EXT and MIME_EXT.get(str(getattr(doc, "mime_type", "") or "")):
+        name += MIME_EXT[str(doc.mime_type)]  # Telegram иногда не присылает имя: тип берём из mime
+    if os.path.splitext(name.lower())[1] not in FILE_EXT:
+        await message.answer("Такой формат не разбираю. Подойдут PDF, Word (.docx), PowerPoint (.pptx), текст (.txt) и фото страниц (JPEG, PNG, WebP).")
+        return
+    if (doc.file_size or 0) > MAX_FILE_BYTES:
+        await message.answer(f"Файл больше {T.FILE_MB} МБ — пришлите поменьше или разделите на части.")
+        return
+    buf = await bot.download(doc.file_id)
+    data = buf.read() if buf is not None else b""
+    if not data:
+        await message.answer("Не получилось получить файл из Telegram. Пришлите ещё раз.")
+        return
+    r = await site().call("upload_file", tg, base64=base64.b64encode(data).decode(), fileName=name)
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Файл не принят"))
+        return
+    o["uploadIds"].append(str(r["uploadId"]))
+    o["uploadNames"][str(r["uploadId"])] = name
+    await _save(state, o)
+    d = await state.get_data()
+    nxt = [[("➡ Далее", "o:wz:n")]] if d.get("wz") is not None else [[("✅ Готово", "o:home")]]
+    await message.answer(f"📎 Принял «{name[:60]}» ({len(o['uploadIds'])} из {T.FILES_MAX}). Разбираю — это до минуты. Можно прислать ещё или нажать «Далее».", reply_markup=T.kb(nxt))
+
+
 @router.message(F.photo | F.document, StateFilter(*SETUP_STATES))
 async def got_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    """Снимок из чата: уходит на сайт как загрузка в мастере, ждёт создания и после черновика встаёт на подходящий слайд."""
+    """Снимок из чата — как загрузка в мастере на сайте: ждёт создания и после черновика встаёт на подходящий слайд. Документ (PDF, Word, …) —
+    материал, по которому делается презентация; фото-файл на шаге «Свои файлы» тоже материал (скан страницы), на других шагах — снимок."""
     o = await _opts(state)
+    d = await state.get_data()
+    is_image_doc = bool(message.document and str(message.document.mime_type or "").startswith("image/"))
+    if message.document and (not is_image_doc or _current_step(d, o) == "up"):
+        await _got_file(message, state, bot, message.from_user.id)
+        return
     if len(o["photoIds"]) >= T.MAX_PHOTOS:
         await message.answer(f"Уже {T.MAX_PHOTOS} снимков — больше не бывает. Уберите лишние в «Фото».")
         return
     if message.photo:
         file_id, size = message.photo[-1].file_id, message.photo[-1].file_size or 0
-    elif message.document and str(message.document.mime_type or "").startswith("image/"):
+    elif is_image_doc:
         file_id, size = message.document.file_id, message.document.file_size or 0
     else:
         await message.answer("Это не снимок. Пришлите JPEG, PNG или WebP.")
@@ -702,7 +850,8 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot) -> None:
         return
     o["photoIds"].append(str(r["photoId"]))
     await _save(state, o)
-    await message.answer(f"🖼 Снимок принят ({len(o['photoIds'])}). Можно прислать ещё или нажать «Создать» в настройках.", reply_markup=T.kb([[("⬅ К настройкам", "o:home")]]))
+    nxt = [[("➡ Далее", "o:wz:n")]] if d.get("wz") is not None else [[("✅ Готово", "o:home")]]
+    await message.answer(f"🖼 Снимок принят ({len(o['photoIds'])}). Можно прислать ещё или нажать «Далее».", reply_markup=T.kb(nxt))
 
 
 @router.callback_query(F.data.startswith("st:") | F.data.startswith("w:"))
@@ -748,16 +897,21 @@ def _create_payload(d: dict[str, Any]) -> dict[str, Any]:
 
 async def _create(message: Message, state: FSMContext, bot: Bot, tg: int) -> None:
     data = await state.get_data()
-    await state.clear()
     if not data.get("topic"):
+        await state.clear()
         await message.answer("Начнём заново: нажмите /menu.")
         return
     o = data.get("o") or {}
     if o.get("mode") in ("plan", "text") and not str(o.get("planText", "")).strip():
         await message.answer("Выбран режим со своим планом или текстом, но текст не получен. Откройте «С чего начинаем» и пришлите его или выберите «Только тема».")
-        await state.set_data(data)
         await state.set_state(Create.setup)
         return
+    if o.get("uploadIds"):
+        if not await _check_uploads(message, state, tg, final=True):
+            await state.set_state(Create.setup)
+            return
+        data = await state.get_data()  # неразобравшиеся файлы могли быть убраны
+    await state.clear()
     r = await site().call("create", tg, **_create_payload(data))
     if r.get("ok"):
         await message.answer(T.WORKING)
@@ -816,6 +970,7 @@ async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
             return
         if r.get("phase") in ("draft", "approved"):
             await _send_draft(bot, chat_id, tg, run_id, preview=1)
+            _watch_auto_photos(bot, chat_id, tg, run_id)
             return
 
 
@@ -888,13 +1043,48 @@ async def _poll_photos(bot: Bot, chat_id: int, tg: int, run_id: str, job_id: str
     await bot.send_message(chat_id, "Подбор занимает слишком долго. Нажмите «Подобрать фото ИИ» ещё раз через минуту.")
 
 
-async def _send_suggestions(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
+async def _send_suggestions(bot: Bot, chat_id: int, tg: int, run_id: str) -> int:
+    """Показать предложенные картинки (каждая с подписью и кнопками «Поставить»/«Убрать») и общие кнопки: поставить все, не нужны, предложить другие."""
     r = await site().call("suggestions", tg, runId=run_id)
+    sent = 0
     for it in (r.get("items") or [])[:8]:
         pic = await site().call("photo_get", tg, photoId=it["id"])
         if not pic.get("ok"):
             continue
         await bot.send_photo(chat_id, BufferedInputFile(base64.b64decode(str(pic["base64"])), filename="photo.jpg"), caption=T.suggestion_caption(it), reply_markup=T.suggestion_kb(run_id, str(it["id"])))
+        sent += 1
+    if sent:
+        await bot.send_message(chat_id, T.PHOTO_OFFER.format(n=sent), reply_markup=T.photo_group_kb(run_id, (r.get("left") or {}).get("runs", 0)))
+    return sent
+
+
+def _watch_auto_photos(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
+    t = asyncio.create_task(_poll_auto_photos(bot, chat_id, tg, run_id))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+
+
+async def _poll_auto_photos(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
+    """Сайт сам подбирает картинки сразу после черновика (тот же автоподбор, что в редакторе). Бот ждёт его и показывает предложения на утверждение.
+    Сайт старый, подбор отключён или ничего не идёт — молча ничего не делаем: человек всё равно может нажать «Подобрать фото ИИ»."""
+    started = False
+    for _ in range(PHOTO_POLL_LIMIT):
+        r = await site().call("photo_auto", tg, runId=run_id)
+        if not r.get("ok"):
+            if r.get("network"):
+                await asyncio.sleep(PHOTO_POLL_SECONDS)
+                continue
+            return
+        if r.get("state") == "running":
+            if not started:
+                started = True
+                await bot.send_message(chat_id, T.PHOTO_AUTO_WAIT)
+            await asyncio.sleep(PHOTO_POLL_SECONDS)
+            continue
+        if r.get("state") == "none":
+            return
+        await _send_suggestions(bot, chat_id, tg, run_id)
+        return
 
 
 @router.callback_query(F.data.startswith("pa:"))
@@ -909,6 +1099,36 @@ async def cb_photo_accept(call: CallbackQuery, bot: Bot) -> None:
     idx = int(r.get("slideIndex", 0))
     await call.message.answer(f"Поставил на слайд {idx + 1}.")
     await _send_preview(bot, call.message.chat.id, tg, run_id, idx)
+
+
+@router.callback_query(F.data.startswith("pall:"))
+async def cb_photo_accept_all(call: CallbackQuery, bot: Bot) -> None:
+    """«Поставить все»: каждая предложенная картинка встаёт на свой слайд с подписью автора."""
+    await call.answer()
+    run_id = call.data[5:]
+    tg = call.from_user.id
+    items = (await site().call("suggestions", tg, runId=run_id)).get("items") or []
+    placed: list[int] = []
+    for it in items:
+        r = await site().call("photo_accept", tg, runId=run_id, photoId=it["id"])
+        if r.get("ok"):
+            placed.append(int(r.get("slideIndex", 0)))
+    if not placed:
+        await call.message.answer("Нечего ставить: предложений уже нет.")
+        return
+    await call.message.answer(T.PHOTO_PLACED.format(n=len(placed)), reply_markup=T.kb([[("🖥 Открыть на сайте", f"u:{run_id}")]]))
+    await _send_preview(bot, call.message.chat.id, tg, run_id, placed[0])
+
+
+@router.callback_query(F.data.startswith("pnone:"))
+async def cb_photo_dismiss_all(call: CallbackQuery) -> None:
+    await call.answer()
+    run_id = call.data[6:]
+    tg = call.from_user.id
+    items = (await site().call("suggestions", tg, runId=run_id)).get("items") or []
+    for it in items:
+        await site().call("photo_dismiss", tg, runId=run_id, photoId=it["id"])
+    await call.message.answer("Убрал предложения. Свои снимки можно добавить на сайте кнопкой «+ Фото» на нужном слайде.", reply_markup=T.kb([[("🔁 Предложить другие", f"ph:{run_id}")], [("🖥 Открыть на сайте", f"u:{run_id}")]]))
 
 
 @router.callback_query(F.data.startswith("pd:"))

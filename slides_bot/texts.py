@@ -223,7 +223,7 @@ AUD_ASK = "Для кого презентация? Например: «студ�
 
 
 def back_row() -> list[tuple[str, str]]:
-    return [("⬅ К настройкам", "o:home")]
+    return [("✅ Готово", "o:home")]
 
 
 def _mark(on: bool, text: str) -> str:
@@ -341,7 +341,7 @@ def fonts_page_kb(fonts: list[str], page: int, which: str) -> InlineKeyboardMark
     nav = pager(page, len(fonts), f"o:fnt:{which}")
     if nav:
         rows.append(nav)
-    rows.append([("Как у оформления", "o:fx"), ("⬅ К настройкам", "o:home")])
+    rows.append([("Как у оформления", "o:fx"), ("✅ Готово", "o:home")])
     return kb(rows)
 
 
@@ -507,5 +507,104 @@ def suggestion_caption(it: dict[str, Any]) -> str:
     return "\n".join(lines)[:1000]
 
 
+PHOTO_AUTO_WAIT = "Пока вы смотрите черновик, ИИ подбирает к нему картинки. Пришлю предложения — вы решите, какие поставить."
+PHOTO_OFFER = "Предложено картинок: {n}. Поставить все сразу или выберите по одной под каждой?"
+PHOTO_PLACED = "Поставил картинок: {n}. Мало — добавьте свои на сайте кнопкой «+ Фото» на нужном слайде или попросите ИИ предложить другие."
+
+
+def photo_group_kb(run_id: str, runs_left: int) -> InlineKeyboardMarkup:
+    rows = [[("✅ Поставить все", f"pall:{run_id}"), ("🗑 Не нужны", f"pnone:{run_id}")]]
+    if runs_left > 0:
+        rows.append([(f"🔁 Предложить другие (осталось запусков: {runs_left})", f"ph:{run_id}")])
+    return kb(rows)
+
+
 def suggestion_kb(run_id: str, photo_id: str) -> InlineKeyboardMarkup:
     return kb([[("✅ Поставить на слайд", f"pa:{run_id}:{photo_id}"), ("🗑 Убрать", f"pd:{run_id}:{photo_id}")]])
+
+
+# ---------- мастер: вопросы по одному, кнопки только там, где выбор из вариантов ----------
+
+WZ_STEPS = ("mode", "aud", "src", "up", "ph", "wish", "ttl")
+FILES_MAX = 5
+FILE_MB = 20
+
+
+def wz_skip(step: str, o: dict[str, Any]) -> bool:
+    """В режиме «готовый текст» источники, файлы и пожелания не нужны: слова не меняются."""
+    return o.get("mode") == "text" and step in ("src", "up", "wish")
+
+
+def wz_steps(o: dict[str, Any]) -> list[str]:
+    return [x for x in WZ_STEPS if not wz_skip(x, o)]
+
+
+WZ_TEXT = {
+    "mode": "С чего начинаем?\n• Только тема — напишу всё сам.\n• Тема и свой план — вы присылаете пункты, я пишу по ним.\n• Готовый текст по слайдам — оформлю, формулировки не меняю.",
+    "aud": "Для кого презентация? Напишите одной фразой, например: «студенты 3 курса», «комиссия на защите», «школьники 9 класса». Или нажмите «Пропустить».",
+    "src": "Откуда брать материал? Отметьте нужное и нажмите «Далее».\n" + SOURCES_HELP,
+    "up": f"Свои файлы: пришлите в этот чат до {FILES_MAX} файлов (PDF, Word, PowerPoint, текст, фото страниц; до {FILE_MB} МБ каждый). Презентация будет сделана строго по ним, без добавлений от себя. Если файлов нет — нажмите «Далее».",
+    "ph": f"Фото: присылайте снимки прямо в чат (JPEG, PNG или WebP, до 8 МБ, не больше {MAX_PHOTOS}). Остальное подберёт ИИ сам и покажет на утверждение. Нажмите «Далее», когда готово.",
+    "wish": ASK_WISHES,
+    "ttl": "Титульный лист: ФИО, группа и вуз берутся из вашего профиля. Их не отправляют в модель.",
+}
+
+
+def wz_text(step: str, index: int, total: int, o: dict[str, Any]) -> str:
+    head = f"Шаг {index + 1} из {total}."
+    body = WZ_TEXT[step]
+    if step == "up":
+        n = len(o.get("uploadIds") or [])
+        if n:
+            body += "\n\nПринято файлов: " + str(n) + " из " + str(FILES_MAX) + "."
+    if step == "ph" and o.get("photoIds"):
+        body += f"\n\nПринято снимков: {len(o['photoIds'])}."
+    if step == "aud" and o.get("audience"):
+        body += f"\n\nСейчас: {o['audience']}"
+    return head + " " + body
+
+
+def wz_nav(first: bool) -> list[tuple[str, str]]:
+    row = [("⬅ Назад", "o:wz:b")] if not first else []
+    row.append(("✖ Отмена", "o:cancel"))
+    return row
+
+
+def wz_kb(step: str, o: dict[str, Any], first: bool = False) -> InlineKeyboardMarkup:
+    nxt = [("➡ Далее", "o:wz:n")]
+    if step == "mode":
+        m = o.get("mode", "topic")
+        rows = [
+            [(_mark(m == "topic", "Только тема"), "o:m:topic")],
+            [(_mark(m == "plan", "Тема и свой план"), "o:m:plan")],
+            [(_mark(m == "text", "Готовый текст по слайдам"), "o:m:text")],
+        ]
+    elif step == "aud":
+        rows = [[("Пропустить", "o:wz:n")]]
+    elif step == "src":
+        rows = [
+            [(_mark(bool(o.get("medical")), "Медицинская тема"), "o:med")],
+            [(_mark(bool(o.get("textbooks")), "Учебники бота" + (f": {o['disciplineName']}" if o.get("disciplineName") else "")), "o:tb")],
+            [(_mark(bool(o.get("pmids")), "Статьи PubMed" + (f": {len(o['pmids'])}" if o.get("pmids") else "")), "o:pm")],
+            nxt,
+        ]
+    elif step == "up":
+        rows = [[("📂 Выбрать из уже загруженных", "o:up")]]
+        if o.get("uploadIds"):
+            rows.append([("Убрать все файлы", "o:upx")])
+        rows.append(nxt)
+    elif step == "ph":
+        rows = []
+        if o.get("photoIds"):
+            rows.append([("Убрать все фото", "o:phx")])
+        rows.append(nxt)
+    elif step == "wish":
+        rows = [[("Без пожеланий", "o:wz:n")]]
+    else:  # ttl
+        rows = [[("✅ Оставить как в профиле", "o:wz:n")], [("✏️ Поправить поля", "o:ttl")]]
+    rows.append(wz_nav(first))
+    return kb(rows)
+
+
+def final_text(d: dict[str, Any]) -> str:
+    return "Всё спросил. Проверьте и нажмите «Создать» — или откройте нужный пункт, чтобы изменить.\n\n" + setup_text(d)

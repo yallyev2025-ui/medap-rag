@@ -36,6 +36,7 @@ from app.workflows.user_documents import (
     delete_user_document,
     ingest_user_document,
     list_user_documents,
+    search_user_documents,
 )
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
@@ -1006,6 +1007,62 @@ async def documents_ask_many(payload: DocumentsAskRequest, request: Request) -> 
         answer=result.answer,
         verified=result.verified,
         citations=[Citation(**c) for c in result.evidence_references],
+        error=result.error,
+        requestId=result.request_id,
+    )
+
+
+class DocumentsSearchRequest(BaseModel):
+    """Поиск кусков по документам без ответа модели (для презентаций: слайд пишет сайт, строго по этим кускам)."""
+
+    queries: list[str] = Field(..., min_length=1, max_length=6)
+    documentIds: list[int] = Field(..., min_length=1, max_length=10)
+    topK: int = Field(8, ge=1, le=20)
+    context: StudentAIContext
+
+
+class DocumentFragmentItem(BaseModel):
+    documentId: str
+    title: str
+    pageFrom: int | None = None
+    pageTo: int | None = None
+    order: int
+    text: str
+    score: float | None = None
+
+
+class DocumentsSearchResponse(BaseModel):
+    fragments: list[DocumentFragmentItem]
+    totalChunks: int = 0
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/documents/search", response_model=DocumentsSearchResponse)
+async def documents_search(payload: DocumentsSearchRequest, request: Request) -> DocumentsSearchResponse:
+    """Куски личных документов пользователя, ближайшие по смыслу к запросам. Чужой/несуществующий id молча отбрасывается."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="DOCUMENT_QA"):
+        result = await search_user_documents(
+            payload.queries,
+            user_id=payload.context.userId,
+            document_ids=payload.documentIds,
+            top_k=payload.topK,
+        )
+    return DocumentsSearchResponse(
+        fragments=[
+            DocumentFragmentItem(
+                documentId=str(f.document_id),
+                title=f.title,
+                pageFrom=f.page_from,
+                pageTo=f.page_to,
+                order=f.order,
+                text=f.text,
+                score=f.score,
+            )
+            for f in result.fragments
+        ],
+        totalChunks=result.total_chunks,
         error=result.error,
         requestId=result.request_id,
     )

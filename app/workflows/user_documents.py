@@ -43,6 +43,7 @@ from constants import (
 from db.crud import delete_book
 from db.models import Book, BookChunk
 from db.session import async_session
+from rag.retriever import count_document_chunks, retrieve_union
 from scripts.load_books import load_book
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,75 @@ async def ask_user_documents(
         verified=result.verified,
         evidence_references=result.citations if result.verified is not False else [],
         request_id=result.request_id,
+    )
+
+
+@dataclass
+class UserDocumentFragment:
+    document_id: int
+    title: str
+    page_from: int | None
+    page_to: int | None
+    order: int
+    text: str
+    score: float | None = None
+
+
+@dataclass
+class UserDocumentSearchResult:
+    fragments: list[UserDocumentFragment] = field(default_factory=list)
+    total_chunks: int = 0
+    error: str | None = None
+    request_id: str | None = None
+
+
+async def search_user_documents(
+    queries: list[str],
+    user_id: str,
+    document_ids: list[int],
+    top_k: int = 8,
+) -> UserDocumentSearchResult:
+    """Только поиск, без генерации ответа: куски текста документов студента, ближайшие по смыслу к запросам.
+
+    Нужен презентациям (сайт пишет слайд сам и строго по этим кускам), поэтому здесь нет ни модели, ни пересказа — только
+    выдача из базы. Изоляция та же, что у `ask_user_documents`: чужие/несуществующие id молча отбрасываются, поиск
+    фильтрует по book_id и user_id вместе. Фрагменты возвращаются в порядке документа — мысль читается связно.
+    """
+    owned_ids = await _owned_document_ids(user_id, document_ids)
+    if not owned_ids:
+        return UserDocumentSearchResult(error=_NOT_FOUND_MESSAGE, request_id=current_request_id())
+
+    clean = [q.strip() for q in queries if q and q.strip()][:6]
+    if not clean:
+        return UserDocumentSearchResult(request_id=current_request_id())
+
+    total = await count_document_chunks(owned_ids, user_id)
+    found = await retrieve_union(
+        clean,
+        rerank_with=clean[0],
+        candidates=settings.RETRIEVAL_CANDIDATES,
+        top_k=max(1, min(top_k, 20)),
+        source_type=SOURCE_USER_DOCUMENT,
+        book_id=owned_ids,
+        user_id=user_id,
+    )
+    found.sort(key=lambda c: (c.book_id or 0, c.chunk_index if c.chunk_index is not None else 0))
+
+    return UserDocumentSearchResult(
+        fragments=[
+            UserDocumentFragment(
+                document_id=c.book_id or 0,
+                title=c.title,
+                page_from=c.page_from,
+                page_to=c.page_to,
+                order=c.chunk_index if c.chunk_index is not None else 0,
+                text=c.content,
+                score=c.rerank_score,
+            )
+            for c in found
+        ],
+        total_chunks=total,
+        request_id=current_request_id(),
     )
 
 
