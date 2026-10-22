@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
@@ -50,6 +52,47 @@ async def _tell_owners(text: str) -> None:
         await notifier.session.close()
 
 
+MSK = timezone(timedelta(hours=3))
+DIGEST_HOUR = 9
+
+
+def seconds_until_digest(now: datetime | None = None) -> float:
+    """Сколько секунд до ближайших 9:00 по Москве (утренняя сводка владельцу)."""
+    now = (now or datetime.now(MSK)).astimezone(MSK)
+    nxt = now.replace(hour=DIGEST_HOUR, minute=0, second=0, microsecond=0)
+    if nxt <= now:
+        nxt += timedelta(days=1)
+    return (nxt - now).total_seconds()
+
+
+async def _send_digests() -> None:
+    """Сводка CRM каждому владельцу из ADMIN_IDS: сайт отвечает только тому, чей Telegram привязан к аккаунту владельца."""
+    if not settings.TELEGRAM_BOT_TOKEN or not settings.ADMIN_IDS:
+        return
+    notifier = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        for admin_id in settings.ADMIN_IDS:
+            try:
+                r = await slides_site.site.call("digest", admin_id, days=1)
+                if r.get("ok") and r.get("text"):
+                    await notifier.send_message(admin_id, str(r["text"]))
+            except Exception:
+                logger.warning("Сводка владельцу %s не отправилась", admin_id, exc_info=True)
+    finally:
+        await notifier.session.close()
+
+
+async def digest_loop() -> None:
+    """Раз в сутки в 9:00 по Москве. Любой сбой — в журнал, цикл продолжается."""
+    while True:
+        await asyncio.sleep(seconds_until_digest())
+        try:
+            await _send_digests()
+        except Exception:
+            logger.exception("Утренняя сводка не отправилась")
+        await asyncio.sleep(60)
+
+
 async def run_slides_bot() -> None:
     """Long polling второго бота. Любой сбой превращается в понятное сообщение владельцу и не останавливает основной бот."""
     if not settings.SLIDES_BOT_TOKEN:
@@ -68,7 +111,11 @@ async def run_slides_bot() -> None:
         logger.info("Бот презентаций запущен: @%s", me.username)
         report = await handlers.version_report()
         await _tell_owners(f"Бот презентаций запущен: @{me.username}. Откройте его и нажмите «Начать».\n{report}" + ("".join(f"\n⚠ {p}" for p in problems)))
-        await build_dispatcher().start_polling(bot)
+        digest_task = asyncio.create_task(digest_loop())
+        try:
+            await build_dispatcher().start_polling(bot)
+        finally:
+            digest_task.cancel()
     except TelegramUnauthorizedError:
         logger.error("Telegram не принял SLIDES_BOT_TOKEN")
         await _tell_owners("Бот презентаций не запущен: Telegram не принял токен (SLIDES_BOT_TOKEN). Скопируйте токен из @BotFather целиком, без пробелов и кавычек.")

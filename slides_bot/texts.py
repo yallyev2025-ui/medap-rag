@@ -608,3 +608,13 @@ def wz_kb(step: str, o: dict[str, Any], first: bool = False) -> InlineKeyboardMa
 
 def final_text(d: dict[str, Any]) -> str:
     return "Всё спросил. Проверьте и нажмите «Создать» — или откройте нужный пункт, чтобы изменить.\n\n" + setup_text(d)
+
+
+# ---------- оценка после скачивания (честно: ничего не выбрано заранее) ----------
+
+REVIEW_ASK = "Как вам презентация? Поставьте оценку от 1 до 5 — это поможет улучшить сервис."
+REVIEW_THANKS = "Оценка {n} из 5 сохранена, спасибо! Если хотите, напишите пару слов о презентации одним сообщением — они появятся на главной сайта после проверки."
+
+
+def review_kb(run_id: str) -> InlineKeyboardMarkup:
+    return kb([[(f"{n} ⭐" if n == 1 else f"{n}", f"rv:{run_id}:{n}") for n in range(1, 6)], [("Не сейчас", f"rv:{run_id}:skip")]])

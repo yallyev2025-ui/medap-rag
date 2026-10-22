@@ -57,6 +57,10 @@ class Edit(StatesGroup):
     phrase = State()
 
 
+class Review(StatesGroup):
+    text = State()  # человек хочет добавить пару слов к своей оценке
+
+
 class Topup(StatesGroup):
     amount = State()
 
@@ -1237,6 +1241,45 @@ async def cb_file(call: CallbackQuery) -> None:
         return
     data = base64.b64decode(str(r["base64"]))
     await call.message.answer_document(BufferedInputFile(data, filename=str(r["fileName"])), caption="Готово. Поправить текст и оформление можно на сайте.")
+    await _ask_review(call.message, call.from_user.id, run_id)
+
+
+async def _ask_review(msg: Message, tg: int, run_id: str) -> None:
+    """После скачивания просим оценить: звёзды БЕЗ выбранного значения; сайт сам не даёт спросить дважды и считает отказы."""
+    st = await site().call("review_state", tg, runId=run_id)
+    if st.get("ok") and st.get("ask"):
+        await msg.answer(T.REVIEW_ASK, reply_markup=T.review_kb(run_id))
+
+
+@router.callback_query(F.data.startswith("rv:"))
+async def cb_review(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    _, run_id, n = call.data.split(":")
+    if n == "skip":
+        await site().call("review_skip", call.from_user.id)
+        await call.message.answer("Хорошо, не буду отвлекать.")
+        return
+    if n == "none":
+        await state.clear()
+        await call.message.answer("Спасибо! Оценка учтена.")
+        return
+    if not n.isdigit():
+        return
+    r = await site().call("review_save", call.from_user.id, runId=run_id, rating=int(n))
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось сохранить оценку"))
+        return
+    await state.set_state(Review.text)
+    await state.update_data(review_run=run_id, review_rating=int(n))
+    await call.message.answer(T.REVIEW_THANKS.format(n=n), reply_markup=T.kb([[("Без отзыва", "rv:" + run_id + ":none")]]))
+
+
+@router.message(Review.text, F.text)
+async def got_review_text(message: Message, state: FSMContext) -> None:
+    d = await state.get_data()
+    await state.clear()
+    r = await site().call("review_save", message.from_user.id, runId=d.get("review_run", ""), rating=int(d.get("review_rating", 0)), text=(message.text or "")[:800])
+    await message.answer("Спасибо! Отзыв появится на главной сайта после проверки." if r.get("ok") else str(r.get("error") or "Не получилось сохранить отзыв"))
 
 
 # ---------- баланс ----------
@@ -1292,7 +1335,25 @@ async def cb_owner(call: CallbackQuery) -> None:
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or "Нет данных"))
         return
-    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("📊 Сводка сейчас", "ow:digest"), ("📥 Клиенты (CSV)", "ow:csv:clients")], [("📥 События за 30 дн. (CSV)", "ow:csv:events")], [("⬅ В меню", "m:home")]]))
+
+
+@router.callback_query(F.data.startswith("ow:"))
+async def cb_owner_tools(call: CallbackQuery) -> None:
+    """Сводка CRM и выгрузка таблицы в Telegram — только подтверждённому владельцу."""
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    parts = call.data.split(":")
+    if parts[1] == "digest":
+        r = await site().call("digest", call.from_user.id, days=7)
+        await call.message.answer(str(r.get("text") or r.get("error") or "Нет данных"))
+    elif parts[1] == "csv":
+        r = await site().call("export", call.from_user.id, kind="events" if parts[2:] == ["events"] else "clients", days=30)
+        if not r.get("ok"):
+            await call.message.answer(str(r.get("error") or "Не получилось собрать таблицу"))
+            return
+        await call.message.answer_document(BufferedInputFile(base64.b64decode(str(r["base64"])), filename=str(r["fileName"])), caption="Таблица для Excel (кодировка UTF-8, разделитель «;»).")
 
 
 async def notify_owners(bot: Bot, text: str) -> None:

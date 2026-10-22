@@ -99,6 +99,18 @@ class FakeSite:
             return {"ok": True, "state": "done", "added": 2, "notes": [{"slide": 3, "title": "Причины", "text": "предложено фото (Wikimedia Commons, Jane Doe)", "ok": True}, {"slide": 5, "title": "Лечение", "text": "ни одна найденная картинка не подошла (клише)", "ok": False}]}
         if action == "suggestions":
             return {"ok": True, "left": {"runs": 3, "images": 8}, "items": [{"id": "ph-0000000001", "origin": "web", "credit": "Фото: Jane Doe, CC BY-SA 4.0, Wikimedia Commons", "why": "Показать, как измеряют давление", "slide": 3, "sourceUrl": "https://commons.wikimedia.org/wiki/File:X.jpg"}, {"id": "ph-0000000002", "origin": "ai", "credit": "Иллюстрация создана ИИ (Flux)", "why": "Спокойный фон", "slide": 5, "sourceUrl": ""}]}
+        if action == "review_state":
+            return {"ok": True, "ask": getattr(self, "review_ask", True), "rated": None}
+        if action == "review_save":
+            if not 1 <= int(p.get("rating", 0)) <= 5:
+                return {"ok": False, "error": "Выберите оценку от 1 до 5"}
+            return {"ok": True, "status": "PENDING" if p.get("text") else "APPROVED"}
+        if action == "review_skip":
+            return {"ok": True}
+        if action == "digest":
+            return {"ok": True, "text": "📊 Medap Slide — за 1 дн.\nВоронка: …"} if telegram_id == 999 else {"ok": False, "error": "Нет доступа"}
+        if action == "export":
+            return {"ok": True, "fileName": "medap-slide-clients-2026-10-22.csv", "base64": base64.b64encode("\ufeffПочта;Имя\r\n".encode()).decode()} if telegram_id == 999 else {"ok": False, "error": "Нет доступа"}
         if action == "photo_auto":
             seq = getattr(self, "auto_seq", ["none"])
             st = seq.pop(0) if len(seq) > 1 else seq[0]
@@ -710,6 +722,25 @@ async def flow_checks() -> None:
     call = FakeCall("f:run1:pptx")
     await H.cb_file(call)
     ok(call.message.docs == [("Gipertoniya.pptx", b"PK-test")], "файл пришёл документом с исходным именем")
+    ask = call.message.sent[-1]
+    ok(T.REVIEW_ASK in ask[0], "после файла просят оценить")
+    data_r = [b.callback_data for row in ask[1].inline_keyboard for b in row]
+    ok(data_r == ["rv:run1:1", "rv:run1:2", "rv:run1:3", "rv:run1:4", "rv:run1:5", "rv:run1:skip"], f"оценка 1–5 и «Не сейчас»; ни одна звезда не выбрана заранее: {data_r}")
+    ok("5" not in ask[0].replace("от 1 до 5", ""), "в просьбе нет подсказки поставить высокую оценку")
+    call_r = FakeCall("rv:run1:4")
+    await H.cb_review(call_r, ctx())
+    ok([c for c in fs.calls if c[0] == "review_save"][-1][2] == {"runId": "run1", "rating": 4} and await ctx().get_state() == H.Review.text.state, "оценка сохранена на сайте, дальше ждём необязательный текст")
+    m_r = FakeMessage(text="Хорошо оформлено, пригодится на защите")
+    await H.got_review_text(m_r, ctx())
+    ok([c for c in fs.calls if c[0] == "review_save"][-1][2] == {"runId": "run1", "rating": 4, "text": "Хорошо оформлено, пригодится на защите"} and "после проверки" in texts_of(m_r) and await ctx().get_state() is None, "текст отзыва ушёл вместе с оценкой, состояние очищено")
+    call_s = FakeCall("rv:run1:skip")
+    await H.cb_review(call_s, ctx())
+    ok([c for c in fs.calls if c[0] == "review_skip"], "«Не сейчас» запоминается на сайте")
+    fs.review_ask = False
+    call2 = FakeCall("f:run1:pdf")
+    await H.cb_file(call2)
+    ok(not any(T.REVIEW_ASK in t for t, _ in call2.message.sent), "уже оценил или отказывался дважды — не спрашиваем")
+    fs.review_ask = True
 
     # баланс и пополнение
     call = FakeCall("t:30000")
@@ -741,6 +772,17 @@ async def flow_checks() -> None:
     call = FakeCall("m:owner", tg=999)
     await H.cb_owner(call)
     ok("презентаций: 5" in texts_of(call.message) and "300 ₽" in texts_of(call.message), "владельцу — сводка")
+    labels_o = [b.callback_data for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("ow:digest" in labels_o and "ow:csv:clients" in labels_o and "ow:csv:events" in labels_o, f"у владельца кнопки сводки и выгрузки: {labels_o}")
+    call = FakeCall("ow:digest", tg=999)
+    await H.cb_owner_tools(call)
+    ok("Medap Slide — за 1 дн." in texts_of(call.message), "«Сводка сейчас» присылает сводку CRM")
+    call = FakeCall("ow:csv:clients", tg=999)
+    await H.cb_owner_tools(call)
+    ok(call.message.docs and call.message.docs[0][0].endswith(".csv") and call.message.docs[0][1].startswith("\ufeff".encode()), "таблица клиентов приходит CSV-файлом")
+    call = FakeCall("ow:digest", tg=111)
+    await H.cb_owner_tools(call)
+    ok(not call.message.sent and not call.message.docs, "обычному человеку сводка и выгрузка молчат")
     ok(any("Владелец" in b.text for row in T.main_menu(True).inline_keyboard for b in row) and not any("Владелец" in b.text for row in T.main_menu(False).inline_keyboard for b in row), "кнопка «Владелец» только в меню владельца")
 
     # кабинет закрыт для не-команды: человеку понятный текст, ни оплаты, ни ожидания
@@ -791,6 +833,12 @@ def runner_checks() -> None:
     cfg = SimpleNamespace(SLIDES_BOT_USERNAME="Old_Name")
     ok(any("SLIDES_SITE_URL" in p for p in runner.config_problems(cfg, site_configured=False)), "без настроек сайта владельцу говорят, какие переменные вписать")
     ok(runner.config_problems(cfg, site_configured=True) == [], "настроено — предупреждений нет")
+    from datetime import datetime, timezone, timedelta
+
+    msk = timezone(timedelta(hours=3))
+    ok(runner.seconds_until_digest(datetime(2026, 10, 22, 8, 0, tzinfo=msk)) == 3600, "до утренней сводки час, если сейчас 8:00 по Москве")
+    ok(runner.seconds_until_digest(datetime(2026, 10, 22, 9, 0, tzinfo=msk)) == 86400, "ровно в 9:00 следующая сводка — завтра")
+    ok(runner.seconds_until_digest(datetime(2026, 10, 22, 6, 0, tzinfo=timezone.utc)) == 86400, "6:00 UTC — это 9:00 по Москве: следующая завтра")
     ok(any("@real_bot" in p for p in runner.config_problems(cfg, site_configured=True, username="real_bot")), "имя в переменной не совпало с настоящим — предупреждение")
     ok(runner.config_problems(SimpleNamespace(SLIDES_BOT_USERNAME="@Real_Bot"), site_configured=True, username="real_bot") == [], "@ и регистр в имени не мешают")
 
