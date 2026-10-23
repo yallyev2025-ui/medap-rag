@@ -686,7 +686,7 @@ async def _pubmed(msg: Message, state: FSMContext, tg: int, act: str, arg: str) 
 @router.message(Create.wishes, F.text)
 async def got_wishes(message: Message, state: FSMContext) -> None:
     o = await _opts(state)
-    o["wishes"] = (message.text or "").strip()[:800]
+    o["wishes"] = (message.text or "").strip()[:3000]
     await _save(state, o)
     await _return(message, state)
 
