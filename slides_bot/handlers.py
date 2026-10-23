@@ -576,7 +576,7 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     elif act == "txt":
         await _screen(msg, T.TEXT_HELP, T.text_kb(o))
     elif act == "n":
-        o["notes"] = "" if arg == "none" else arg if arg in ("brief", "detailed") else o["notes"]
+        o["notes"] = arg if arg in ("none", "brief", "detailed") else o["notes"]
         await _save(state, o)
         await _screen(msg, T.TEXT_HELP, T.text_kb(o))
     elif act == "dd":

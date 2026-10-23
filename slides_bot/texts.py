@@ -92,7 +92,7 @@ def styles_kb(templates: list[dict[str, Any]]) -> InlineKeyboardMarkup:
 
 PAGE = 8  # кнопок в одном списке (шаблоны, шрифты)
 MAX_PHOTOS = 12
-NOTES_NAMES = {"": "не нужны", "brief": "кратко", "detailed": "подробно"}
+NOTES_NAMES = {"": "подробно", "none": "не нужны", "brief": "кратко", "detailed": "подробно"}
 DETAIL_NAMES = {"brief": "кратко", "detailed": "подробно"}
 
 
@@ -135,7 +135,7 @@ def setup_text(d: dict[str, Any]) -> str:
     """Экран «Настроить». Сверху — то, что после создания на сайте НЕ поменять (поэтому спрашиваем здесь); ниже — оформление, его можно изменить на сайте потом, бесплатно."""
     o = d.get("o") or default_opts()
     text_mode = o.get("mode") == "text"
-    notes = "подробно (мед. тема)" if o.get("medical") and not o.get("notes") else NOTES_NAMES.get(o.get("notes", ""), "не нужны")
+    notes = NOTES_NAMES.get(o.get("notes", ""), "подробно")
     lines = [
         "Настройте презентацию.",
         f"Тема: {d.get('topic', '')}",
@@ -361,8 +361,8 @@ def text_kb(o: dict[str, Any]) -> InlineKeyboardMarkup:
     notes = o.get("notes", "")
     detail = o.get("detail", "detailed")
     return kb([
-        [(_mark(notes == "", "Заметки: не нужны"), "o:n:none")],
-        [(_mark(notes == "brief", "Заметки: кратко"), "o:n:brief"), (_mark(notes == "detailed", "Заметки: подробно"), "o:n:detailed")],
+        [(_mark(notes == "none", "Заметки: не нужны"), "o:n:none")],
+        [(_mark(notes == "brief", "Заметки: кратко"), "o:n:brief"), (_mark(notes in ("", "detailed"), "Заметки: подробно"), "o:n:detailed")],
         [(_mark(detail == "brief", "Слайды: кратко"), "o:dd:brief"), (_mark(detail == "detailed", "Слайды: подробно"), "o:dd:detailed")],
         [(_mark(bool(o.get("numbers")), "Номера слайдов в углу"), "o:num")],
         back_row(),
