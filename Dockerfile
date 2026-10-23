@@ -52,13 +52,15 @@ CrossEncoder('${RERANKER_MODEL_NAME}')" && exit 0; \
 # можно было включить переменной окружения, не запуская конвертацию в работающем боте (там она
 # съела бы память бота). Конвертации нужно ~8 ГБ памяти и несколько минут. Шаг не валит сборку
 # (|| echo): не получилось — бот работает на torch. Отключить шаг: аргумент сборки BUILD_ONNX_RERANKER=0.
+# Версии optimum/optimum-onnx закреплены вместе с transformers (та же версия, что в requirements.txt): без этого pip перебирал версии и сборка висела (23.10.2026).
+# optimum-onnx 0.1.0 требует optimum~=2.1.0 и transformers<4.58; при смене версий проверяйте эти границы на pypi.org.
 # Пресет avx2 работает на любом x86; с avx512_vnni (проверка: lscpu | grep avx512_vnni) быстрее.
 # Вручную в консоли работающего бота: python scripts/export_reranker_onnx.py (до следующего деплоя).
 ARG BUILD_ONNX_RERANKER=1
 ARG ONNX_PRESET=avx2
 COPY scripts/export_reranker_onnx.py /tmp/export_reranker_onnx.py
 RUN if [ "$BUILD_ONNX_RERANKER" = "1" ]; then \
-        pip install --retries 10 --timeout 60 "optimum[onnxruntime]" && \
+        timeout 600 pip install --retries 10 --timeout 60 "transformers==4.57.6" "optimum==2.1.0" "optimum-onnx[onnxruntime]==0.1.0" && \
         python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" || echo "ONNX-реранкер не собран, бот будет на torch"; \
         python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" --per-channel --out /opt/models/reranker-onnx-int8-pc \
             || echo "Вариант -pc (per-channel) не собран"; \

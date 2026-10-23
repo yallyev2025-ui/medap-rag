@@ -1,5 +1,9 @@
 aiogram==3.28.2
 sentence-transformers==5.5.1
+# transformers закреплён на 4.x (23.10.2026): без пина pip ставит 5.x, а ONNX-конвертации (optimum-onnx) нужна transformers<4.58 —
+# при сборке образа pip уходил в многоминутный перебор версий и деплой на Timeweb не собирался. Обновляя sentence-transformers,
+# проверяйте, что версия transformers по-прежнему подходит optimum-onnx (см. Dockerfile, шаг ONNX-реранкера).
+transformers==4.57.6
 torch==2.12.0
 # Реранкер в int8 (RERANKER_BACKEND=onnx, rag/reranker.py); сама конвертация — optimum, ставится только при сборке
 onnxruntime==1.30.0
