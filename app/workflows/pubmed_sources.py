@@ -238,6 +238,32 @@ async def candidates(query: str, limit: int = 10, offset: int = 0) -> tuple[str,
     return english, source, out
 
 
+async def _europepmc_pmid(query: str, same: tuple[str, str]) -> str | None:
+    """PMID по запросу Europe PMC; `same` — (поле ответа, ожидаемое значение): чужую статью с похожим идентификатором не берём."""
+    try:
+        response = await _get_url(f"{_EUROPEPMC_REST}/search", {"query": query, "format": "json", "resultType": "lite", "pageSize": "3"}, 15.0)
+        results = (response.json().get("resultList") or {}).get("result") or []
+    except (httpx.HTTPError, ValueError) as exc:
+        raise _SourcesUnavailable("", _reason(exc)) from exc
+    for r in results:
+        pmid = str(r.get("pmid") or "").strip()
+        if _PMID.match(pmid) and str(r.get(same[0]) or "").lower() == same[1].lower():
+            return pmid
+    return None
+
+
+async def resolve_doi(doi: str) -> str | None:
+    """PMID статьи по её DOI (ссылки из ТЗ презентации): Europe PMC ищет по DOI и отдаёт PMID, если статья есть в PubMed. Нет статьи — `None`."""
+    return await _europepmc_pmid(f'DOI:"{doi}"', ("doi", doi))
+
+
+async def resolve_pmcid(pmcid: str) -> str | None:
+    """PMID статьи по номеру PMC (ссылка на pmc.ncbi.nlm.nih.gov или europepmc.org)."""
+    if not _PMCID.match(pmcid):
+        return None
+    return await _europepmc_pmid(f"PMCID:{pmcid}", ("pmcid", pmcid))
+
+
 async def fulltext(pmids: list[str]) -> list[ArticleText]:
     """Текст выбранных статей (до четырёх): полный, если открыт, иначе аннотация. Статья, которой нет, получает level=none."""
     ids = valid_pmids(pmids)[:MAX_FULLTEXT_ARTICLES]

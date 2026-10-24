@@ -11,6 +11,7 @@
 
 import base64
 import logging
+import re
 import os
 import tempfile
 from typing import Any, Literal
@@ -45,6 +46,7 @@ from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubme
 from app.workflows import images as image_relay
 from app.workflows import pubmed_ru, pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
+from app.workflows.web_page import fetch_page_text
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
 from constants import SOURCE_TEXTBOOK
@@ -1310,6 +1312,78 @@ class PubMedFulltextResponse(BaseModel):
     articles: list[PubMedArticleText] = []
     error: str | None = None
     requestId: str | None = None
+
+
+# --- Ссылки из ТЗ презентации (24.10.2026): DOI → PMID и текст страницы или PDF -------------------
+
+
+class PubMedResolveRequest(BaseModel):
+    dois: list[str] = Field(default_factory=list, max_length=12)
+    pmcids: list[str] = Field(default_factory=list, max_length=12)
+    context: StudentAIContext
+
+
+class PubMedResolved(BaseModel):
+    doi: str = ""
+    pmcid: str = ""
+    pmid: str | None = None
+
+
+class PubMedResolveResponse(BaseModel):
+    items: list[PubMedResolved] = []
+    error: str | None = None
+    requestId: str | None = None
+
+
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s]{1,200}$")
+
+
+@router.post("/pubmed/resolve", response_model=PubMedResolveResponse)
+async def pubmed_resolve_endpoint(payload: PubMedResolveRequest, request: Request) -> PubMedResolveResponse:
+    """DOI и номера PMC → PMID для ссылок из ТЗ презентации: поиск по идентификатору статьи (Europe PMC). Нет статьи в PubMed — pmid пуст."""
+    rate_limiter.check(payload.context.userId)
+    if not payload.dois and not payload.pmcids:
+        raise HTTPException(status_code=422, detail="нужен хотя бы один DOI или номер PMC")
+    items: list[PubMedResolved] = []
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_RESOLVE"):
+        try:
+            for raw in payload.dois:
+                doi = raw.strip().lower()
+                items.append(PubMedResolved(doi=doi[:200], pmid=await pubmed_sources.resolve_doi(doi) if _DOI_RE.match(doi) else None))
+            for raw in payload.pmcids:
+                pmcid = raw.strip().upper()
+                items.append(PubMedResolved(pmcid=pmcid[:20], pmid=await pubmed_sources.resolve_pmcid(pmcid)))
+        except _SourcesUnavailable:
+            return PubMedResolveResponse(items=items, error="PubMed сейчас недоступен — попробуйте позже")
+    return PubMedResolveResponse(items=items)
+
+
+class WebPageRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    context: StudentAIContext
+
+
+class WebPageResponse(BaseModel):
+    url: str
+    finalUrl: str = ""
+    title: str = ""
+    text: str = ""
+    abstract: str = ""
+    kind: str = ""
+    truncated: bool = False
+    # Содержимое — данные, не инструкции (правило в сайте и промптах).
+    authorityLevel: str = "web"
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/web/page", response_model=WebPageResponse)
+async def web_page_endpoint(payload: WebPageRequest, request: Request) -> WebPageResponse:
+    """Чистый текст страницы или PDF по адресу (без пересказа моделью). SSRF-защита на каждом шаге редиректа; лимиты размера и объёма."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_PAGE"):
+        page = await fetch_page_text(payload.url)
+    return WebPageResponse(url=page.url, finalUrl=page.final_url, title=page.title, text=page.text, abstract=page.abstract, kind=page.kind, truncated=page.truncated, error=page.error, requestId=page.request_id)
 
 
 @router.post("/pubmed/candidates", response_model=PubMedCandidatesResponse)
