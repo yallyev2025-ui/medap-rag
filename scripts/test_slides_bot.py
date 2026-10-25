@@ -143,6 +143,20 @@ class FakeSite:
             return {"ok": False, "error": "Сначала войдите", "needLogin": True}
         if action == "open_link":
             return {"ok": True, "url": f"https://site.test/t/ONETIME-{p.get('runId', '')}"}
+        if action == "packs":
+            return {"ok": True, "packs": getattr(self, "packs", []), "gifts": getattr(self, "gifts", [])}
+        if action == "gift_create":
+            if not getattr(self, "packs", []):
+                return {"ok": False, "error": "В этом пакете презентаций не осталось"}
+            self.gifts = [{"id": "gift-0000000001", "code": "CODE" + "x" * 20, "label": "до 10 слайдов", "until": "2026-11-08"}]
+            return {"ok": True, "gift": self.gifts[0]}
+        if action == "gift_cancel":
+            self.gifts = []
+            return {"ok": True}
+        if action == "gift_peek":
+            return {"ok": True, "gift": getattr(self, "peek", {"state": "open", "label": "до 10 слайдов", "days": 30, "mine": False})}
+        if action == "gift_claim":
+            return {"ok": True, "label": "до 10 слайдов", "already": False}
         if action == "me":
             return {"ok": True, "balance": self.balance, "freeAvailable": True, "team": False, "owner": telegram_id == 999}
         if action == "options":
@@ -843,12 +857,89 @@ def runner_checks() -> None:
     ok(runner.config_problems(SimpleNamespace(SLIDES_BOT_USERNAME="@Real_Bot"), site_configured=True, username="real_bot") == [], "@ и регистр в имени не мешают")
 
 
+async def gift_checks() -> None:
+    """Подарок презентации через Telegram: ссылка-подарок для друга (с входом по пути), подарить из пакета, отменить."""
+    fs = FakeSite()
+    slides_site.site = fs
+    settings.SLIDES_SITE_URL = "https://site.test"
+    settings.SLIDES_BOT_USERNAME = "MedapSlideBot"
+    storage = MemoryStorage()
+
+    def ctx(tg: int = 222) -> FSMContext:
+        return FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=tg, user_id=tg))
+
+    bot = fake_bot()
+    code = "CODE" + "x" * 20
+
+    # друг открыл ссылку, а в боте ещё не входил: сначала почта и код, потом подарок предлагается сам
+    m = FakeMessage(tg=222, text=f"/start gift_{code}")
+    await H.cmd_start(m, SimpleNamespace(args=f"gift_{code}"), ctx(222), bot)
+    ok("почту" in texts_of(m), "по ссылке-подарку новичок сначала вводит почту")
+    ok((await ctx(222).get_data()).get("pending_gift") == code, "код подарка запомнен до конца входа")
+    m = FakeMessage(tg=222, text="friend@test.local")
+    await H.got_email(m, ctx(222))
+    call = FakeCall("c:ok", tg=222)
+    await H.cb_consent_ok(call, ctx(222))
+    m = FakeMessage(tg=222, text="123456")
+    await H.got_code(m, ctx(222))
+    offered = texts_of(m)
+    ok("Вам подарили презентацию до 10 слайдов" in offered, "после входа бот сам показывает подарок")
+    cbs = [b.callback_data for row in m.sent[-1][1].inline_keyboard for b in row if b.callback_data]
+    ok(f"g:ok:{code}" in cbs, "у подарка есть кнопка «Принять»")
+    ok(any(c[0] == "gift_peek" and c[2].get("code") == code for c in fs.calls), "подарок смотрели на сайте по коду")
+
+    # принять
+    call = FakeCall(f"g:ok:{code}", tg=222)
+    await H.cb_gift_claim(call)
+    ok("Подарок принят" in texts_of(call.message) and "до 10 слайдов" in texts_of(call.message), "после «Принять» сказано, что подарок у человека")
+    ok(any(c[0] == "gift_claim" and c[2].get("code") == code for c in fs.calls), "принятие ушло на сайт с кодом")
+
+    # свой подарок по своей ссылке: принять нельзя
+    fs.peek = {"state": "open", "label": "до 10 слайдов", "days": 30, "mine": True}
+    m = FakeMessage(tg=222, text=f"/start gift_{code}")
+    await H.cmd_start(m, SimpleNamespace(args=f"gift_{code}"), ctx(222), bot)
+    ok("Это ваш подарок" in texts_of(m), "свой подарок принять нельзя, бот объясняет")
+    fs.peek = {"state": "claimed", "byMe": False}
+    m = FakeMessage(tg=222, text=f"/start gift_{code}")
+    await H.cmd_start(m, SimpleNamespace(args=f"gift_{code}"), ctx(222), bot)
+    ok("уже принял другой человек" in texts_of(m), "чужой принятый подарок: честный отказ")
+    fs.peek = {"state": "gone"}
+    m = FakeMessage(tg=222, text=f"/start gift_{code}")
+    await H.cmd_start(m, SimpleNamespace(args=f"gift_{code}"), ctx(222), bot)
+    ok("больше недоступен" in texts_of(m), "просроченный подарок: честный отказ")
+
+    # даритель: без пакетов — объяснение и ссылка на тарифы, с пакетом — подарить и отправить другу
+    call = FakeCall("m:gift", tg=222)
+    await H.cb_gift_menu(call, ctx(222))
+    ok("Подарить можно презентацию из пакета" in texts_of(call.message), "без пакетов бот объясняет, как получить, что дарить")
+    fs.packs = [{"id": "pack-0000000001", "label": "до 10 слайдов", "left": 2, "total": 3, "until": None}]
+    call = FakeCall("m:gift", tg=222)
+    await H.cb_gift_menu(call, ctx(222))
+    cbs = [b.callback_data for row in call.message.sent[-1][1].inline_keyboard for b in row if b.callback_data]
+    ok("g:mk:pack-0000000001" in cbs, "в меню подарка есть кнопка на пакет с остатком")
+    call = FakeCall("g:mk:pack-0000000001", tg=222)
+    await H.cb_gift_make(call, bot)
+    made = texts_of(call.message)
+    ok(f"https://t.me/MedapSlideBot?start=gift_{code}" in made, "подарок — ссылка на бота с кодом")
+    urls = [b.url for row in call.message.sent[-1][1].inline_keyboard for b in row if b.url]
+    ok(len(urls) == 1 and urls[0].startswith("https://t.me/share/url?url=") and "gift_" in urls[0], "кнопка «Отправить другу» открывает выбор получателя в Telegram")
+    ok(any(c[0] == "gift_create" and c[2].get("packId") == "pack-0000000001" for c in fs.calls), "подарок создан из выбранного пакета")
+    call = FakeCall("g:cx:gift-0000000001", tg=222)
+    await H.cb_gift_cancel(call)
+    ok("презентация вернулась" in texts_of(call.message), "отмена подарка сообщает, что презентация вернулась в пакет")
+
+    # меню содержит кнопку подарка
+    cbs = [b.callback_data for row in T.main_menu().inline_keyboard for b in row if b.callback_data]
+    ok("m:gift" in cbs, "в главном меню есть «Подарить презентацию»")
+
+
 async def main() -> None:
     text_checks()
     version_checks()
     runner_checks()
     await client_checks()
     await flow_checks()
+    await gift_checks()
     print(f"OK: {checks} проверок")
 
 

@@ -13,6 +13,7 @@ import os
 import re
 import time
 from typing import Any
+from urllib.parse import quote
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -111,13 +112,16 @@ async def _menu(target: Message, tg_id: int, text: str = "Что дальше?")
     await target.answer(text, reply_markup=T.main_menu(await _owner_confirmed(tg_id)))
 
 
-async def _ensure_login(message: Message, state: FSMContext, tg_id: int) -> dict[str, Any] | None:
-    """Профиль вошедшего или запрос почты. Возвращает None, если человека нужно сначала впустить."""
+async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending_gift: str = "") -> dict[str, Any] | None:
+    """Профиль вошедшего или запрос почты. Возвращает None, если человека нужно сначала впустить.
+    `pending_gift` — код подарка из ссылки: после входа бот сам предложит его принять."""
     me = await site().call("me", tg_id)
     if me.get("ok"):
         return me
     if me.get("needLogin"):
         await state.set_state(Login.email)
+        if pending_gift:
+            await state.update_data(pending_gift=pending_gift)
         await message.answer(T.WELCOME)
         await message.answer(T.ASK_EMAIL)
         return None
@@ -131,10 +135,14 @@ async def _ensure_login(message: Message, state: FSMContext, tg_id: int) -> dict
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext, bot: Bot) -> None:
     await state.clear()
     tg = message.from_user.id
-    me = await _ensure_login(message, state, tg)
+    arg = (command.args or "").strip()
+    gift_code = arg[5:] if arg.startswith("gift_") else ""
+    me = await _ensure_login(message, state, tg, pending_gift=gift_code)
     if me is None:
         return
-    arg = (command.args or "").strip()
+    if gift_code:
+        await _offer_gift(message, tg, gift_code)
+        return
     if arg.startswith("paid_"):
         await _after_payment(message, state, bot, tg, arg[5:])
         return
@@ -200,8 +208,12 @@ async def got_code(message: Message, state: FSMContext) -> None:
     if not r.get("ok"):
         await message.answer(str(r.get("error") or "Код не подошёл") + "\nПришлите код ещё раз или нажмите /start, чтобы ввести другую почту.")
         return
+    pending_gift = str(data.get("pending_gift") or "")
     await state.clear()
     await message.answer(T.LOGGED_IN)
+    if pending_gift:
+        await _offer_gift(message, message.from_user.id, pending_gift)
+        return
     await _menu(message, message.from_user.id)
 
 
@@ -1363,3 +1375,86 @@ async def notify_owners(bot: Bot, text: str) -> None:
             await bot.send_message(admin_id, text)
         except Exception:
             logger.warning("Не удалось сообщить владельцу %s", admin_id, exc_info=True)
+
+
+# ---------- подарок презентации из пакета ----------
+
+async def _bot_username(bot: Bot) -> str:
+    name = settings.SLIDES_BOT_USERNAME.lstrip("@")
+    if name:
+        return name
+    return (await bot.get_me()).username or ""
+
+
+@router.callback_query(F.data == "m:gift")
+async def cb_gift_menu(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    me = await _ensure_login(call.message, state, call.from_user.id)
+    if me is None:
+        return
+    r = await site().call("packs", call.from_user.id)
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or T.NO_SITE))
+        return
+    packs, gifts = r.get("packs") or [], r.get("gifts") or []
+    if not packs and not gifts:
+        url, _once = await _site_link(call.from_user.id, path="/slides/tariffs")
+        await call.message.answer(T.GIFT_NO_PACKS, reply_markup=T.kb([[("⬅ В меню", "m:home")]], [[("🏷 Тарифы на сайте", url)]] if url else None))
+        return
+    text = T.GIFT_PICK if packs else "Пока нечего дарить: в пакетах не осталось презентаций."
+    if gifts:
+        text += "\n\nНе открыты друзьями: " + ", ".join(str(g["label"]) for g in gifts) + ". Их можно отменить — презентация вернётся в пакет."
+    await call.message.answer(text, reply_markup=T.gift_pick_kb(packs, gifts))
+
+
+@router.callback_query(F.data.startswith("g:mk:"))
+async def cb_gift_make(call: CallbackQuery, bot: Bot) -> None:
+    await call.answer()
+    r = await site().call("gift_create", call.from_user.id, packId=call.data[5:])
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось создать подарок"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+        return
+    gift = r["gift"]
+    username = await _bot_username(bot)
+    link = f"https://t.me/{username}?start=gift_{gift['code']}" if username else f"{settings.SLIDES_SITE_URL.rstrip('/')}/slides/gift/{gift['code']}"
+    share = "https://t.me/share/url?url=" + quote(link, safe="") + "&text=" + quote(T.GIFT_SHARE_TEXT.format(label=gift["label"]), safe="")
+    await call.message.answer(T.GIFT_MADE.format(label=gift["label"], link=link), reply_markup=T.gift_made_kb(share, str(gift["id"])))
+
+
+@router.callback_query(F.data.startswith("g:cx:"))
+async def cb_gift_cancel(call: CallbackQuery) -> None:
+    await call.answer()
+    r = await site().call("gift_cancel", call.from_user.id, giftId=call.data[5:])
+    if r.get("ok"):
+        await call.message.answer("Подарок отменён, презентация вернулась в ваш пакет.", reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+    else:
+        await call.message.answer(str(r.get("error") or "Не получилось отменить подарок"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+
+
+async def _offer_gift(message: Message, tg: int, code: str) -> None:
+    """Человек открыл ссылку-подарок: показываем, что ему дарят, и кнопку «Принять»."""
+    r = await site().call("gift_peek", tg, code=code)
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or T.NO_SITE))
+        return
+    g = r.get("gift") or {}
+    state_name = g.get("state")
+    if state_name == "open" and g.get("mine"):
+        await _menu(message, tg, T.GIFT_MINE)
+    elif state_name == "open":
+        await message.answer(T.GIFT_OPEN.format(label=g.get("label", "")), reply_markup=T.kb([[("🎁 Принять подарок", f"g:ok:{code}")], [("⬅ В меню", "m:home")]]))
+    elif state_name == "claimed":
+        await _menu(message, tg, T.GIFT_TAKEN_ME if g.get("byMe") else T.GIFT_TAKEN_OTHER)
+    else:
+        await _menu(message, tg, T.GIFT_GONE)
+
+
+@router.callback_query(F.data.startswith("g:ok:"))
+async def cb_gift_claim(call: CallbackQuery) -> None:
+    await call.answer()
+    r = await site().call("gift_claim", call.from_user.id, code=call.data[5:])
+    if not r.get("ok"):
+        await _menu(call.message, call.from_user.id, str(r.get("error") or "Не получилось принять подарок"))
+        return
+    text = T.GIFT_DONE_AGAIN if r.get("already") else T.GIFT_DONE.format(label=r.get("label", ""))
+    await _menu(call.message, call.from_user.id, text)

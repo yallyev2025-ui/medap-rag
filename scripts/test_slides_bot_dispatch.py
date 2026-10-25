@@ -105,6 +105,10 @@ class FlowSite:
             return {"ok": True, "url": "https://site.test/t/ONCE"}
         if action == "version":
             return {"ok": False, "error": "Неизвестное действие"}
+        if action == "gift_peek":
+            return {"ok": True, "gift": {"state": "open", "label": "до 10 слайдов", "days": 30, "mine": False}}
+        if action == "gift_claim":
+            return {"ok": True, "label": "до 10 слайдов", "already": False}
         return {"ok": True, "base64": "UE5H"}
 
 
@@ -226,7 +230,33 @@ class FlowSite:
             return {"ok": True, "url": "https://site.test/t/ONCE"}
         if action == "version":
             return {"ok": False, "error": "Неизвестное действие"}
+        if action == "gift_peek":
+            return {"ok": True, "gift": {"state": "open", "label": "до 10 слайдов", "days": 30, "mine": False}}
+        if action == "gift_claim":
+            return {"ok": True, "label": "до 10 слайдов", "already": False}
         return {"ok": True, "base64": "UE5H"}
+
+
+async def gift_flow(dp) -> None:
+    """Подарок через НАСТОЯЩИЙ диспетчер: /start gift_КОД → «Вам подарили» с кнопкой → «Принять» → подарок принят."""
+    site = FlowSite()
+    slides_site.site = site
+    session = FakeSession()
+    bot = Bot(token="123456:TEST", session=session)
+    uid = 321
+    await dp.feed_update(bot, update(uid, "/start gift_ABCDEFGHIJKLMNOPQRSTUVWX", 700))
+    sent = [m for m in session.sent if isinstance(m, SendMessage)]
+    ok(any("Вам подарили презентацию до 10 слайдов" in (m.text or "") for m in sent), f"по ссылке-подарку бот показал подарок: {[m.text for m in sent]}")
+    markup = next(m.reply_markup for m in sent if "Вам подарили" in (m.text or ""))
+    ok("g:ok:ABCDEFGHIJKLMNOPQRSTUVWX" in [b.callback_data for row in markup.inline_keyboard for b in row], "у подарка есть кнопка «Принять»")
+    before = len(session.sent)
+    await dp.feed_update(bot, cbq(uid, "g:ok:ABCDEFGHIJKLMNOPQRSTUVWX", 701))
+    after = [m for m in session.sent[before:] if isinstance(m, SendMessage)]
+    ok(any("Подарок принят" in (m.text or "") for m in after), "нажатие «Принять» дошло до обработчика и подарок принят")
+    ok(any(c[0] == "gift_claim" for c in site.calls), "принятие ушло на сайт")
+    before = len(session.sent)
+    await dp.feed_update(bot, cbq(uid, "m:gift", 702))
+    ok(len(session.sent) > before, "кнопка «Подарить презентацию» из меню обработана")
 
 
 async def main() -> None:
@@ -268,6 +298,7 @@ async def main() -> None:
     ok(len(session3.sent) > before, "кнопка меню обработана (бот что-то ответил)")
     await full_flow(dp)
     await full_flow(dp)
+    await gift_flow(dp)
     print(f"OK: {checks} проверок")
 
 
