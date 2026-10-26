@@ -22,6 +22,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.integrations import slides_site
+from bot.waiting_content import next_item
 from config import settings
 from slides_bot import texts as T
 from slides_bot import version as V
@@ -930,8 +931,8 @@ async def _create(message: Message, state: FSMContext, bot: Bot, tg: int) -> Non
     await state.clear()
     r = await site().call("create", tg, **_create_payload(data))
     if r.get("ok"):
-        await message.answer(T.WORKING)
-        _watch(bot, message.chat.id, tg, str(r["runId"]))
+        status = await message.answer(T.WORKING)
+        _watch(bot, message.chat.id, tg, str(r["runId"]), status=status, medical=bool(o.get("medical")))
         return
     if r.get("payUrl"):
         need = T.money(int(r.get("shortfallKopecks", 0)))
@@ -946,8 +947,8 @@ async def _create(message: Message, state: FSMContext, bot: Bot, tg: int) -> Non
 async def _after_payment(message: Message, state: FSMContext, bot: Bot, tg: int, intent_id: str) -> None:
     r = await site().call("resume", tg, intentId=intent_id)
     if r.get("ok"):
-        await message.answer("Оплата получена. " + T.WORKING)
-        _watch(bot, message.chat.id, tg, str(r["runId"]))
+        status = await message.answer("Оплата получена. " + T.WORKING)
+        _watch(bot, message.chat.id, tg, str(r["runId"]), status=status, medical=bool(r.get("medical")))
     elif r.get("waiting"):
         await message.answer("Оплата ещё не дошла — это обычно занимает до минуты. Нажмите «Проверить оплату».", reply_markup=T.kb([[("🔄 Проверить оплату", f"p:{intent_id}")]]))
     else:
@@ -966,15 +967,27 @@ async def cb_check_pay(call: CallbackQuery, state: FSMContext, bot: Bot) -> None
 _tasks: set[asyncio.Task] = set()
 
 
-def _watch(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
-    t = asyncio.create_task(_poll(bot, chat_id, tg, run_id))
+def _watch(bot: Bot, chat_id: int, tg: int, run_id: str, status: Message | None = None, medical: bool = False) -> None:
+    t = asyncio.create_task(_poll(bot, chat_id, tg, run_id, status, medical))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
 
 
-async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
+async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str, status: Message | None = None, medical: bool = False) -> None:
+    # пока пишется черновик, «Пишу презентацию…» меняется на лайфхаки, факты и истории по частям, без повторов (владелец 26.10.2026)
+    pools = ("general", "medicine") if medical else ("general",)
+    elapsed = 0.0
+    next_at = POLL_SECONDS
     for _ in range(POLL_LIMIT):
         await asyncio.sleep(POLL_SECONDS)
+        elapsed += POLL_SECONDS
+        if status is not None and elapsed >= next_at:
+            shown = next_item(f"slides:{tg}", pools)
+            try:
+                await bot.edit_message_text(shown.text, chat_id=chat_id, message_id=status.message_id)
+            except Exception:
+                logger.debug("Статус ожидания не обновился", exc_info=True)
+            next_at = elapsed + shown.seconds
         r = await site().call("status", tg, runId=run_id)
         if not r.get("ok"):
             if r.get("network"):
@@ -982,9 +995,19 @@ async def _poll(bot: Bot, chat_id: int, tg: int, run_id: str) -> None:
             await bot.send_message(chat_id, str(r.get("error") or "Не получилось узнать состояние"))
             return
         if r.get("phase") == "failed":
+            if status is not None:
+                try:
+                    await bot.delete_message(chat_id, status.message_id)
+                except Exception:
+                    pass
             await bot.send_message(chat_id, "Презентация не получилась" + (f": {r['error']}" if r.get("error") else "") + ".\nЕсли вы платили, деньги вернулись на баланс.", reply_markup=T.main_menu(await _owner_confirmed(tg)))
             return
         if r.get("phase") in ("draft", "approved"):
+            if status is not None:
+                try:
+                    await bot.delete_message(chat_id, status.message_id)
+                except Exception:
+                    pass
             await _send_draft(bot, chat_id, tg, run_id, preview=1)
             _watch_auto_photos(bot, chat_id, tg, run_id)
             return

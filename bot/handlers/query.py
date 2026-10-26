@@ -236,7 +236,7 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             )
 
         # Пока идёт генерация — бесплатные «думаю»-фразы в статус-сообщении (без LLM).
-        rotator = asyncio.create_task(rotate_status(lambda text: _set_status(status, text)))
+        rotator = asyncio.create_task(rotate_status(lambda text: _set_status(status, text), user_key=db_user.id))
         # Весь конвейер (роутинг интента, переписывание запроса, поиск, генерация)
         # живёт в общем workflow — том же, что обслуживает образовательный сайт
         # через /v1. Здесь остаётся только телеграмный UI.
