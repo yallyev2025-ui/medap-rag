@@ -1122,7 +1122,12 @@ async def _poll_auto_photos(bot: Bot, chat_id: int, tg: int, run_id: str) -> Non
             continue
         if r.get("state") == "none":
             return
-        await _send_suggestions(bot, chat_id, tg, run_id)
+        if await _send_suggestions(bot, chat_id, tg, run_id) == 0:
+            # картинок нет: говорим человеку причину (например, у бота не задан ключ рисования), а не молчим
+            if r.get("error"):
+                await bot.send_message(chat_id, f"Не получилось нарисовать картинки: {str(r['error'])[:300]}")
+            elif r.get("notes"):
+                await bot.send_message(chat_id, T.photo_notes_text(list(r["notes"]), 0))
         return
 
 

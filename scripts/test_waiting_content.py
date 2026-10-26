@@ -73,7 +73,9 @@ def main() -> None:
 
     # разные люди — разная память
     W.reset_for_tests()
+    random.seed(11)  # с какого вида начинается у нового человека — случайно; для проверки фиксируем
     a1 = W.next_item("a", ("general",), random.Random(5)).text
+    random.seed(11)
     b1 = W.next_item("b", ("general",), random.Random(5)).text
     ok(a1 == b1, "новому человеку показывается своё начало, не зависящее от других")
     a2 = W.next_item("a", ("general",), random.Random(5)).text
