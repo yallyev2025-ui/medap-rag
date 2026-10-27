@@ -118,7 +118,7 @@ def test_endpoint() -> None:
     assert client.post("/v1/images/generate", json=body).status_code == 401
     assert client.post("/v1/images/generate", json={**body, "aspect": "huge"}, headers=HEAD).status_code == 422
     assert client.post("/v1/images/generate", json={**body, "prompt": "коротко"}, headers=HEAD).status_code == 422
-    assert client.post("/v1/images/generate", json={**body, "prompt": "x" * 901}, headers=HEAD).status_code == 422
+    assert client.post("/v1/images/generate", json={**body, "prompt": "x" * 2001}, headers=HEAD).status_code == 422
 
     # потолок заказов на человека в час (3): третья проходит, четвёртая отклонена словами, а не 5xx
     im._recent.clear()
@@ -146,8 +146,39 @@ def test_endpoint() -> None:
     settings.IMAGE_API_KEY = "k" * 20
 
 
+async def test_gpt_model() -> None:
+    """Модель GPT Image (27.10.2026): свои параметры запроса, размеры из закреплённого списка, цена по качеству и размеру; Flux по умолчанию не тронут"""
+    settings.IMAGE_MODEL = "fal-ai/gpt-image-1.5"
+    settings.IMAGE_QUALITY = "low"
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert str(request.url).endswith("/fal-ai/gpt-image-1.5"), request.url
+            seen.append(__import__("json").loads(request.content))
+            return httpx.Response(200, json={"images": [{"url": "https://v3.fal.media/files/a/b.jpg", "content_type": "image/jpeg"}]})
+        return httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"})
+
+    data, mime, w, h = await im._fal("A ceramic mug with a curved handle, front view, plain pale background", 1344, 768, httpx.MockTransport(handler))
+    body = seen[-1]
+    assert body["image_size"] == "1536x1024" and body["quality"] == "low" and body["num_images"] == 1 and "num_inference_steps" not in body, body
+    assert (w, h) == (1344, 768), "размеры из ответа нет — берутся запрошенные"
+    await im._fal("A mug", 1024, 1024, httpx.MockTransport(handler))
+    assert seen[-1]["image_size"] == "1024x1024"
+    await im._fal("A mug", 768, 1344, httpx.MockTransport(handler))
+    assert seen[-1]["image_size"] == "1024x1536"
+    assert im.price_usd(1024, 1024) == 0.009 and im.price_usd(1344, 768) == 0.013, "low: квадрат 0,009, остальные 0,013"
+    settings.IMAGE_QUALITY = "high"
+    assert im.price_usd(1024, 1024) == 0.133
+    settings.IMAGE_QUALITY = "ultra"
+    assert im._quality() == "low", "неизвестное качество — дешёвое, а не ошибка"
+    settings.IMAGE_MODEL = "fal-ai/flux/schnell"
+    assert im.price_usd(1344, 768) == 0.004, "Flux Schnell — цена из настройки"
+
+
 def main() -> None:
     asyncio.run(test_adapter())
+    asyncio.run(test_gpt_model())
     test_endpoint()
     print("ok: посредник картинок — токен, размеры, потолки, запреты в описании, ответ fal.ai, чужой адрес, расход и ошибки")
 
