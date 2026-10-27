@@ -18,7 +18,7 @@ from typing import Iterable
 _PATH = Path(__file__).resolve().parent.parent / "data" / "waiting_content.json"
 _MAX_USERS = 20000
 # чередование видов: лайфхак → история → факт → лайфхак …
-_ORDER = ("lifehack", "story", "fact")
+_ORDER = ("story", "lifehack", "story", "lifehack", "story", "fact")
 _EMOJI = {"lifehack": "💡 Лайфхак: ", "fact": "🧠 Знаете ли вы? "}
 
 
@@ -60,8 +60,8 @@ def load_items() -> list[Item]:
 
 
 def reading_seconds(text: str) -> float:
-    """Сколько секунд нужно на чтение: около 15 знаков в секунду, но не меньше 6 и не больше 28"""
-    return max(6.0, min(28.0, len(text) / 15 + 2))
+    """Сколько секунд нужно на чтение: около 9 знаков в секунду и запас, не меньше 18 и не больше 75 (владелец 27.10.2026: не чаще, чем нужно прочитать)"""
+    return max(18.0, min(75.0, len(text) / 9 + 8))
 
 
 def _user(key: str) -> _User:
@@ -108,6 +108,9 @@ def next_item(user_key: str, pools: Iterable[str] = ("general",), rng: random.Ra
     for _ in range(len(_ORDER)):
         kind = _ORDER[u.step % len(_ORDER)]
         u.step += 1
+        # пока недочитана одна история, другая не начинается (иначе части перепутаются)
+        if kind == "story" and u.cursor:
+            continue
         pool = [i for i in items if i.kind == kind]
         if not pool:
             continue

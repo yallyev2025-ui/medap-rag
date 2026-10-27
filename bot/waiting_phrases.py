@@ -36,7 +36,7 @@ PHRASES = [
 
 async def rotate_status(
     set_status: Callable[[str], Awaitable[None]],
-    interval: float = 5.5,
+    interval: float = 12.0,
     user_key: str | int | None = None,
     pools: Iterable[str] = ("general", "medicine"),
 ) -> None:
@@ -50,7 +50,7 @@ async def rotate_status(
     n = 0
     await asyncio.sleep(interval)
     while True:
-        if n % 4 == 0:
+        if n % 6 == 0:
             await set_status(next_line(key, PHRASES))
             await asyncio.sleep(interval)
         else:

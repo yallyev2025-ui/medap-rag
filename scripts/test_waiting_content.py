@@ -38,7 +38,7 @@ def main() -> None:
     ok(all(len(i.parts) >= 3 for i in items if i.kind == "story"), "у историй не меньше трёх частей")
     ok(all(len(i.parts) == 1 and len(i.parts[0]) <= 320 for i in items if i.kind != "story"), "лайфхаки и факты короткие")
     ok(sum(1 for i in items if i.kind == "story" and i.pool == "medicine") >= 10 and sum(1 for i in items if i.kind == "story" and i.pool == "general") >= 10, "не меньше десяти историй каждого набора")
-    ok(all(3 <= W.reading_seconds(p) <= 28 for i in items for p in i.parts) and W.reading_seconds("x") == 6.0, "время чтения в пределах 6–28 секунд")
+    ok(all(18 <= W.reading_seconds(p) <= 75 for i in items for p in i.parts) and W.reading_seconds("x") == 18.0, "время чтения в пределах 18–75 секунд")
 
     # без повторов: пока не показано всё, ничего не повторяется (кроме частей одной истории подряд, они разные)
     W.reset_for_tests()
