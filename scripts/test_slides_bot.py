@@ -316,7 +316,7 @@ async def flow_checks() -> None:
     ok("Шаг 1 из 7" in texts_of(call.message) and "С чего начинаем" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — первый вопрос мастера, а не меню и не просьба войти: {texts_of(call.message)}")
     ok(await ctx().get_state() == H.Create.setup.state, "ждём выбора")
     labels1 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
-    ok(any("Только тема" in x for x in labels1) and any("свой план" in x for x in labels1) and any("Готовый текст" in x for x in labels1) and any("Отмена" in x for x in labels1) and not any("Назад" in x for x in labels1), f"первый вопрос: три варианта и «Отмена», «Назад» нет: {labels1}")
+    ok(any("Только тема" in x for x in labels1) and any("свой план" in x for x in labels1) and any("Свой текст" in x for x in labels1) and any("Отмена" in x for x in labels1) and not any("Назад" in x for x in labels1), f"первый вопрос: три варианта и «Отмена», «Назад» нет: {labels1}")
 
     # мастер идёт по одному вопросу; «Назад» возвращает; текстовые вопросы ждут текст
     call = FakeCall("o:m:topic")
