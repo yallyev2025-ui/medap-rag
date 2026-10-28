@@ -26,6 +26,9 @@ try:
     from pdf2image import convert_from_path
 
     _OCR_AVAILABLE = True
+    _one_thread = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "tesseract_1t.sh")
+    if os.access(_one_thread, os.X_OK):
+        pytesseract.pytesseract.tesseract_cmd = _one_thread
 except ImportError:
     _OCR_AVAILABLE = False
 

@@ -1,5 +1,6 @@
 """Эмбеддинги через sentence-transformers (multilingual-e5-large)."""
 
+from contextlib import contextmanager
 from functools import lru_cache
 
 import torch
@@ -16,6 +17,17 @@ def _get_model() -> SentenceTransformer:
     # надёжная точка контроля; выполнится ровно один раз (lru_cache).
     torch.set_num_threads(settings.CPU_THREAD_LIMIT)
     return SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
+
+
+@contextmanager
+def limited_threads(n: int):
+    """На время загрузки источника эмбеддер берёт не больше n ядер; после — прежнее число (ответы людям не должны ждать загрузку)"""
+    prev = torch.get_num_threads()
+    torch.set_num_threads(max(1, n))
+    try:
+        yield
+    finally:
+        torch.set_num_threads(prev)
 
 
 def embed_passages(texts: list[str]) -> list[list[float]]:

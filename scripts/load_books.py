@@ -14,7 +14,8 @@ from app.storage import s3
 from constants import DEFAULT_AUTHORITY_LEVEL, DEFAULT_VERIFICATION_STATUS, SOURCE_TEXTBOOK
 from db.models import Book, BookChunk
 from db.session import async_session
-from rag.embedder import embed_passages
+from config import settings
+from rag.embedder import embed_passages, limited_threads
 from rag.processor import chunk_text, extract_document
 
 # Батч 17 поднимал это до 64 ради скорости; батч 18 откатывает обратно — на
@@ -94,9 +95,13 @@ async def load_book(
         try:
             for batch_start in range(0, len(chunks), BATCH_SIZE):
                 batch = chunks[batch_start : batch_start + BATCH_SIZE]
-                embeddings = await asyncio.to_thread(
-                    embed_passages, [chunk.content for chunk in batch]
-                )
+                # щадящий режим: ограниченное число ядер и пауза между пачками, чтобы бот и сайт продолжали отвечать
+                def _embed(texts: list[str] = [chunk.content for chunk in batch]) -> list[list[float]]:
+                    with limited_threads(settings.INGEST_THREADS):
+                        return embed_passages(texts)
+
+                embeddings = await asyncio.to_thread(_embed)
+                await asyncio.sleep(settings.INGEST_PAUSE_S)
 
                 for offset, (chunk, embedding) in enumerate(zip(batch, embeddings)):
                     session.add(
