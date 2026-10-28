@@ -277,7 +277,10 @@ async def got_topic(message: Message, state: FSMContext) -> None:
     if mode != "topic":
         o["planText"] = text[:MAX_PLAN_CHARS]
     o["audience"] = str(it.get("audience") or "")[:200]
-    o["wishes"] = str(it.get("wishes") or "")[:1500]
+    wishes = str(it.get("wishes") or "")
+    # ссылки на статьи и сайты из сообщения всегда остаются в пожеланиях: по ним сайт сам откроет источники
+    refs = list(dict.fromkeys(re.findall(r"https?://[^\s<>\"')]+|\b10\.\d{4,9}/[^\s<>\"')]+", text)))[:12]
+    o["wishes"] = " ".join([wishes] + [u for u in refs if u not in wishes]).strip()[:3000]
     if it.get("medical") is True:
         o["medical"] = True
     kind = it.get("kind") if it.get("kind") in ("talk", "defense", "lecture", "business") else "talk"

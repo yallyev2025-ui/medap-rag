@@ -853,6 +853,13 @@ async def flow_checks() -> None:
     await H.got_topic(m, ctx())
     ok((await ctx().get_data())["topic"] == "Гипертония у пожилых" and "Сколько слайдов?" in texts_of(m), "разбор не удался — работаем как раньше: тема и вопрос про размер")
     fs.call = keep
+    # ссылки на статьи из сообщения остаются в пожеланиях, даже если разбор их не вернул
+    await ctx().clear()
+    await ctx().set_state(H.Create.topic)
+    m = FakeMessage(text="Воспаление, по статье https://pubmed.ncbi.nlm.nih.gov/123456/ и doi 10.1000/xyz123")
+    await H.got_topic(m, ctx())
+    w = (await ctx().get_data())["o"]["wishes"]
+    ok("https://pubmed.ncbi.nlm.nih.gov/123456/" in w and "10.1000/xyz123" in w, f"ссылки сохранены в пожеланиях: {w}")
 
     # герб: «Университетский» просит картинку, она уходит на сайт отдельным действием (не как фото слайда) и попадает в создание
     await ctx().clear()
