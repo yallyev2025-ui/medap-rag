@@ -91,6 +91,15 @@ class FakeSite:
 
     async def call(self, action: str, telegram_id: int | None = None, **p):
         self.calls.append((action, telegram_id, p))
+        if action == "intake":
+            msg = str(p.get("message") or "")
+            first = msg.split("\n")[0]
+            data = {"topic": first.split(" для студентов")[0], "audience": "студенты 3 курса" if "студент" in msg else "", "wishes": "", "mode": "text" if len(msg) > 1500 else "topic", "medical": None}
+            if "12 слайдов" in msg:
+                data["total"] = 12
+            if "защит" in msg:
+                data["kind"] = "defense"
+            return {"ok": True, "intake": data}
         if action == "prices":
             return {"ok": True, "tiers": [{"id": "s", "label": "до 10 слайдов", "maxSlides": 10, "price": "30 ₽"}, {"id": "m", "label": "до 15 слайдов", "maxSlides": 15, "price": "40 ₽"}, {"id": "l", "label": "до 20 слайдов", "maxSlides": 20, "price": "50 ₽"}], "free": {"maxSlides": 7, "aiEdits": 2}}
         if action == "suggest_photos":
@@ -307,9 +316,8 @@ async def flow_checks() -> None:
     ok(T.TOPIC_SHORT in texts_of(m), "короткая тема отклонена")
     m = FakeMessage(text="Артериальная гипертония")
     await H.got_topic(m, ctx())
-    call = FakeCall("k:talk")
-    await H.got_kind(call, ctx())
-    buttons = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("Понял так" in texts_of(m) and "тема: «Артериальная гипертония»" in texts_of(m), f"бот показал, как понял сообщение: {texts_of(m)}")
+    buttons = [b.text for row in m.sent[1][1].inline_keyboard for b in row]
     ok(any("Бесплатная" in b for b in buttons) and any("30 ₽" in b for b in buttons) and any("50 ₽" in b for b in buttons), "в размерах — бесплатная и цены")
     call = FakeCall("s:10")
     await H.got_size(call, ctx())
@@ -325,29 +333,19 @@ async def flow_checks() -> None:
     call = FakeCall("n:8")
     await H.got_count_button(call, ctx())
     ok((await ctx().get_data()).get("total") == 8, f"выбрано 8 слайдов, а не максимум размера: {await ctx().get_data()}")
-    ok("Шаг 1 из 7" in texts_of(call.message) and "С чего начинаем" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — первый вопрос мастера, а не меню и не просьба войти: {texts_of(call.message)}")
+    ok("Шаг 1 из 5" in texts_of(call.message) and "Откуда брать материал" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — первый вопрос мастера (источники), без вида и «для кого»: {texts_of(call.message)}")
     ok(await ctx().get_state() == H.Create.setup.state, "ждём выбора")
-    labels1 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
-    ok(any("Только тема" in x for x in labels1) and any("свой план" in x for x in labels1) and any("Свой текст" in x for x in labels1) and any("Отмена" in x for x in labels1) and not any("Назад" in x for x in labels1), f"первый вопрос: три варианта и «Отмена», «Назад» нет: {labels1}")
-
-    # мастер идёт по одному вопросу; «Назад» возвращает; текстовые вопросы ждут текст
-    call = FakeCall("o:m:topic")
-    await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 2 из 7" in texts_of(call.message) and "Для кого" in texts_of(call.message) and await ctx().get_state() == H.Create.audience.state, "второй вопрос «Для кого» ждёт текст")
-    labels2 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
-    ok("Пропустить" in labels2 and any("Назад" in x for x in labels2), f"у текстового вопроса — «Пропустить» и «Назад»: {labels2}")
-    call = FakeCall("o:wz:b")
-    await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 1 из 7" in texts_of(call.message), "«Назад» вернул к первому вопросу")
-    await H.cb_opt(FakeCall("o:m:topic"), ctx(), fake_bot())
-    call = FakeCall("o:wz:n")  # для кого — пропустить
-    await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 3 из 7" in texts_of(call.message) and "Откуда брать материал" in texts_of(call.message), "третий вопрос — источники")
     labels3 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
-    ok(any("Медицинская" in x for x in labels3) and any("Учебники" in x for x in labels3) and any("PubMed" in x for x in labels3) and any("Далее" in x for x in labels3), f"источники отмечаются кнопками, «Далее» ведёт дальше: {labels3}")
+    ok(any("Медицинская" in x for x in labels3) and any("Учебники" in x for x in labels3) and any("PubMed" in x for x in labels3) and any("Далее" in x for x in labels3) and any("Отмена" in x for x in labels3) and not any("Назад" in x for x in labels3), f"источники отмечаются кнопками, «Далее» ведёт дальше, «Назад» на первом нет: {labels3}")
     call = FakeCall("o:wz:n")
     await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 4 из 7" in texts_of(call.message) and "Свои файлы" in texts_of(call.message) and "до 5" in texts_of(call.message) and "20 МБ" in texts_of(call.message), "четвёртый вопрос — свои файлы (до 5, до 20 МБ)")
+    ok("Шаг 2 из 5" in texts_of(call.message), "«Далее» — второй вопрос")
+    call = FakeCall("o:wz:b")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 1 из 5" in texts_of(call.message), "«Назад» вернул к первому вопросу")
+    call = FakeCall("o:wz:n")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("Шаг 2 из 5" in texts_of(call.message) and "Свои файлы" in texts_of(call.message) and "до 5" in texts_of(call.message) and "20 МБ" in texts_of(call.message), "четвёртый вопрос — свои файлы (до 5, до 20 МБ)")
 
     # файлы: PDF уходит на сайт и считается; чужой формат, огромный файл и шестой файл отклоняются
     bot_f = fake_bot()
@@ -379,7 +377,7 @@ async def flow_checks() -> None:
     ok("Уже 5 файлов" in texts_of(m) and len((await ctx().get_data())["o"]["uploadIds"]) == 5, "шестой файл не принимается")
     call = FakeCall("o:upx")
     await H.cb_opt(call, ctx(), fake_bot())
-    ok((await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 4 из 7" in texts_of(call.message), "«Убрать все файлы» очищает выбор и остаётся на этом вопросе")
+    ok((await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 2 из 5" in texts_of(call.message), "«Убрать все файлы» очищает выбор и остаётся на этом вопросе")
     # файл не разобрался: «Далее» убирает его и объясняет
     m = FakeMessage()
     m.document = SimpleNamespace(file_id="bad", file_name="Пустой.pdf", file_size=1000, mime_type="application/pdf")
@@ -387,17 +385,17 @@ async def flow_checks() -> None:
     fs.upload_state = "failed"
     call = FakeCall("o:wz:n", message=FakeMessage())
     await H.cb_opt(call, ctx(), fake_bot())
-    ok("не разобрался: пустой файл" in texts_of(call.message) and (await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 4 из 7" in texts_of(call.message), "неразобранный файл убран с понятной причиной, человек остаётся на вопросе про файлы")
+    ok("не разобрался: пустой файл" in texts_of(call.message) and (await ctx().get_data())["o"]["uploadIds"] == [] and "Шаг 2 из 5" in texts_of(call.message), "неразобранный файл убран с понятной причиной, человек остаётся на вопросе про файлы")
     fs.upload_state = "ready"
     call = FakeCall("o:wz:n")
     await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 5 из 7" in texts_of(call.message) and "Фото" in texts_of(call.message), "пятый вопрос — фото")
+    ok("Шаг 3 из 5" in texts_of(call.message) and "Фото" in texts_of(call.message), "пятый вопрос — фото")
     call = FakeCall("o:wz:n")
     await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 6 из 7" in texts_of(call.message) and await ctx().get_state() == H.Create.wishes.state, "шестой вопрос — пожелания, ждёт текст")
+    ok("Шаг 4 из 5" in texts_of(call.message) and await ctx().get_state() == H.Create.wishes.state, "шестой вопрос — пожелания, ждёт текст")
     call = FakeCall("o:wz:n")
     await H.cb_opt(call, ctx(), fake_bot())
-    ok("Шаг 7 из 7" in texts_of(call.message) and "Титульный лист" in texts_of(call.message) and "не отправляют в модель" in texts_of(call.message), "седьмой вопрос — титул, сказано, что ФИО не уходят в модель")
+    ok("Шаг 5 из 5" in texts_of(call.message) and "Титульный лист" in texts_of(call.message) and "не отправляют в модель" in texts_of(call.message), "седьмой вопрос — титул, сказано, что ФИО не уходят в модель")
     call = FakeCall("o:wz:n")
     await H.cb_opt(call, ctx(), fake_bot())
     ok("Всё спросил" in texts_of(call.message) and "Настройте презентацию" in texts_of(call.message), f"в конце — сводка с «Создать» и пунктами для изменения: {texts_of(call.message)}")
@@ -826,6 +824,33 @@ async def flow_checks() -> None:
     H._watch(bot4, 5, 111, "run1")
     await asyncio.gather(*list(H._tasks))
     ok("не получилась" in str(bot4.send_message.await_args_list[-1].args[1]), "сбой генерации сообщён человеку")
+
+    # чат-ввод: число слайдов названо — размер не спрашивается, сразу вопросы мастера; свой длинный текст — режим «готовый текст»
+    await ctx().clear()
+    await ctx().set_state(H.Create.topic)
+    m = FakeMessage(text="Строение нефрона для студентов, 12 слайдов, больше схем")
+    await H.got_topic(m, ctx())
+    st = await ctx().get_data()
+    ok(st.get("total") == 12 and "Сколько слайдов?" not in texts_of(m), f"в сообщении названо 12 слайдов — бот не переспрашивает: {texts_of(m)[:100]}")
+    ok(st["o"]["audience"] == "студенты 3 курса" and st["o"].get("chat") is True, "для кого понято из сообщения и сохранилось после выбора числа")
+    await ctx().clear()
+    await ctx().set_state(H.Create.topic)
+    long_text = "Нефрон — функциональная единица почки. " * 60
+    m = FakeMessage(text=long_text)
+    await H.got_topic(m, ctx())
+    st = await ctx().get_data()
+    ok(st["o"]["mode"] == "text" and st["o"]["planText"].startswith("Нефрон"), "длинное сообщение принято как готовый текст")
+    # сайт не ответил на разбор — не молчим и не падаем: тема как есть, дальше размер
+    keep = fs.call
+    async def broken(action, tg=None, **p):
+        return {"ok": False, "error": "x"} if action == "intake" else await keep(action, tg, **p)
+    fs.call = broken
+    await ctx().clear()
+    await ctx().set_state(H.Create.topic)
+    m = FakeMessage(text="Гипертония у пожилых")
+    await H.got_topic(m, ctx())
+    ok((await ctx().get_data())["topic"] == "Гипертония у пожилых" and "Сколько слайдов?" in texts_of(m), "разбор не удался — работаем как раньше: тема и вопрос про размер")
+    fs.call = keep
 
 
 def version_checks() -> None:

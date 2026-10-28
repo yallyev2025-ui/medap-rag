@@ -89,6 +89,9 @@ class FlowSite:
 
     async def call(self, action, telegram_id=None, **p):
         self.calls.append((action, telegram_id, p))
+        if action == "intake":
+            msg = str(p.get("message") or "")
+            return {"ok": True, "intake": {"topic": msg.split(" для студентов")[0], "audience": "студенты 3 курса" if "студент" in msg else "", "wishes": "", "mode": "topic", "medical": None}}
         if action == "me":
             return {"ok": True, "balance": "0 ₽", "freeAvailable": True, "team": False, "owner": False}
         if action == "prices":
@@ -157,33 +160,28 @@ async def full_flow(dp) -> None:
 
     await say("/start")
     out = await press("m:new")
-    ok("О чём презентация" in texts_in(out), f"«Создать» → просят тему: {texts_in(out)}")
-    out = await say("Артериальная гипертония")
-    ok("вид" in texts_in(out).lower(), "после темы — вид презентации")
-    out = await press("k:talk")
-    ok("слайдов" in texts_in(out).lower(), "после вида — размер")
+    ok("Какую презентацию сделать" in texts_in(out), f"«Создать» → просят тему и промпт одним сообщением: {texts_in(out)}")
+    out = await say("Артериальная гипертония для студентов 3 курса")
+    ok("Понял так" in texts_in(out) and "студенты 3 курса" in texts_in(out) and "Сколько слайдов" in texts_in(out), f"одно сообщение разобрано, вида нет, слайды спрошены: {texts_in(out)[:120]}")
+    ok("Какой вид" not in texts_in(out), "вопроса «доклад или лекция» больше нет")
     out = await press("s:10")
     ok("Сколько слайдов именно" in texts_in(out), f"после размера — точное число: {texts_in(out)[:80]}")
     out = await say("12")
     ok("от 3 до 10" in texts_in(out), "число вне размера отклонено словами")
     out = await say("8")
-    ok("Шаг 1 из 7" in texts_in(out) and "С чего начинаем" in texts_in(out), f"после числа — первый вопрос мастера: {texts_in(out)[:80]}")
-    out = await press("o:m:topic")
-    ok("Шаг 2 из 7" in texts_in(out) and "Для кого" in texts_in(out), "ответ кнопкой → следующий вопрос")
-    out = await say("студенты 3 курса")
-    ok("Шаг 3 из 7" in texts_in(out) and "Откуда брать материал" in texts_in(out), f"текстовый ответ на «Для кого» попал в нужный обработчик (состояние живёт между обновлениями) и мастер пошёл дальше: {texts_in(out)[:100]}")
+    ok("Шаг 1 из 5" in texts_in(out) and "Откуда брать материал" in texts_in(out) and "Для кого" not in texts_in(out), f"первый вопрос мастера — источники (режим и «для кого» известны из сообщения): {texts_in(out)[:100]}")
     await press("o:med")
     out = await press("o:home")
-    ok("Шаг 4 из 7" in texts_in(out) and "Свои файлы" in texts_in(out), "«Готово» на подэкране источников ведёт к следующему вопросу")
+    ok("Шаг 2 из 5" in texts_in(out) and "Свои файлы" in texts_in(out), "«Готово» на подэкране источников ведёт к следующему вопросу")
     out = await press("o:wz:b")
-    ok("Шаг 3 из 7" in texts_in(out), "«Назад» через настоящий диспетчер")
+    ok("Шаг 1 из 5" in texts_in(out), "«Назад» через настоящий диспетчер")
     await press("o:wz:n")
     out = await press("o:wz:n")
-    ok("Шаг 5 из 7" in texts_in(out) and "Фото" in texts_in(out), "пятый вопрос — фото")
+    ok("Шаг 3 из 5" in texts_in(out) and "Фото" in texts_in(out), "третий вопрос — фото")
     out = await press("o:wz:n")
-    ok("Шаг 6 из 7" in texts_in(out), "шестой вопрос — пожелания")
+    ok("Шаг 4 из 5" in texts_in(out), "четвёртый вопрос — пожелания")
     out = await say("поменьше текста")
-    ok("Шаг 7 из 7" in texts_in(out) and "Титульный лист" in texts_in(out), f"ответ-текст на пожелания принят, мастер пошёл дальше: {texts_in(out)[:100]}")
+    ok("Шаг 5 из 5" in texts_in(out) and "Титульный лист" in texts_in(out), f"ответ-текст на пожелания принят, мастер пошёл дальше: {texts_in(out)[:100]}")
     out = await press("o:wz:n")
     labels = buttons(out)
     ok("Всё спросил" in texts_in(out) and "Настройте презентацию" in texts_in(out), f"в конце — сводка: {texts_in(out)[:80]}")
@@ -218,6 +216,9 @@ class FlowSite:
 
     async def call(self, action, telegram_id=None, **p):
         self.calls.append((action, telegram_id, p))
+        if action == "intake":
+            msg = str(p.get("message") or "")
+            return {"ok": True, "intake": {"topic": msg.split(" для студентов")[0], "audience": "студенты 3 курса" if "студент" in msg else "", "wishes": "", "mode": "topic", "medical": None}}
         if action == "me":
             return {"ok": True, "balance": "0 ₽", "freeAvailable": True, "team": False, "owner": False}
         if action == "prices":

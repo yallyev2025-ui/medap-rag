@@ -262,29 +262,46 @@ async def cb_new(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Create.topic, F.text)
 async def got_topic(message: Message, state: FSMContext) -> None:
-    topic = (message.text or "").strip()
-    if len(topic) < 3:
+    """Первое сообщение — как в чате: тема и всё, что важно (владелец 28.10.2026). Сайт разбирает его; спрашиваем только недостающее.
+    Вопросов «доклад или лекция» и «для кого» нет; сайт не ответил — работаем по старому: тема, дальше размер."""
+    text = (message.text or "").strip()
+    if len(text) < 3:
         await message.answer(T.TOPIC_SHORT)
         return
-    await state.update_data(topic=topic[:300])
-    await message.answer("Какой вид презентации?", reply_markup=T.kinds_kb())
+    r = await site().call("intake", message.from_user.id, message=text[:40_000])
+    it = r.get("intake") if r.get("ok") and isinstance(r.get("intake"), dict) else {}
+    o = T.default_opts()
+    mode = it.get("mode") if it.get("mode") in ("plan", "text") else "topic"
+    o["chat"] = True
+    o["mode"] = mode
+    if mode != "topic":
+        o["planText"] = text[:MAX_PLAN_CHARS]
+    o["audience"] = str(it.get("audience") or "")[:200]
+    o["wishes"] = str(it.get("wishes") or "")[:1500]
+    if it.get("medical") is True:
+        o["medical"] = True
+    kind = it.get("kind") if it.get("kind") in ("talk", "defense", "lecture", "business") else "talk"
+    topic = str(it.get("topic") or text.split("\n")[0])[:300].strip() or text[:300]
+    await state.update_data(topic=topic, kind=kind, o=o, wz=0, said_total=it.get("total") if isinstance(it.get("total"), int) else None)
+    summary = T.understood_text(topic, it.get("total"), o)
+    await message.answer(summary)
+    await _ask_size(message, state, message.from_user.id)
 
 
-@router.callback_query(F.data.startswith("k:"))
-async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    data = await state.get_data()
-    if not data.get("topic"):
-        await call.message.answer("Начнём заново: нажмите «Создать презентацию».", reply_markup=T.main_menu(await _owner_confirmed(call.from_user.id)))
-        return
-    await state.update_data(kind=call.data[2:])
-    prices, me = await asyncio.gather(site().call("prices"), site().call("me", call.from_user.id))
+async def _ask_size(msg: Message, state: FSMContext, tg: int) -> None:
+    """Размер презентации: если число слайдов названо в сообщении и подходит под размер — сразу к настройкам, иначе спросить."""
+    prices, me = await asyncio.gather(site().call("prices"), site().call("me", tg))
     if not prices.get("ok") or not me.get("ok"):
-        await call.message.answer(str((prices if not prices.get("ok") else me).get("error") or T.NO_SITE))
+        await msg.answer(str((prices if not prices.get("ok") else me).get("error") or T.NO_SITE))
         return
     free = bool(me.get("freeAvailable")) and not me.get("team")
-    await state.update_data(tier_maxes=sorted(int(t["maxSlides"]) for t in prices["tiers"]), free_max=int(prices["free"]["maxSlides"]))
-    await call.message.answer(
+    maxes = sorted(int(t["maxSlides"]) for t in prices["tiers"])
+    await state.update_data(tier_maxes=maxes, free_max=int(prices["free"]["maxSlides"]))
+    said = (await state.get_data()).get("said_total")
+    if isinstance(said, int) and 3 <= said <= (maxes[-1] if maxes else 0):
+        await _count_chosen(msg, state, said)
+        return
+    await msg.answer(
         f"Сколько слайдов? Баланс: {me.get('balance', '—')}." + (" Оплата не нужна." if me.get("team") else ""),
         reply_markup=T.sizes_kb(prices["tiers"], free, int(prices["free"]["maxSlides"])),
     )
@@ -329,7 +346,8 @@ async def got_count_text(message: Message, state: FSMContext) -> None:
 
 
 async def _count_chosen(msg: Message, state: FSMContext, n: int) -> None:
-    await state.update_data(total=n, o=T.default_opts(), wz=0)
+    o = (await state.get_data()).get("o") or T.default_opts()  # выбранное из первого сообщения (для кого, пожелания, режим) не теряем
+    await state.update_data(total=n, o=o, wz=0)
     await _wz_show(msg, state)
 
 
