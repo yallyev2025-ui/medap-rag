@@ -145,7 +145,11 @@ def rerank_scores(query: str, passages: list[str]) -> list[float]:
     if settings.RERANKER_BACKEND == "onnx" and not _onnx_failed:
         try:
             return _onnx_scores(query, passages)
-        except Exception:
+        except Exception as exc:
+            if not settings.RERANKER_TORCH_FALLBACK:
+                # большую модель не грузим (памяти мало): громко сообщаем, а не молча берём ещё 2,3 ГБ
+                logger.exception("ONNX-реранкер не работает, а резерв на torch отключён (RERANKER_TORCH_FALLBACK=false)")
+                raise RuntimeError("Реранкер недоступен: сжатая модель не загрузилась. Проверьте RERANKER_ONNX_DIR.") from exc
             with _onnx_lock:
                 if not _onnx_failed:
                     _onnx_failed = True

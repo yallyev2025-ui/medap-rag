@@ -22,6 +22,9 @@ def _get_model() -> SentenceTransformer:
 @contextmanager
 def limited_threads(n: int):
     """На время загрузки источника эмбеддер берёт не больше n ядер; после — прежнее число (ответы людям не должны ждать загрузку)"""
+    if n <= 0:  # 0 — без ограничения (загрузка на отдельной машине)
+        yield
+        return
     prev = torch.get_num_threads()
     torch.set_num_threads(max(1, n))
     try:
