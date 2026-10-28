@@ -35,35 +35,32 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install --retries 10 --timeout 60 --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
-# Прогрев весов на этапе сборки: эмбеддер (~2.2 ГБ) и реранкер (~2.3 ГБ) попадают
-# в слой образа, и старт контейнера не зависит от доступности huggingface.co.
+# Прогрев весов на этапе сборки: эмбеддер (~2.2 ГБ) попадает в слой образа, и старт контейнера не зависит от доступности huggingface.co.
+# Большой реранкер (~2.3 ГБ) в образ НЕ кладётся (28.10.2026): его скачивают только для сжатия (ниже) и удаляют в том же шаге.
 # Если сборщик до HF не достучится — задать HF_ENDPOINT (например, зеркало) и пересобрать.
 ARG EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-large
 ARG RERANKER_MODEL_NAME=BAAI/bge-reranker-v2-m3
+ARG KEEP_TORCH_RERANKER=0
 RUN for attempt in 1 2 3; do \
         python -c "\
-from sentence_transformers import SentenceTransformer, CrossEncoder; \
-SentenceTransformer('${EMBEDDING_MODEL_NAME}'); \
-CrossEncoder('${RERANKER_MODEL_NAME}')" && exit 0; \
-        echo "Загрузка моделей не удалась (попытка $attempt), повтор через 20 с"; sleep 20; \
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('${EMBEDDING_MODEL_NAME}')" && exit 0; \
+        echo "Загрузка эмбеддера не удалась (попытка $attempt), повтор через 20 с"; sleep 20; \
     done; exit 1
+# KEEP_TORCH_RERANKER=1 — положить большой реранкер в образ (запасной путь RERANKER_BACKEND=torch)
+RUN if [ "$KEEP_TORCH_RERANKER" = "1" ]; then python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL_NAME}')"; fi
 
-# Реранкер int8/ONNX (RERANKER_BACKEND=onnx): сжатая модель кладётся в образ при сборке, чтобы её
-# можно было включить переменной окружения, не запуская конвертацию в работающем боте (там она
-# съела бы память бота). Конвертации нужно ~8 ГБ памяти и несколько минут. Шаг не валит сборку
-# (|| echo): не получилось — бот работает на torch. Отключить шаг: аргумент сборки BUILD_ONNX_RERANKER=0.
+# Реранкер int8/ONNX (RERANKER_BACKEND=onnx — теперь по умолчанию): скачать большую модель, сжать, подобрать порог (threshold.json рядом с моделью —
+# бот читает его сам), удалить большую — всё одним шагом (scripts/build_reranker.sh), поэтому в слой образа остаётся только сжатая (~0.6 ГБ).
+# Конвертации нужно ~8 ГБ памяти и несколько минут. Не получилось сжать — сборка падает (если не KEEP_TORCH_RERANKER=1).
 # Версии optimum/optimum-onnx закреплены вместе с transformers (та же версия, что в requirements.txt): без этого pip перебирал версии и сборка висела (23.10.2026).
 # optimum-onnx 0.1.0 требует optimum~=2.1.0 и transformers<4.58; при смене версий проверяйте эти границы на pypi.org.
 # Пресет avx2 работает на любом x86; с avx512_vnni (проверка: lscpu | grep avx512_vnni) быстрее.
-# Вручную в консоли работающего бота: python scripts/export_reranker_onnx.py (до следующего деплоя).
 ARG BUILD_ONNX_RERANKER=1
 ARG ONNX_PRESET=avx2
-COPY scripts/export_reranker_onnx.py /tmp/export_reranker_onnx.py
+COPY scripts/export_reranker_onnx.py scripts/calibrate_onnx_threshold.py scripts/build_reranker.sh /tmp/
 RUN if [ "$BUILD_ONNX_RERANKER" = "1" ]; then \
-        timeout 600 pip install --retries 10 --timeout 60 "transformers==4.57.6" "optimum==2.1.0" "optimum-onnx[onnxruntime]==0.1.0" && \
-        python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" || echo "ONNX-реранкер не собран, бот будет на torch"; \
-        python /tmp/export_reranker_onnx.py --preset "$ONNX_PRESET" --per-channel --out /opt/models/reranker-onnx-int8-pc \
-            || echo "Вариант -pc (per-channel) не собран"; \
+        ONNX_PRESET="$ONNX_PRESET" KEEP_TORCH_RERANKER="$KEEP_TORCH_RERANKER" RERANKER_MODEL_NAME="$RERANKER_MODEL_NAME" sh /tmp/build_reranker.sh; \
     fi
 
 # Движок вёрстки презентаций (Medap Slide) для страницы админки «Стенд презентаций»: Node.js 22 из

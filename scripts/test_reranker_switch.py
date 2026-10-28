@@ -14,6 +14,11 @@ def reset(backend: str) -> None:
     for name, fn in ORIGINAL.items():
         setattr(reranker, name, fn)
     settings.RERANKER_BACKEND = backend
+    settings.RERANKER_TORCH_FALLBACK = True  # эти проверки про откат; запрет отката проверяет test_reranker_fallback
+    settings.RERANKER_ONNX_DIR = "/nonexistent"  # без файла порога, подобранного при сборке
+    import config
+
+    config._calibrated_onnx_threshold.cache_clear()
     reranker._onnx_failed = False
 
 

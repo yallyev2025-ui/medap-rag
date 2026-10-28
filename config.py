@@ -1,4 +1,6 @@
+import json
 import os
+from functools import lru_cache
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field, field_validator, model_validator
@@ -318,8 +320,8 @@ class Settings(BaseSettings):
     # Резерв на большую модель (torch, ≈2,3 ГБ памяти): True — если сжатая ONNX-модель не работает, бот загрузит большую и продолжит
     # (как раньше); False — большая модель в память НЕ загружается вообще, при сбое ONNX поиск отвечает ошибкой (владелец 28.10.2026:
     # «большая модель не должна грузиться, памяти мало»). Включайте False вместе с RERANKER_BACKEND=onnx, когда сжатая модель проверена.
-    RERANKER_TORCH_FALLBACK: bool = True
-    RERANKER_BACKEND: str = "torch"
+    RERANKER_TORCH_FALLBACK: bool = False
+    RERANKER_BACKEND: str = "onnx"
     # Папка с model_quantized.onnx и токенизатором (делает scripts/export_reranker_onnx.py при сборке)
     RERANKER_ONNX_DIR: str = "/opt/models/reranker-onnx-int8"
     RERANKER_ONNX_FILE: str = "model_quantized.onnx"
@@ -387,10 +389,26 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+@lru_cache(maxsize=1)
+def _calibrated_onnx_threshold() -> float | None:
+    """Порог, подобранный при сборке образа (scripts/calibrate_onnx_threshold.py → threshold.json рядом с моделью); нет файла — None"""
+    try:
+        with open(os.path.join(settings.RERANKER_ONNX_DIR, "threshold.json"), encoding="utf-8") as f:
+            value = float(json.load(f)["threshold"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    # никогда не строже общего: у сжатой модели из-за этого появлялись бы ложные «не нашёл»
+    return min(max(value, 0.005), settings.RERANK_SCORE_THRESHOLD)
+
+
 def rerank_threshold() -> float:
-    """Порог релевантности реранкера для выбранного способа (у int8 может быть свой)."""
-    if settings.RERANKER_BACKEND == "onnx" and settings.RERANK_SCORE_THRESHOLD_ONNX is not None:
-        return settings.RERANK_SCORE_THRESHOLD_ONNX
+    """Порог релевантности реранкера для выбранного способа. У сжатой (int8) модели: переменная окружения, иначе подобранный при сборке образа, иначе общий."""
+    if settings.RERANKER_BACKEND == "onnx":
+        if settings.RERANK_SCORE_THRESHOLD_ONNX is not None:
+            return settings.RERANK_SCORE_THRESHOLD_ONNX
+        calibrated = _calibrated_onnx_threshold()
+        if calibrated is not None:
+            return calibrated
     return settings.RERANK_SCORE_THRESHOLD
 
 

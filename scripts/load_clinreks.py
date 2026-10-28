@@ -7,6 +7,14 @@
     ├── дети/             → subject='дети'
     └── взрослые_и_дети/  → subject='взрослые_и_дети'
 
+Внутри каждой можно разложить по специальностям — имя вложенной папки записывается как специальность (topic):
+
+    клинреки/взрослые/кардиология/Артериальная гипертензия.pdf   → subject='взрослые', topic='кардиология'
+    клинреки/дети/педиатрия/Бронхиолит.pdf                         → subject='дети',     topic='педиатрия'
+    клинреки/взрослые/Сахарный диабет.pdf                          → subject='взрослые', topic=None
+
+Если файла нет в подпапке специальности, поле остаётся пустым. Специальность хранится в базе и уже пригодна для фильтра в боте (отдельный шаг).
+
 Запуск:
     python -m scripts.load_clinreks клинреки
     python -m scripts.load_clinreks /path/to/клинреки --workers 8 --batch-size 64
@@ -74,7 +82,7 @@ def _log_error(title: str, exc: Exception) -> None:
         f.write("\n")
 
 
-async def _insert_clinrek(title: str, subject: str, chunks, batch_size: int) -> int:
+async def _insert_clinrek(title: str, subject: str, chunks, batch_size: int, topic: str | None = None) -> int:
     """Считает эмбеддинги батчами и сохраняет книгу+чанки в БД. Возвращает число чанков."""
     async with async_session() as session:
         book = Book(
@@ -83,6 +91,7 @@ async def _insert_clinrek(title: str, subject: str, chunks, batch_size: int) -> 
             subject=subject,
             source_type=SOURCE_CLINREK,
             chunks_count=len(chunks),
+            topic=topic,
         )
         session.add(book)
         await session.flush()
@@ -106,6 +115,7 @@ async def _insert_clinrek(title: str, subject: str, chunks, batch_size: int) -> 
                         embedding=embedding,
                         page_from=chunk.page_from,
                         page_to=chunk.page_to,
+                        topic=topic,
                     )
                 )
             await session.flush()
@@ -114,16 +124,22 @@ async def _insert_clinrek(title: str, subject: str, chunks, batch_size: int) -> 
     return len(chunks)
 
 
-def _collect_files(root: Path) -> list[tuple[Path, str]]:
-    """Список (путь_к_pdf, subject) по всем подпапкам-категориям."""
-    files: list[tuple[Path, str]] = []
+def _specialty(pdf: Path, category_dir: Path) -> str | None:
+    """Первая вложенная папка внутри категории — специальность (None, если файл лежит прямо в категории)"""
+    parts = pdf.relative_to(category_dir).parts
+    return parts[0] if len(parts) > 1 else None
+
+
+def _collect_files(root: Path) -> list[tuple[Path, str, str | None]]:
+    """Список (путь_к_pdf, subject, специальность) по всем подпапкам-категориям."""
+    files: list[tuple[Path, str, str | None]] = []
     for subdir in CATEGORY_SUBDIRS:
         folder = root / subdir
         if not folder.is_dir():
             logger.warning("Подпапка не найдена, пропускаю: %s", folder)
             continue
         for pdf in sorted(folder.rglob("*.pdf")):
-            files.append((pdf, subdir))
+            files.append((pdf, subdir, _specialty(pdf, folder)))
     return files
 
 
@@ -153,7 +169,7 @@ async def load_all(root: Path, workers: int, batch_size: int, reset: bool = Fals
 
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
 
-        async def process(pdf: Path, subject: str) -> None:
+        async def process(pdf: Path, subject: str, specialty: str | None) -> None:
             title = pdf.stem
             if title in existing:
                 stats["skipped"] += 1
@@ -170,7 +186,7 @@ async def load_all(root: Path, workers: int, batch_size: int, reset: bool = Fals
                     if not chunks:
                         raise ValueError("Не удалось извлечь текст из файла")
                     async with embed_lock:
-                        n = await _insert_clinrek(title, subject, chunks, batch_size)
+                        n = await _insert_clinrek(title, subject, chunks, batch_size, specialty)
                     stats["ok"] += 1
                     stats["done"] += 1
                     print(f"✅ Обработан: {pdf.name} — {n} чанков ({stats['done']}/{total})")
@@ -180,7 +196,7 @@ async def load_all(root: Path, workers: int, batch_size: int, reset: bool = Fals
                     _log_error(title, exc)
                     print(f"❌ Ошибка: {pdf.name} ({stats['done']}/{total}) — см. {ERRORS_LOG}")
 
-        await asyncio.gather(*(process(pdf, subj) for pdf, subj in files))
+        await asyncio.gather(*(process(pdf, subj, spec) for pdf, subj, spec in files))
 
     print(
         "\nИтог: "

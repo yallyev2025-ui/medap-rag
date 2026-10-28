@@ -166,7 +166,9 @@ def warm_up() -> str:
     Возвращает, какой путь работает; сбой ONNX здесь же переводит на torch."""
     rerank_scores("прогрев", ["прогрев"])
     backend = active_backend()
-    if backend == "onnx" and settings.RERANK_SCORE_THRESHOLD_ONNX is None:
+    from config import _calibrated_onnx_threshold
+
+    if backend == "onnx" and settings.RERANK_SCORE_THRESHOLD_ONNX is None and _calibrated_onnx_threshold() is None:
         # Оценки сжатой модели ниже: общий порог мог бы отсекать подходящие куски, и бот отвечал бы «не нашёл»
         # (замер 12.10.2026: у 2 вопросов из 5). Порог подбирает scripts.compare_rerankers («Подбор порога»)
         logger.warning(
