@@ -203,10 +203,8 @@ class Settings(BaseSettings):
     # Поставщик и ключ вписывает владелец; без ключа генерация честно отвечает «не подключена», остальное работает.
     IMAGE_PROVIDER: str = "fal"
     IMAGE_API_KEY: str = ""
-    # Модель рисования: "fal-ai/flux/schnell" (по умолчанию) или "fal-ai/gpt-image-1.5"; меняет владелец, код не трогается
-    IMAGE_MODEL: str = "fal-ai/flux/schnell"
-    # Качество GPT Image: low (дёшево), medium, high; для Flux не используется
-    IMAGE_QUALITY: str = "low"
+    # Модель рисования по умолчанию (для всех, кому сайт не выбрал другую): flux-schnell | flux-2-dev | gpt-2.5-flare-low | gpt-2.5-flare-medium
+    IMAGE_MODEL: str = "flux-schnell"
     IMAGE_BASE_URL: str = "https://fal.run"
     # Цена одной картинки Flux Schnell, $ (≈ $0,003 за мегапиксель; 1344×768 ≈ 1 МП) — идёт в учёт расхода; у GPT Image цена по таблице в images.py
     IMAGE_PRICE_USD: float = 0.004

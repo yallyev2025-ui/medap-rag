@@ -313,6 +313,18 @@ async def flow_checks() -> None:
     ok(any("Бесплатная" in b for b in buttons) and any("30 ₽" in b for b in buttons) and any("50 ₽" in b for b in buttons), "в размерах — бесплатная и цены")
     call = FakeCall("s:10")
     await H.got_size(call, ctx())
+    ok("Сколько слайдов именно" in texts_of(call.message) and await ctx().get_state() == H.Create.count.state, f"после размера — точное число слайдов: {texts_of(call.message)}")
+    cnt = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]
+    ok("10 (максимум)" in cnt and "3" in cnt, f"кнопки числа: от 3 до 10: {cnt}")
+    bad = FakeMessage(text="50")
+    await H.got_count_text(bad, ctx())
+    ok("от 3 до 10" in texts_of(bad) and await ctx().get_state() == H.Create.count.state, "число вне размера не принимается, объясняют границы")
+    call = FakeCall("n:12")
+    await H.got_count_button(call, ctx())
+    ok("Начнём заново" in texts_of(call.message), "кнопка числа вне размера не проходит")
+    call = FakeCall("n:8")
+    await H.got_count_button(call, ctx())
+    ok((await ctx().get_data()).get("total") == 8, f"выбрано 8 слайдов, а не максимум размера: {await ctx().get_data()}")
     ok("Шаг 1 из 7" in texts_of(call.message) and "С чего начинаем" in texts_of(call.message) and "войдите" not in texts_of(call.message), f"после размера — первый вопрос мастера, а не меню и не просьба войти: {texts_of(call.message)}")
     ok(await ctx().get_state() == H.Create.setup.state, "ждём выбора")
     labels1 = [b.text for row in call.message.sent[0][1].inline_keyboard for b in row]

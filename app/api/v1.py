@@ -832,6 +832,8 @@ async def presentations_complete(payload: PresentationCompleteRequest, request: 
 class PresentationImageRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=image_relay.MAX_PROMPT_CHARS)
     aspect: Literal["wide", "square", "tall"] = "wide"
+    # Какой моделью рисовать (решает сайт: обычным людям — не задаётся, владельцу — выбор); пусто — модель по умолчанию
+    model: str | None = Field(default=None, max_length=40)
     context: StudentAIContext
 
 
@@ -852,7 +854,7 @@ async def images_generate(payload: PresentationImageRequest, request: Request) -
     rate_limiter.check(payload.context.userId)
     with request_context(user_id=payload.context.userId, channel="api", workflow="PRESENTATION_IMAGE"):
         try:
-            result = await image_relay.generate(payload.context.userId, payload.prompt, payload.aspect)
+            result = await image_relay.generate(payload.context.userId, payload.prompt, payload.aspect, payload.model)
         except image_relay.ImageError as exc:
             logger.warning("Картинки: %s", exc)
             return PresentationImageResponse(error=str(exc))

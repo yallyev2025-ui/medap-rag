@@ -48,6 +48,7 @@ class Create(StatesGroup):
     title_value = State()
     plan = State()  # свой план или готовый текст по слайдам: приходит несколькими сообщениями
     audience = State()
+    count = State()  # точное число слайдов внутри выбранного размера: кнопкой или числом в чат
 
 
 SETUP_STATES = (Create.setup, Create.wishes, Create.colors, Create.title_value, Create.plan, Create.audience)
@@ -282,6 +283,7 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.answer(str((prices if not prices.get("ok") else me).get("error") or T.NO_SITE))
         return
     free = bool(me.get("freeAvailable")) and not me.get("team")
+    await state.update_data(tier_maxes=sorted(int(t["maxSlides"]) for t in prices["tiers"]), free_max=int(prices["free"]["maxSlides"]))
     await call.message.answer(
         f"Сколько слайдов? Баланс: {me.get('balance', '—')}." + (" Оплата не нужна." if me.get("team") else ""),
         reply_markup=T.sizes_kb(prices["tiers"], free, int(prices["free"]["maxSlides"])),
@@ -290,9 +292,45 @@ async def got_kind(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("s:"))
 async def got_size(call: CallbackQuery, state: FSMContext) -> None:
+    """Выбран размер (до N слайдов); дальше человек называет точное число: от следующего за меньшим размером до N (цена зависит от размера, не от числа)"""
     await call.answer()
-    await state.update_data(total=int(call.data[2:]), o=T.default_opts(), wz=0)
-    await _wz_show(call.message, state)
+    hi = int(call.data[2:])
+    d = await state.get_data()
+    lo = T.count_low(hi, [int(x) for x in d.get("tier_maxes") or []], int(d.get("free_max") or 0))
+    await state.update_data(size_max=hi, size_min=lo)
+    if lo >= hi:
+        await _count_chosen(call.message, state, hi)
+        return
+    await state.set_state(Create.count)
+    await call.message.answer(T.ask_count(lo, hi), reply_markup=T.count_kb(lo, hi))
+
+
+@router.callback_query(F.data.startswith("n:"))
+async def got_count_button(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    d = await state.get_data()
+    n = int(call.data[2:])
+    if not d.get("size_max") or not (int(d.get("size_min") or 1) <= n <= int(d["size_max"])):
+        await call.message.answer("Начнём заново: нажмите «Создать презентацию».", reply_markup=T.main_menu(await _owner_confirmed(call.from_user.id)))
+        return
+    await _count_chosen(call.message, state, n)
+
+
+@router.message(Create.count, F.text)
+async def got_count_text(message: Message, state: FSMContext) -> None:
+    d = await state.get_data()
+    lo, hi = int(d.get("size_min") or 1), int(d.get("size_max") or 10)
+    digits = "".join(ch for ch in (message.text or "") if ch.isdigit())
+    n = int(digits) if digits and len(digits) <= 3 else 0
+    if not lo <= n <= hi:
+        await message.answer(T.ask_count(lo, hi, retry=True), reply_markup=T.count_kb(lo, hi))
+        return
+    await _count_chosen(message, state, n)
+
+
+async def _count_chosen(msg: Message, state: FSMContext, n: int) -> None:
+    await state.update_data(total=n, o=T.default_opts(), wz=0)
+    await _wz_show(msg, state)
 
 
 # ---------- «Настроить»: те же выборы, что в мастере на сайте ----------

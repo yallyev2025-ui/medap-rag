@@ -101,7 +101,7 @@ def test_endpoint() -> None:
     client = TestClient(app)
     body = {"prompt": "Soft abstract gradient background, teal and warm amber, lots of empty space", "aspect": "wide", "context": {"userId": "u1"}}
 
-    async def fake_fal(prompt, w, h):
+    async def fake_fal(prompt, w, h, **kw):
         prompts.append(prompt)
         return JPEG, "image/jpeg", w, h
 
@@ -129,7 +129,7 @@ def test_endpoint() -> None:
     assert client.post("/v1/images/generate", json={**body, "context": {"userId": "u2"}}, headers=HEAD).json()["error"] is None, "потолок у каждого свой"
 
     # сбой поставщика: error, а не 5xx; расход со сбоем записан без стоимости
-    async def boom(prompt, w, h):
+    async def boom(prompt, w, h, **kw):
         raise im.ImageError("Поставщик картинок ответил ошибкой 500")
 
     im.PROVIDERS["fal"] = boom
@@ -146,39 +146,77 @@ def test_endpoint() -> None:
     settings.IMAGE_API_KEY = "k" * 20
 
 
-async def test_gpt_model() -> None:
-    """Модель GPT Image (27.10.2026): свои параметры запроса, размеры из закреплённого списка, цена по качеству и размеру; Flux по умолчанию не тронут"""
-    settings.IMAGE_MODEL = "fal-ai/gpt-image-1.5"
-    settings.IMAGE_QUALITY = "low"
-    seen: list[dict] = []
+async def test_models() -> None:
+    """Каталог моделей (27.10.2026): у каждой свои адрес, поля запроса, размеры и цена; неизвестное имя — отказ; Flux Schnell по умолчанию не тронут"""
+    seen: list[tuple[str, dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            assert str(request.url).endswith("/fal-ai/gpt-image-1.5"), request.url
-            seen.append(__import__("json").loads(request.content))
+            seen.append((str(request.url), __import__("json").loads(request.content)))
             return httpx.Response(200, json={"images": [{"url": "https://v3.fal.media/files/a/b.jpg", "content_type": "image/jpeg"}]})
         return httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"})
 
-    data, mime, w, h = await im._fal("A ceramic mug with a curved handle, front view, plain pale background", 1344, 768, httpx.MockTransport(handler))
-    body = seen[-1]
-    assert body["image_size"] == "1536x1024" and body["quality"] == "low" and body["num_images"] == 1 and "num_inference_steps" not in body, body
-    assert (w, h) == (1344, 768), "размеры из ответа нет — берутся запрошенные"
-    await im._fal("A mug", 1024, 1024, httpx.MockTransport(handler))
-    assert seen[-1]["image_size"] == "1024x1024"
-    await im._fal("A mug", 768, 1344, httpx.MockTransport(handler))
-    assert seen[-1]["image_size"] == "1024x1536"
-    assert im.price_usd(1024, 1024) == 0.009 and im.price_usd(1344, 768) == 0.013, "low: квадрат 0,009, остальные 0,013"
-    settings.IMAGE_QUALITY = "high"
-    assert im.price_usd(1024, 1024) == 0.133
-    settings.IMAGE_QUALITY = "ultra"
-    assert im._quality() == "low", "неизвестное качество — дешёвое, а не ошибка"
+    t = httpx.MockTransport(handler)
+    p = "A ceramic mug with a curved handle, front view, plain pale background"
+    gpt = im.MODELS["gpt-2.5-flare-low"]
+    await im._fal(p, 1536, 864, t, gpt)
+    url, body = seen[-1]
+    assert url.endswith("/openai/gpt-image-2.5/flare/text-to-image") and body == {"prompt": p, "image_size": {"width": 1536, "height": 864}, "quality": "low"}, (url, body)
+    await im._fal(p, 1024, 1024, t, im.MODELS["gpt-2.5-flare-medium"])
+    assert seen[-1][1]["quality"] == "medium"
+    await im._fal(p, 1280, 768, t, im.MODELS["flux-2-dev"])
+    url, body = seen[-1]
+    assert url.endswith("/fal-ai/flux-2") and body["image_size"] == {"width": 1280, "height": 768} and "num_inference_steps" not in body, (url, body)
+    await im._fal(p, 1344, 768, t)
+    assert seen[-1][0].endswith("/fal-ai/flux/schnell") and seen[-1][1]["num_inference_steps"] == 4, "по умолчанию Flux Schnell"
+
+    # размеры кратны 16 и не уже 1:3; цены по таблице
+    for m in im.MODELS.values():
+        for w, h in m.sizes:
+            assert w % 16 == 0 and h % 16 == 0 and max(w, h) / min(w, h) <= 3, (m.key, w, h)
+        assert m.sizes[0][0] * m.sizes[0][1] <= 1_550_000 or m.family == "gpt"
+    assert im.price_usd(gpt, 1024, 1024) == 0.00588 and im.price_usd(gpt, 1536, 864) == 0.0075
+    assert im.price_usd(im.MODELS["flux-2-dev"], 1280, 768) == 0.012
+    assert im.price_usd(im.MODELS["flux-schnell"], 1344, 768) == 0.004
+
+    assert im.resolve_model(None).key == "flux-schnell" and im.resolve_model("gpt-2.5-flare-low").key == "gpt-2.5-flare-low"
     settings.IMAGE_MODEL = "fal-ai/flux/schnell"
-    assert im.price_usd(1344, 768) == 0.004, "Flux Schnell — цена из настройки"
+    assert im.resolve_model(None).key == "flux-schnell", "прежнее значение настройки не ломает бота"
+    settings.IMAGE_MODEL = "flux-schnell"
+    try:
+        im.resolve_model("gpt-image-99")
+    except im.ImageError:
+        pass
+    else:
+        raise AssertionError("неизвестная модель принята")
+
+
+def test_endpoint_model() -> None:
+    app = FastAPI()
+    app.include_router(v1.router)
+    client = TestClient(app)
+    used: list[str] = []
+
+    async def fake_fal(prompt, w, h, **kw):
+        used.append(kw["model"].key + f":{w}x{h}")
+        return JPEG, "image/jpeg", w, h
+
+    im.PROVIDERS["fal"] = fake_fal
+    im._recent.clear()
+    body = {"prompt": "Soft abstract gradient background, teal and warm amber, lots of empty space", "aspect": "wide", "context": {"userId": "u9"}}
+    j = client.post("/v1/images/generate", json={**body, "model": "gpt-2.5-flare-low"}, headers=HEAD).json()
+    assert j["error"] is None and j["model"] == "gpt-2.5-flare-low" and j["costUsd"] == 0.0075 and used[-1] == "gpt-2.5-flare-low:1536x864", (j, used)
+    j = client.post("/v1/images/generate", json=body, headers=HEAD).json()
+    assert j["model"] == "flux-schnell" and used[-1] == "flux-schnell:1344x768", "без имени — модель по умолчанию"
+    r = client.post("/v1/images/generate", json={**body, "model": "nope"}, headers=HEAD)
+    assert r.status_code == 200 and "Неизвестная модель" in r.json()["error"], r.text
+    assert recorded[-1]["task"] == "PRESENTATION_IMAGE"
 
 
 def main() -> None:
     asyncio.run(test_adapter())
-    asyncio.run(test_gpt_model())
+    asyncio.run(test_models())
+    test_endpoint_model()
     test_endpoint()
     print("ok: посредник картинок — токен, размеры, потолки, запреты в описании, ответ fal.ai, чужой адрес, расход и ошибки")
 

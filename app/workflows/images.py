@@ -1,11 +1,12 @@
-"""Рисование картинок для презентаций сайта (этап 7, 21.10.2026).
+"""Рисование картинок для презентаций сайта (этап 7, 21.10.2026; модели — 27.10.2026).
 
-Сайт сам решает, что и где рисовать, и пишет описание; боту достаётся только вызов рисовальной модели (Flux Schnell): ключ поставщика
-есть только на этом сервере. Как и у текстовых моделей, здесь жёсткие рамки: размер картинки — из закрытого списка, описание ограничено,
-число заказов на человека в час ограничено, расход пишется в учёт при любом исходе. Поставщик подключаемый (`IMAGE_PROVIDER`): сейчас
-реализован fal.ai; модель выбирает владелец переменной `IMAGE_MODEL`: `fal-ai/flux/schnell` (по умолчанию, быстрая и дешёвая) или
-`fal-ai/gpt-image-1.5` (понимает подробные описания и рисует аккуратнее; качество — `IMAGE_QUALITY`, по умолчанию low). Модель по умолчанию
-не меняется, пока владелец сам не впишет другую (27.10.2026). Другая модель того же поставщика — запись в `_FAMILIES`.
+Сайт сам решает, что и где рисовать, и пишет описание; боту достаётся только вызов рисовальной модели: ключ поставщика есть только на этом сервере.
+Как и у текстовых моделей, здесь жёсткие рамки: размер картинки — из закрытого списка, описание ограничено, число заказов на человека в час ограничено,
+расход пишется в учёт при любом исходе. Поставщик подключаемый (`IMAGE_PROVIDER`): сейчас реализован fal.ai.
+
+Модели (`MODELS`): `flux-schnell` (по умолчанию, дёшево), `flux-2-dev` (следующее поколение Flux), `gpt-2.5-flare-low` и `gpt-2.5-flare-medium`
+(GPT Image 2.5, вариант Flare). Какую взять, решает сайт: обычным людям — всегда модель по умолчанию, владельцу — выбор перед рисованием. Неизвестное имя
+модели — отказ, а не молчаливая замена. Новая модель — запись в `MODELS`, остальной код не меняется.
 """
 
 import base64
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Размеры только из этого списка (ширина и высота кратны 16, около одного мегапикселя — цена предсказуема)
 ASPECTS: dict[str, tuple[int, int]] = {"wide": (1344, 768), "square": (1024, 1024), "tall": (768, 1344)}
+ASPECT_INDEX = {"wide": 0, "square": 1, "tall": 2}
 MAX_PROMPT_CHARS = 2000
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 TIMEOUT_S = 90.0
@@ -33,28 +35,46 @@ FAL_CDN_HOSTS = ("fal.media", "fal.run", "storage.googleapis.com")
 GUARD = " No text, no letters, no numbers, no logos, no watermark, no captions. No human faces and no hands in close-up."
 
 
-# Размеры для моделей GPT Image: только три закреплённых поставщиком
-_GPT_SIZES = {"wide": "1536x1024", "square": "1024x1024", "tall": "1024x1536"}
-# Цена одной картинки, $ (fal.ai, 27.10.2026): GPT Image 1.5 по качеству и размеру; Flux Schnell — по умолчанию из IMAGE_PRICE_USD
-_GPT_PRICE = {"low": (0.009, 0.013), "medium": (0.034, 0.050), "high": (0.133, 0.200)}
-QUALITIES = ("low", "medium", "high")
+@dataclass(frozen=True)
+class Model:
+    key: str
+    endpoint: str
+    family: str  # flux | flux2 | gpt
+    label: str
+    quality: str = ""
+    # Размеры (ширина, высота) для wide / square / tall: у каждой модели свои допустимые
+    sizes: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] = ((1344, 768), (1024, 1024), (768, 1344))
+    # Цена одной картинки, $: (квадрат, остальные размеры). fal.ai, 27.10.2026; для GPT Image 2.5 токенный расчёт — «остальные» оценены по площади
+    price: tuple[float, float] = (0.004, 0.004)
 
 
-def _is_gpt(model: str) -> bool:
-    return model.startswith("fal-ai/gpt-image")
+MODELS: dict[str, Model] = {
+    "flux-schnell": Model("flux-schnell", "fal-ai/flux/schnell", "flux", "Flux Schnell"),
+    "flux-2-dev": Model("flux-2-dev", "fal-ai/flux-2", "flux2", "FLUX.2 dev", sizes=((1280, 768), (992, 992), (768, 1280)), price=(0.012, 0.012)),
+    "gpt-2.5-flare-low": Model("gpt-2.5-flare-low", "openai/gpt-image-2.5/flare/text-to-image", "gpt", "GPT Image 2.5 Flare · low", "low", sizes=((1536, 864), (1024, 1024), (864, 1536)), price=(0.00588, 0.0075)),
+    "gpt-2.5-flare-medium": Model("gpt-2.5-flare-medium", "openai/gpt-image-2.5/flare/text-to-image", "gpt", "GPT Image 2.5 Flare · medium", "medium", sizes=((1536, 864), (1024, 1024), (864, 1536)), price=(0.01317, 0.0167)),
+}
+DEFAULT_MODEL = "flux-schnell"
 
 
-def _quality() -> str:
-    q = (settings.IMAGE_QUALITY or "low").strip().lower()
-    return q if q in QUALITIES else "low"
+def resolve_model(key: str | None = None) -> Model:
+    """Модель по имени из запроса, иначе из настройки `IMAGE_MODEL`, иначе Flux Schnell. Неизвестное имя в запросе — ошибка"""
+    if key:
+        if key not in MODELS:
+            raise ImageError("Неизвестная модель рисования")
+        return MODELS[key]
+    configured = (settings.IMAGE_MODEL or DEFAULT_MODEL).strip()
+    if configured in MODELS:
+        return MODELS[configured]
+    # прежнее значение настройки — адрес модели Flux Schnell
+    return MODELS[DEFAULT_MODEL]
 
 
-def price_usd(width: int, height: int) -> float:
-    """Сколько стоит одна картинка с текущей моделью: для GPT Image — по таблице качества и размера, иначе цена из настройки"""
-    if _is_gpt(settings.IMAGE_MODEL):
-        square, other = _GPT_PRICE[_quality()]
-        return square if width == height else other
-    return settings.IMAGE_PRICE_USD
+def price_usd(model: Model, width: int, height: int) -> float:
+    """Сколько стоит одна картинка этой моделью (для Flux Schnell — цена из настройки `IMAGE_PRICE_USD`)"""
+    if model.key == "flux-schnell":
+        return settings.IMAGE_PRICE_USD
+    return model.price[0] if width == height else model.price[1]
 
 
 class ImageError(RuntimeError):
@@ -93,27 +113,31 @@ def check_request(prompt: str, aspect: str) -> None:
         raise ImageError(f"Описание длиннее {MAX_PROMPT_CHARS} знаков")
 
 
-def _profile() -> ModelProfile:
+def _profile(model: Model) -> ModelProfile:
     return ModelProfile(
-        provider=settings.IMAGE_PROVIDER, model_id=settings.IMAGE_MODEL, base_url=None, supports_vision=False, supports_structured_output=False,
+        provider=settings.IMAGE_PROVIDER, model_id=model.endpoint, base_url=None, supports_vision=False, supports_structured_output=False,
         supports_tools=False, context_window=0, pricing_version="2026-10", input_price_usd=0.0, cached_input_price_usd=0.0, output_price_usd=0.0,
         enabled=bool(settings.IMAGE_API_KEY),
     )
 
 
-async def _fal(prompt: str, width: int, height: int, transport: httpx.AsyncBaseTransport | None = None) -> tuple[bytes, str, int, int]:
+async def _fal(prompt: str, width: int, height: int, transport: httpx.AsyncBaseTransport | None = None, model: Model | None = None) -> tuple[bytes, str, int, int]:
     """fal.ai: синхронный вызов `fal.run/<модель>` отдаёт ссылку на готовую картинку; скачиваем её сами и отдаём сайту байтами."""
+    model = model or resolve_model()
     base = settings.IMAGE_BASE_URL.rstrip("/")
     headers = {"content-type": "application/json", "authorization": f"Key {settings.IMAGE_API_KEY}"}
-    if _is_gpt(settings.IMAGE_MODEL):
-        aspect = "wide" if width > height else "tall" if height > width else "square"
-        body = {"prompt": prompt, "image_size": _GPT_SIZES[aspect], "quality": _quality(), "num_images": 1, "output_format": "jpeg"}
+    size = {"width": width, "height": height}
+    if model.family == "gpt":
+        # только подтверждённые поставщиком поля: описание, размер (кратен 16, не уже 1:3) и качество
+        body = {"prompt": prompt, "image_size": size, "quality": model.quality}
+    elif model.family == "flux2":
+        body = {"prompt": prompt, "image_size": size, "num_images": 1, "enable_safety_checker": True, "output_format": "jpeg"}
     else:
-        body = {"prompt": prompt, "image_size": {"width": width, "height": height}, "num_inference_steps": 4, "num_images": 1, "enable_safety_checker": True, "output_format": "jpeg"}
+        body = {"prompt": prompt, "image_size": size, "num_inference_steps": 4, "num_images": 1, "enable_safety_checker": True, "output_format": "jpeg"}
     async with httpx.AsyncClient(timeout=TIMEOUT_S, transport=transport) as client:
         for attempt in (1, 2):
             try:
-                resp = await client.post(f"{base}/{settings.IMAGE_MODEL}", headers=headers, json=body)
+                resp = await client.post(f"{base}/{model.endpoint}", headers=headers, json=body)
             except httpx.HTTPError as exc:
                 if attempt == 1:
                     continue
@@ -146,26 +170,27 @@ async def _fal(prompt: str, width: int, height: int, transport: httpx.AsyncBaseT
 PROVIDERS = {"fal": _fal}
 
 
-async def generate(user_id: str, prompt: str, aspect: str) -> ImageResult:
+async def generate(user_id: str, prompt: str, aspect: str, model_key: str | None = None) -> ImageResult:
     """Одна картинка по описанию сайта; расход записывается в любом исходе."""
     check_request(prompt, aspect)
     if not settings.IMAGE_API_KEY:
         raise ImageError("Рисование картинок не подключено: в переменных бота нет IMAGE_API_KEY")
+    model = resolve_model(model_key)
     adapter = PROVIDERS.get(settings.IMAGE_PROVIDER)
     if adapter is None:
         raise ImageError("Поставщик картинок не поддерживается (IMAGE_PROVIDER)")
     _check_quota(user_id)
-    width, height = ASPECTS[aspect]
+    width, height = model.sizes[ASPECT_INDEX[aspect]]
     started = time.monotonic()
-    prof = _profile()
+    prof = _profile(model)
     try:
-        data, mime, w, h = await adapter(prompt.strip() + GUARD, width, height)
+        data, mime, w, h = await adapter(prompt.strip() + GUARD, width, height, model=model)
     except ImageError as exc:
         await record_usage(task="PRESENTATION_IMAGE", profile=prof, input_tokens=0, cached_input_tokens=0, output_tokens=0, latency_ms=int((time.monotonic() - started) * 1000), error=str(exc)[:300])
         raise
-    price = price_usd(width, height)
+    price = price_usd(model, width, height)
     await record_usage(task="PRESENTATION_IMAGE", profile=prof, input_tokens=0, cached_input_tokens=0, output_tokens=0, latency_ms=int((time.monotonic() - started) * 1000), image_units=1, fixed_cost_usd=price)
-    return ImageResult(data=data, mime=mime, width=w, height=h, model=prof.model_id, cost_usd=price)
+    return ImageResult(data=data, mime=mime, width=w, height=h, model=model.key, cost_usd=price)
 
 
 def to_b64(result: ImageResult) -> str:

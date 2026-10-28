@@ -76,6 +76,34 @@ def sizes_kb(tiers: list[dict[str, Any]], free_available: bool, free_max: int) -
     return kb(rows)
 
 
+def count_low(hi: int, tier_maxes: list[int], free_max: int) -> int:
+    """Наименьшее число слайдов в выбранном размере: следующее за меньшим размером (до 20 — от 11), у самого малого и у бесплатного — от 3"""
+    smaller = [m for m in tier_maxes if m < hi]
+    if hi == free_max:
+        return min(3, hi)
+    return (max(smaller) + 1) if smaller else min(3, hi)
+
+
+def ask_count(lo: int, hi: int, retry: bool = False) -> str:
+    head = f"Нужно число от {lo} до {hi}." if retry else f"Сколько слайдов именно? Размер «до {hi}», цена от числа не меняется."
+    return f"{head} Нажмите кнопку или напишите число от {lo} до {hi}."
+
+
+def count_kb(lo: int, hi: int) -> InlineKeyboardMarkup:
+    """Кнопки с числами: верхняя граница, нижняя и три между ними (не больше шести разных)"""
+    vals = sorted({lo, hi, *(round(lo + (hi - lo) * k / 4) for k in (1, 2, 3))})
+    rows: list[list[tuple[str, str]]] = []
+    row: list[tuple[str, str]] = []
+    for v in vals:
+        row.append((f"{v}" if v != hi else f"{v} (максимум)", f"n:{v}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return kb(rows)
+
+
 def styles_kb(templates: list[dict[str, Any]]) -> InlineKeyboardMarkup:
     rows: list[list[tuple[str, str]]] = [[("✨ Подберите сами", "st:auto")]]
     pair: list[tuple[str, str]] = []
