@@ -656,6 +656,15 @@ async def cb_opt(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         o["numbers"] = not o["numbers"]
         await _save(state, o)
         await _screen(msg, T.TEXT_HELP, T.text_kb(o))
+    # --- вид титула и герб
+    elif act == "tt":
+        o["titleType"] = {"u": "university", "s": "simple"}.get(arg, "template")
+        o["awaitCrest"] = o["titleType"] == "university" and not o.get("crest")
+        await _save(state, o)
+        if o["awaitCrest"]:
+            await msg.answer("Пришлите герб вуза картинкой (PNG или JPEG, лучше с прозрачным фоном). Можно пропустить: тогда титул будет без герба.", reply_markup=T.kb([[("➡ Без герба, дальше", "o:wz:n")]]))
+        else:
+            await _wz_show(msg, state, edit=True)
     # --- титул
     elif act == "ttl":
         await _show_title(msg, state, tg)
@@ -896,6 +905,9 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     o = await _opts(state)
     d = await state.get_data()
     is_image_doc = bool(message.document and str(message.document.mime_type or "").startswith("image/"))
+    if o.get("awaitCrest") and (message.photo or is_image_doc):
+        await _got_crest(message, state, bot, o)
+        return
     if message.document and (not is_image_doc or _current_step(d, o) == "up"):
         await _got_file(message, state, bot, message.from_user.id)
         return
@@ -927,6 +939,29 @@ async def got_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     await message.answer(f"🖼 Снимок принят ({len(o['photoIds'])}). Можно прислать ещё или нажать «Далее».", reply_markup=T.kb(nxt))
 
 
+async def _got_crest(message: Message, state: FSMContext, bot: Bot, o: dict[str, Any]) -> None:
+    """Герб титульного слайда: картинка уходит на сайт, привязывается к презентации при создании"""
+    file_id, size = (message.photo[-1].file_id, message.photo[-1].file_size or 0) if message.photo else (message.document.file_id, message.document.file_size or 0)
+    if size > MAX_PHOTO_BYTES:
+        await message.answer("Картинка больше 8 МБ — пришлите поменьше.")
+        return
+    buf = await bot.download(file_id)
+    data = buf.read() if buf is not None else b""
+    if not data:
+        await message.answer("Не получилось получить картинку из Telegram. Пришлите ещё раз.")
+        return
+    r = await site().call("crest_upload", message.from_user.id, base64=base64.b64encode(data).decode())
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Герб не принят"))
+        return
+    o["crest"] = str(r["crestId"])
+    o["awaitCrest"] = False
+    await _save(state, o)
+    d = await state.get_data()
+    nxt = [[("➡ Далее", "o:wz:n")]] if d.get("wz") is not None else [[("✅ Готово", "o:home")]]
+    await message.answer("🏛 Герб принят. Он встанет на титульный слайд.", reply_markup=T.kb(nxt))
+
+
 @router.callback_query(F.data.startswith("st:") | F.data.startswith("w:"))
 async def cb_stale(call: CallbackQuery) -> None:
     await call.answer("Эта кнопка устарела — нажмите /menu", show_alert=True)
@@ -943,6 +978,10 @@ def _create_payload(d: dict[str, Any]) -> dict[str, Any]:
         p["audience"] = o["audience"]
     if o.get("uploadIds"):
         p["uploadIds"] = list(o["uploadIds"])
+    if o.get("titleType") in ("university", "simple"):
+        p["titleType"] = o["titleType"]
+        if o["titleType"] == "university" and o.get("crest"):
+            p["crest"] = o["crest"]
     if o.get("medical"):
         p["medical"] = True
     if o.get("textbooks"):

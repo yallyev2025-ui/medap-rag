@@ -183,6 +183,8 @@ class FakeSite:
         if action == "articles":
             off = p.get("offset", 0)
             return {"ok": True, "articles": [{"pmid": f"{off + i}00", "title": f"Статья {off + i}", "journal": "Lancet", "year": "2024", "design": "обзор", "abstract": "аннотация " * 30, "openAccess": i % 2 == 0} for i in range(1, 11)]}
+        if action == "crest_upload":
+            return {"ok": True, "crestId": "crest-000000000001"}
         if action == "photo_upload":
             self.photos = getattr(self, "photos", 0) + 1
             return {"ok": True, "photoId": f"photo-{self.photos:012d}", "width": 400, "height": 300}
@@ -851,6 +853,24 @@ async def flow_checks() -> None:
     await H.got_topic(m, ctx())
     ok((await ctx().get_data())["topic"] == "Гипертония у пожилых" and "Сколько слайдов?" in texts_of(m), "разбор не удался — работаем как раньше: тема и вопрос про размер")
     fs.call = keep
+
+    # герб: «Университетский» просит картинку, она уходит на сайт отдельным действием (не как фото слайда) и попадает в создание
+    await ctx().clear()
+    await ctx().update_data(topic="Гипертония", kind="talk", total=8, o=T.default_opts(), wz=None)
+    await ctx().set_state(H.Create.setup)
+    call = FakeCall("o:tt:u")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("герб" in texts_of(call.message).lower() and (await ctx().get_data())["o"]["awaitCrest"], f"выбран университетский титул — просят герб: {texts_of(call.message)}")
+    m = FakeMessage()
+    m.photo = [SimpleNamespace(file_id="crest", file_size=5000)]
+    await H.got_photo(m, ctx(), fake_bot())
+    st = await ctx().get_data()
+    ok(st["o"]["crest"] == "crest-000000000001" and not st["o"]["awaitCrest"] and not st["o"]["photoIds"] and "Герб принят" in texts_of(m), f"герб принят и не стал фото слайда: {texts_of(m)}")
+    payload = H._create_payload(st)
+    ok(payload["titleType"] == "university" and payload["crest"] == "crest-000000000001", f"на сайт уходят вид титула и герб: {payload}")
+    call = FakeCall("o:tt:s")
+    await H.cb_opt(call, ctx(), fake_bot())
+    ok("crest" not in H._create_payload(await ctx().get_data()) and H._create_payload(await ctx().get_data())["titleType"] == "simple", "простой титул — без герба")
 
 
 def version_checks() -> None:
