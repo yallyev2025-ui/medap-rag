@@ -114,6 +114,29 @@ async def _menu(target: Message, tg_id: int, text: str = "Что дальше?")
     await target.answer(text, reply_markup=T.main_menu(await _owner_confirmed(tg_id)))
 
 
+_WELCOME_PICTURE = os.path.join(os.path.dirname(__file__), "assets", "welcome.png")
+
+
+async def _send_welcome(message: Message) -> None:
+    """Приветствие новому человеку: картинка, что умеет бот, сколько нас и ссылка на канал. Сбой счётчика или картинки приветствие не ломает."""
+    users = 0
+    minimum = 10
+    try:
+        r = await site().call("public_stats", message.from_user.id)
+        if r.get("ok"):
+            users = int(r.get("users") or 0)
+            minimum = int(r.get("min") or 10)
+    except Exception:  # noqa: BLE001 — счётчик необязателен
+        logger.warning("не получился счётчик пользователей для приветствия", exc_info=True)
+    text = T.welcome_text(users, minimum, settings.SLIDES_CHANNEL_URL.strip())
+    try:
+        with open(_WELCOME_PICTURE, "rb") as fh:
+            await message.answer_photo(BufferedInputFile(fh.read(), filename="medap-slide.png"), caption=text[:1000])
+    except Exception:  # noqa: BLE001 — нет картинки или Telegram отказал: шлём текстом
+        logger.warning("приветственная картинка не отправилась", exc_info=True)
+        await message.answer(text)
+
+
 async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending_gift: str = "") -> dict[str, Any] | None:
     """Профиль вошедшего или запрос почты. Возвращает None, если человека нужно сначала впустить.
     `pending_gift` — код подарка из ссылки: после входа бот сам предложит его принять."""
@@ -124,7 +147,7 @@ async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending
         await state.set_state(Login.email)
         if pending_gift:
             await state.update_data(pending_gift=pending_gift)
-        await message.answer(T.WELCOME)
+        await _send_welcome(message)
         await message.answer(T.ASK_EMAIL)
         return None
     await message.answer(str(me.get("error") or T.NO_SITE))

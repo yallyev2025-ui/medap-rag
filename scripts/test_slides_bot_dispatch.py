@@ -275,7 +275,9 @@ async def main() -> None:
     dp = build_dispatcher()  # роутер цепляется к одному диспетчеру — как в бою, поэтому он один на весь прогон
     await dp.feed_update(bot, update(111, "/start", 1))
     texts = [m.text for m in session.sent if isinstance(m, SendMessage)]
-    ok(len(texts) >= 2, f"на /start бот ответил (сообщений: {len(texts)})")
+    photos = [m for m in session.sent if isinstance(m, SendPhoto)]
+    ok(len(photos) == 1 and len(texts) >= 1, f"на /start новому человеку: приветствие картинкой и просьба о почте (фото {len(photos)}, сообщений {len(texts)})")
+    ok("Medap Slide" in (photos[0].caption or ""), "под картинкой — приветствие")
     ok(any("почту" in t for t in texts), f"бот просит почту: {texts}")
     await dp.feed_update(bot, update(111, "a@b.ru", 2))
     ok(any("не отправился" in (m.text or "") or "код" in (m.text or "").lower() for m in session.sent if isinstance(m, SendMessage)), "после почты бот отвечает про код")

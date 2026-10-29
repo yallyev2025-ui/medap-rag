@@ -236,6 +236,9 @@ class FakeMessage:
     async def edit_reply_markup(self, reply_markup=None, **_):
         self.sent.append(("(кнопки обновлены)", reply_markup))
 
+    async def answer_photo(self, photo, caption=None, **_):
+        self.sent.append((caption or "", None))
+
     async def answer_document(self, document, caption=None, **_):
         self.docs.append((document.filename, document.data))
 
@@ -878,6 +881,14 @@ async def flow_checks() -> None:
     call = FakeCall("o:tt:s")
     await H.cb_opt(call, ctx(), fake_bot())
     ok("crest" not in H._create_payload(await ctx().get_data()) and H._create_payload(await ctx().get_data())["titleType"] == "simple", "простой титул — без герба")
+
+    # приветствие: число людей только когда их достаточно, ссылка на канал только когда она задана
+    w0 = T.welcome_text(3, 10, "")
+    ok("Нас уже" not in w0 and "канал" not in w0, "приветствие без счётчика и без канала, пока их нет")
+    w1 = T.welcome_text(250, 10, "https://t.me/medap_slide")
+    ok("Нас уже 250 человек." in w1 and "https://t.me/medap_slide" in w1, "приветствие со счётчиком и ссылкой на канал")
+    ot = T.owner_text({"runs": 5, "users": 120, "newUsers": 7, "botUsers": 40, "topupRub": 0, "costRub": 0})
+    ok("пользователей: 120 (новых 7)" in ot and "подключили бота: 40" in ot, "статистика владельца показывает пользователей")
 
 
 def version_checks() -> None:

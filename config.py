@@ -198,6 +198,8 @@ class Settings(BaseSettings):
     # Адрес сайта (https://…) и общий секрет, которым бот подписывает запросы к сайту. Тот же секрет
     # записан на сайте в SLIDES_SITE_SECRET: одна и та же длинная случайная строка на обеих сторонах.
     SLIDES_SITE_URL: str = ""
+    # Ссылка на Telegram-канал (https://t.me/…): показывается в приветствии бота презентаций; пусто — строки про канал нет
+    SLIDES_CHANNEL_URL: str = ""
     SLIDES_SITE_SECRET: str = ""
 
     # Ключ для внешнего HTTP /search (api/main.py) — сервис-сервис вызов от
