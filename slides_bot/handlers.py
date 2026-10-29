@@ -68,6 +68,14 @@ class Topup(StatesGroup):
     amount = State()
 
 
+class Announce(StatesGroup):
+    text = State()  # владелец пишет объявление всем пользователям бота
+
+
+class Share(StatesGroup):
+    post = State()  # человек пересылает пост из своего канала со своей ссылкой
+
+
 def site():
     """Клиент сайта берётся из модуля при каждом вызове — тесты подменяют `slides_site.site`."""
     return slides_site.site
@@ -278,6 +286,74 @@ async def cb_referral(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         return
     share = "https://t.me/share/url?url=" + quote(link, safe="") + "&text=" + quote(T.REF_SHARE_TEXT, safe="")
     await call.message.answer(T.referral_text(r, link), reply_markup=T.ref_kb(share))
+
+
+@router.callback_query(F.data == "m:post")
+async def cb_channel_post(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Готовый текст поста со своей личной ссылкой: скопировать и опубликовать в канале или чате."""
+    await call.answer()
+    me = await _ensure_login(call.message, state, call.from_user.id)
+    if me is None:
+        return
+    r = await site().call("referral", call.from_user.id)
+    username = await _bot_username(bot)
+    if not r.get("ok") or not username:
+        await call.message.answer(str(r.get("error") or "Не получилось собрать ссылку"))
+        return
+    await call.message.answer("Скопируйте этот текст и опубликуйте в канале или чате группы:")
+    await call.message.answer(T.CHANNEL_POST.format(link=f"https://t.me/{username}?start=ref_{r['code']}"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+
+
+@router.callback_query(F.data == "m:chan")
+async def cb_channel(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    me = await _ensure_login(call.message, state, call.from_user.id)
+    if me is None:
+        return
+    await state.set_state(Share.post)
+    await call.message.answer(T.CHANNEL_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+
+
+def _origin_channel(message: Message) -> Any:
+    """Канал, из которого переслан пост (None — пост не из канала)."""
+    origin = getattr(message, "forward_origin", None)
+    chat = getattr(origin, "chat", None) if origin is not None and getattr(origin, "type", "") == "channel" else None
+    return chat
+
+
+@router.message(Share.post)
+async def got_channel_post(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Проверяем пересланный пост: он из канала, свежий, в нём ваша личная ссылка, подписчиков не меньше 100. Награду выдаёт сайт."""
+    chat = _origin_channel(message)
+    if chat is None:
+        await message.answer(T.CHANNEL_NOT_FORWARD, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+        return
+    tg = message.from_user.id
+    r = await site().call("referral", tg)
+    code = str(r.get("code") or "") if r.get("ok") else ""
+    body = (message.text or message.caption or "")
+    for ent in list(message.entities or []) + list(message.caption_entities or []):
+        if getattr(ent, "url", None):
+            body += " " + ent.url
+    if not code or f"ref_{code}" not in body:
+        await message.answer(T.CHANNEL_NO_LINK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+        return
+    sent = getattr(message.forward_origin, "date", None)
+    if sent is not None and (time.time() - sent.timestamp()) > 14 * 86400:
+        await message.answer(T.CHANNEL_OLD)
+        return
+    try:
+        count = int(await bot.get_chat_member_count(chat.id))
+    except Exception:  # noqa: BLE001 — закрытый канал или нет прав: честно просим публичный канал
+        logger.warning("не получилось узнать число подписчиков канала", exc_info=True)
+        await message.answer(T.CHANNEL_NO_COUNT)
+        return
+    res = await site().call("channel_claim", tg, channelId=str(chat.id), subscribers=count)
+    if not res.get("ok"):
+        await message.answer(str(res.get("error") or "Не получилось выдать награду"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+        return
+    await state.clear()
+    await _menu(message, tg, T.CHANNEL_DONE.format(count=res.get("count", 1), subs=count))
 
 
 # ---------- меню ----------
@@ -1534,7 +1610,7 @@ async def cb_owner(call: CallbackQuery) -> None:
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or "Нет данных"))
         return
-    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("📊 Сводка сейчас", "ow:digest"), ("📥 Клиенты (CSV)", "ow:csv:clients")], [("📥 События за 30 дн. (CSV)", "ow:csv:events")], [("⬅ В меню", "m:home")]]))
+    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("📊 Сводка сейчас", "ow:digest"), ("📥 Клиенты (CSV)", "ow:csv:clients")], [("📥 События за 30 дн. (CSV)", "ow:csv:events")], [("📢 Объявление всем", "ow:announce")], [("⬅ В меню", "m:home")]]))
 
 
 @router.callback_query(F.data.startswith("ow:"))
@@ -1553,6 +1629,79 @@ async def cb_owner_tools(call: CallbackQuery) -> None:
             await call.message.answer(str(r.get("error") or "Не получилось собрать таблицу"))
             return
         await call.message.answer_document(BufferedInputFile(base64.b64decode(str(r["base64"])), filename=str(r["fileName"])), caption="Таблица для Excel (кодировка UTF-8, разделитель «;»).")
+
+
+@router.callback_query(F.data == "ow:announce")
+async def cb_announce(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    await state.set_state(Announce.text)
+    await call.message.answer(T.ANNOUNCE_ASK, reply_markup=T.kb([[("✅ Использовать готовый текст", "ow:ann:default")], [("⬅ Отмена", "m:home")]]))
+
+
+async def _announce_preview(message: Message, state: FSMContext, text: str, tg: int) -> None:
+    r = await site().call("broadcast_list", tg)
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Не получилось получить список получателей"))
+        return
+    ids = [int(x) for x in r.get("ids") or []]
+    await state.update_data(announce=text)
+    await message.answer(text, reply_markup=T.news_kb())
+    await message.answer(f"Так увидят объявление. Получателей: {len(ids)}. Отправить всем?", reply_markup=T.kb([[("📢 Отправить всем", "ow:ann:send")], [("⬅ Отмена", "m:home")]]))
+
+
+@router.message(Announce.text, F.text)
+async def got_announce_text(message: Message, state: FSMContext) -> None:
+    if not await _owner_confirmed(message.from_user.id):
+        return
+    await _announce_preview(message, state, (message.text or "").strip()[:3500], message.from_user.id)
+
+
+@router.callback_query(F.data == "ow:ann:default")
+async def cb_announce_default(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    await _announce_preview(call.message, state, T.ANNOUNCE_DEFAULT, call.from_user.id)
+
+
+@router.callback_query(F.data == "ow:ann:send")
+async def cb_announce_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Рассылка только после подтверждения: не больше ~20 сообщений в секунду, заблокировавшие бота пропускаются."""
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    data = await state.get_data()
+    text = str(data.get("announce") or "")
+    if not text:
+        await call.message.answer("Нет текста объявления: начните заново.")
+        return
+    r = await site().call("broadcast_list", call.from_user.id)
+    ids = [int(x) for x in r.get("ids") or []] if r.get("ok") else []
+    await state.clear()
+    await call.message.answer(f"Рассылаю {len(ids)} получателям. Пришлю итог.")
+    sent = failed = 0
+    for tg_id in ids:
+        try:
+            await bot.send_message(tg_id, text, reply_markup=T.news_kb())
+            sent += 1
+        except Exception:  # noqa: BLE001 — заблокировал бота, удалил чат: пропускаем
+            failed += 1
+        await asyncio.sleep(0.05)
+    await call.message.answer(f"Готово: доставлено {sent}, не доставлено {failed}.", reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+
+
+@router.callback_query(F.data.in_({"news:off", "news:on"}))
+async def cb_news(call: CallbackQuery) -> None:
+    """Человек отказывается от новостей бота (или возвращает их). На сами презентации и оплату это не влияет."""
+    await call.answer()
+    off = call.data == "news:off"
+    r = await site().call("news_off" if off else "news_on", call.from_user.id)
+    if r.get("ok"):
+        await call.message.answer("Хорошо, новости больше не пришлю. Бот работает как обычно." if off else "Готово, новости снова будут приходить.")
+    else:
+        await call.message.answer(str(r.get("error") or "Не получилось сохранить выбор"))
 
 
 async def notify_owners(bot: Bot, text: str) -> None:
