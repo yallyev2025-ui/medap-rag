@@ -162,6 +162,10 @@ class FakeSite:
         if action == "gift_cancel":
             self.gifts = []
             return {"ok": True}
+        if action == "referral":
+            return {"ok": True, "code": "abcd2345", "joined": 7, "paid": 3, "rate": 43, "discountPercent": 0, "next": {"need": 2, "percent": 5}, "steps": [{"friends": 5, "percent": 5}, {"friends": 10, "percent": 10}, {"friends": 15, "percent": 15}]}
+        if action == "ref_join":
+            return {"ok": True, "already": False}
         if action == "gift_peek":
             return {"ok": True, "gift": getattr(self, "peek", {"state": "open", "label": "до 10 слайдов", "days": 30, "mine": False})}
         if action == "gift_claim":
@@ -932,6 +936,45 @@ def runner_checks() -> None:
     ok(runner.config_problems(SimpleNamespace(SLIDES_BOT_USERNAME="@Real_Bot"), site_configured=True, username="real_bot") == [], "@ и регистр в имени не мешают")
 
 
+async def referral_checks() -> None:
+    """Пригласить друга: ссылка с кодом, счёт пришло/оплатили, ступени скидки; друг по ссылке — запоминается до входа и засчитывается после."""
+    fs = FakeSite()
+    slides_site.site = fs
+    settings.SLIDES_SITE_URL = "https://site.test"
+    settings.SLIDES_BOT_USERNAME = "MedapSlideBot"
+    storage = MemoryStorage()
+
+    def ctx(tg: int) -> FSMContext:
+        return FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=tg, user_id=tg))
+
+    bot = fake_bot()
+    # человек со счётом
+    fs.linked = True
+    call = FakeCall("m:ref", tg=333)
+    await H.cb_referral(call, ctx(333), bot)
+    text = texts_of(call.message)
+    ok("https://t.me/MedapSlideBot?start=ref_abcd2345" in text, "в экране приглашения есть личная ссылка с кодом")
+    ok("Пришло по вашей ссылке: 7" in text and "Оплатили: 3 (43 %" in text, "показано, сколько пришло и сколько оплатило, с процентом")
+    ok("от 5 друзей — 5 %" in text and "от 15 друзей — 15 %" in text and "Максимум — 15 %" in text, "ступени скидки названы")
+    ok("ещё 2 друга" in text, "сказано, сколько друзей осталось до следующей ступени")
+    ok(any(b.url and "t.me/share/url" in b.url for row in call.message.sent[-1][1].inline_keyboard for b in row), "есть кнопка «Отправить другу»")
+    ok("m:ref" in [b.callback_data for row in T.main_menu().inline_keyboard for b in row if b.callback_data], "в меню есть «Пригласить друга»")
+    ok(T._friends_word(1) == "друг" and T._friends_word(3) == "друга" and T._friends_word(11) == "друзей" and T._friends_word(5) == "друзей", "склонение слова «друг»")
+
+    # новичок по ссылке: код запоминается, после входа друг засчитывается на сайте
+    fs.linked = False
+    m = FakeMessage(tg=444, text="/start ref_abcd2345")
+    await H.cmd_start(m, SimpleNamespace(args="ref_abcd2345"), ctx(444), bot)
+    ok((await ctx(444).get_data()).get("pending_ref") == "abcd2345", "код приглашения запомнен до конца входа")
+    m = FakeMessage(tg=444, text="friend@test.local")
+    await H.got_email(m, ctx(444))
+    await H.cb_consent_ok(FakeCall("c:ok", tg=444), ctx(444))
+    m = FakeMessage(tg=444, text="123456")
+    await H.got_code(m, ctx(444))
+    ok(any(c[0] == "ref_join" and c[2].get("code") == "abcd2345" for c in fs.calls), "после входа бот сообщил сайту, что друг пришёл по ссылке")
+    ok("Вас пригласил друг" in texts_of(m), "новичку сказано, что он по приглашению")
+
+
 async def gift_checks() -> None:
     """Подарок презентации через Telegram: ссылка-подарок для друга (с входом по пути), подарить из пакета, отменить."""
     fs = FakeSite()
@@ -1015,6 +1058,7 @@ async def main() -> None:
     await client_checks()
     await flow_checks()
     await gift_checks()
+    await referral_checks()
     print(f"OK: {checks} проверок")
 
 

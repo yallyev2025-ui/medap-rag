@@ -137,7 +137,7 @@ async def _send_welcome(message: Message) -> None:
         await message.answer(text)
 
 
-async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending_gift: str = "") -> dict[str, Any] | None:
+async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending_gift: str = "", pending_ref: str = "") -> dict[str, Any] | None:
     """Профиль вошедшего или запрос почты. Возвращает None, если человека нужно сначала впустить.
     `pending_gift` — код подарка из ссылки: после входа бот сам предложит его принять."""
     me = await site().call("me", tg_id)
@@ -147,6 +147,8 @@ async def _ensure_login(message: Message, state: FSMContext, tg_id: int, pending
         await state.set_state(Login.email)
         if pending_gift:
             await state.update_data(pending_gift=pending_gift)
+        if pending_ref:
+            await state.update_data(pending_ref=pending_ref)
         await _send_welcome(message)
         await message.answer(T.ASK_EMAIL)
         return None
@@ -162,9 +164,12 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
     tg = message.from_user.id
     arg = (command.args or "").strip()
     gift_code = arg[5:] if arg.startswith("gift_") else ""
-    me = await _ensure_login(message, state, tg, pending_gift=gift_code)
+    ref_code = arg[4:] if arg.startswith("ref_") else ""
+    me = await _ensure_login(message, state, tg, pending_gift=gift_code, pending_ref=ref_code)
     if me is None:
         return
+    if ref_code:
+        await _join_referral(message, tg, ref_code)
     if gift_code:
         await _offer_gift(message, tg, gift_code)
         return
@@ -234,12 +239,45 @@ async def got_code(message: Message, state: FSMContext) -> None:
         await message.answer(str(r.get("error") or "Код не подошёл") + "\nПришлите код ещё раз или нажмите /start, чтобы ввести другую почту.")
         return
     pending_gift = str(data.get("pending_gift") or "")
+    pending_ref = str(data.get("pending_ref") or "")
     await state.clear()
     await message.answer(T.LOGGED_IN)
+    if pending_ref:
+        await _join_referral(message, message.from_user.id, pending_ref)
     if pending_gift:
         await _offer_gift(message, message.from_user.id, pending_gift)
         return
     await _menu(message, message.from_user.id)
+
+
+# ---------- пригласить друга (реферальная ссылка) ----------
+
+async def _join_referral(message: Message, tg: int, code: str) -> None:
+    """Друг открыл ссылку приглашения: сайт решает, засчитать ли (новый ли он). Человеку отвечаем коротко и дружелюбно."""
+    r = await site().call("ref_join", tg, code=code)
+    if r.get("ok") and not r.get("already"):
+        await message.answer(T.REF_WELCOME)
+    elif not r.get("ok") and "собственная" in str(r.get("error") or ""):
+        await message.answer(str(r.get("error")))
+
+
+@router.callback_query(F.data == "m:ref")
+async def cb_referral(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await call.answer()
+    me = await _ensure_login(call.message, state, call.from_user.id)
+    if me is None:
+        return
+    r = await site().call("referral", call.from_user.id)
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or T.NO_SITE), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+        return
+    username = await _bot_username(bot)
+    link = f"https://t.me/{username}?start=ref_{r['code']}" if username else ""
+    if not link:
+        await call.message.answer("Не получилось собрать ссылку: не задано имя бота (SLIDES_BOT_USERNAME).", reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+        return
+    share = "https://t.me/share/url?url=" + quote(link, safe="") + "&text=" + quote(T.REF_SHARE_TEXT, safe="")
+    await call.message.answer(T.referral_text(r, link), reply_markup=T.ref_kb(share))
 
 
 # ---------- меню ----------

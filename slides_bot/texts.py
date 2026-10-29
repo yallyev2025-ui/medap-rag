@@ -62,6 +62,7 @@ def main_menu(owner: bool = False) -> InlineKeyboardMarkup:
         [("➕ Создать презентацию", "m:new")],
         [("📂 Мои презентации", "m:runs"), ("💰 Баланс", "m:bal")],
         [("🎁 Подарить презентацию", "m:gift"), ("🏷 Цены", "m:prices")],
+        [("🤝 Пригласить друга", "m:ref")],
         [("🚪 Выйти", "m:out")],
     ]
     if owner:
@@ -720,3 +721,40 @@ def gift_pick_kb(packs: list[dict[str, Any]], gifts: list[dict[str, Any]]) -> In
 
 def gift_made_kb(share_url: str, gift_id: str) -> InlineKeyboardMarkup:
     return kb([[("Отменить подарок", f"g:cx:{gift_id}")], [("⬅ В меню", "m:home")]], [[("🎁 Отправить другу", share_url)]])
+
+
+# ---------- пригласить друга ----------
+
+REF_WELCOME = "Вас пригласил друг: первая презентация у вас бесплатная. А когда вы создадите платную, другу тоже достанется презентация."
+REF_SHARE_TEXT = "Делаю презентации в Telegram за пару минут: пишешь тему — получаешь слайды PowerPoint. Первая бесплатная. Заходи:"
+
+
+def referral_text(r: dict[str, Any], link: str) -> str:
+    """Экран «Пригласить друга»: счёт пришло / оплатили / процент, скидка и что дальше."""
+    joined, paid, rate = int(r.get("joined") or 0), int(r.get("paid") or 0), int(r.get("rate") or 0)
+    lines = [
+        "Приглашайте друзей — это выгодно вам обоим.",
+        "",
+        "Когда друг оплатит презентацию, вы получите бесплатную презентацию такого же размера (до 10, до 20 или до 30 слайдов).",
+        "Чем больше друзей оплатило, тем дешевле ваши следующие презентации: " + ", ".join(f"от {s['friends']} друзей — {s['percent']} %" for s in (r.get("steps") or [])) + ". Максимум — 15 %.",
+        "",
+        f"Пришло по вашей ссылке: {joined}",
+        f"Оплатили: {paid}" + (f" ({rate} % от пришедших)" if joined else ""),
+    ]
+    disc = int(r.get("discountPercent") or 0)
+    lines.append(f"Ваша скидка сейчас: {disc} %" if disc else "Ваша скидка пока 0 %.")
+    nxt = r.get("next")
+    if nxt:
+        lines.append(f"До следующей ступени ({nxt['percent']} %): ещё {nxt['need']} " + _friends_word(int(nxt["need"])) + ".")
+    elif disc:
+        lines.append("Вы достигли максимальной скидки 🎉")
+    lines += ["", "Ваша ссылка:", link]
+    return "\n".join(lines)
+
+
+def _friends_word(n: int) -> str:
+    return "друг" if n % 10 == 1 and n % 100 != 11 else "друга" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "друзей"
+
+
+def ref_kb(share: str) -> InlineKeyboardMarkup:
+    return kb([[("⬅ В меню", "m:home")]], [[("📤 Отправить другу", share)]])
