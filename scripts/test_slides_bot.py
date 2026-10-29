@@ -164,8 +164,16 @@ class FakeSite:
             return {"ok": True}
         if action == "referral":
             return {"ok": True, "code": "abcd2345", "joined": 7, "paid": 3, "rate": 43, "discountPercent": 0, "next": {"need": 2, "percent": 5}, "steps": [{"friends": 5, "percent": 5}, {"friends": 10, "percent": 10}, {"friends": 15, "percent": 15}]}
-        if action == "channel_claim":
-            return {"ok": True, "count": 1, "tier": "l"} if int(p.get("subscribers") or 0) >= 100 else {"ok": False, "error": "В канале должно быть не меньше 100 подписчиков"}
+        if action == "ref_shot":
+            return {"ok": True}
+        if action == "grant":
+            if telegram_id not in (999,):
+                return {"ok": False, "error": "Нет доступа"}
+            return {"ok": True, "count": p.get("count"), "label": "до 20 слайдов", "days": 30, "to": p.get("target"), "telegramId": 444 if str(p.get("target")).startswith("@") else None}
+        if action == "leaders":
+            return {"ok": True, "leaders": [{"name": "@top", "paid": 4, "joined": 6}]}
+        if action == "nudges":
+            return {"ok": True, "due": getattr(self, "due", [])}
         if action == "broadcast_list":
             return {"ok": True, "ids": [501, 502, 503]}
         if action in ("news_off", "news_on"):
@@ -982,7 +990,7 @@ async def referral_checks() -> None:
 
 
 async def share_checks() -> None:
-    """Пост в канале (награда), готовый текст поста, объявление всем с подтверждением, отказ от новостей."""
+    """Пост для канала (картинка и текст), условия, скриншот на проверку владельцу, выдача презентаций из бота, лидеры, объявление, напоминания."""
     fs = FakeSite()
     fs.linked = True
     slides_site.site = fs
@@ -995,52 +1003,67 @@ async def share_checks() -> None:
         return FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=tg, user_id=tg))
 
     class Bot2:
-        def __init__(self, count: int = 250) -> None:
-            self.count = count
+        def __init__(self) -> None:
             self.sent: list[tuple[int, str]] = []
-
-        async def get_chat_member_count(self, chat_id):
-            return self.count
+            self.photos: list[tuple[int, str, object]] = []
 
         async def send_message(self, chat_id, text, **_):
             if chat_id == 502:
                 raise RuntimeError("blocked")
             self.sent.append((chat_id, text))
 
-        async def get_me(self):
-            return SimpleNamespace(username="MedapSlideBot")
+        async def send_photo(self, chat_id, photo, caption="", reply_markup=None, **_):
+            self.photos.append((chat_id, caption, reply_markup))
 
     bot = Bot2()
-    # готовый текст поста со своей ссылкой
-    call = FakeCall("m:post", tg=333)
-    await H.cb_channel_post(call, ctx(333), bot)
-    ok("t.me/MedapSlideBot?start=ref_abcd2345" in texts_of(call.message), "готовый пост содержит личную ссылку")
-    # пересланный пост со ссылкой и 250 подписчиками: награда
-    await H.cb_channel(FakeCall("m:chan", tg=333), ctx(333))
-    ok(await ctx(333).get_state() == H.Share.post.state, "бот ждёт пересланный пост")
-    origin = SimpleNamespace(type="channel", chat=SimpleNamespace(id=-1001234567890), date=__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
-    m = FakeMessage(tg=333, text="Классный сервис: https://t.me/MedapSlideBot?start=ref_abcd2345")
-    m.entities, m.caption_entities, m.caption, m.forward_origin = [], [], None, origin
-    await H.got_channel_post(m, ctx(333), bot)
-    ok(any(c[0] == "channel_claim" and c[2].get("subscribers") == 250 and c[2].get("channelId") == "-1001234567890" for c in fs.calls), "сайту ушли канал и число подписчиков")
-    ok("Подписчиков в канале: 250" in texts_of(m), "человеку сказано, что награда начислена")
-    # без ссылки, не из канала, мало подписчиков
-    await H.cb_channel(FakeCall("m:chan", tg=333), ctx(333))
-    m = FakeMessage(tg=333, text="Без ссылки")
-    m.entities, m.caption_entities, m.caption, m.forward_origin = [], [], None, origin
-    await H.got_channel_post(m, ctx(333), bot)
-    ok("нет вашей личной ссылки" in texts_of(m), "пост без ссылки не принимается")
-    m = FakeMessage(tg=333, text="просто текст")
-    m.entities, m.caption_entities, m.caption, m.forward_origin = [], [], None, None
-    await H.got_channel_post(m, ctx(333), bot)
-    ok("не пересланный пост из канала" in texts_of(m), "не пересланный пост отклоняется")
-    small = Bot2(count=40)
-    m = FakeMessage(tg=333, text="https://t.me/MedapSlideBot?start=ref_abcd2345")
-    m.entities, m.caption_entities, m.caption, m.forward_origin = [], [], None, origin
-    await H.got_channel_post(m, ctx(333), small)
-    ok("не меньше 100 подписчиков" in texts_of(m), "мало подписчиков — награды нет, причина названа")
+
+    # экран «Пригласить друга»: картинка с готовым текстом поста + отдельно счёт и условия
+    call = FakeCall("m:ref", tg=333)
+    await H.cb_referral(call, ctx(333), bot2_with_username())
+    texts = [t for t, _ in call.message.sent]
+    ok(any("t.me/MedapSlideBot?start=ref_abcd2345" in t and "MedAP Slide" in t for t in texts), "готовый текст поста с личной ссылкой (под картинкой)")
+    ok(any("Пришло по вашей ссылке: 7" in t for t in texts), "счёт показан отдельным сообщением")
+    cbs = [b.callback_data for row in call.message.sent[-1][1].inline_keyboard for b in row if b.callback_data]
+    ok("m:terms" in cbs and "m:shot" in cbs, "есть кнопки «Условия» и «Скриншот поста»")
+    call = FakeCall("m:terms", tg=333)
+    await H.cb_terms(call)
+    terms = texts_of(call.message)
+    ok("Ежемесячный розыгрыш" in terms and "один оплативший друг — один билет" in terms and "от 100 подписчиков" in terms.replace("не меньше 100", "от 100") and "подписка MedAP" in terms, "условия розыгрыша и приза читаются в боте")
+
+    # скриншот: уходит владельцу с кнопками; награду выдаёт только он
+    await H.cb_shot(FakeCall("m:shot", tg=333), ctx(333))
+    m = FakeMessage(tg=333, text="")
+    m.photo = [SimpleNamespace(file_id="F1")]
+    await H.got_shot(m, ctx(333), bot)
+    ok(bot.photos and bot.photos[0][0] == 999 and "333" in bot.photos[0][1], "скриншот ушёл владельцу с номером человека")
+    kbs = [b.callback_data for row in bot.photos[0][2].inline_keyboard for b in row]
+    ok("ow:shot:ok1:333" in kbs and "ow:shot:no:333" in kbs, "у скриншота кнопки «Выдать» и «Отклонить»")
+    call = FakeCall("ow:shot:ok1:333", tg=999)
+    await H.cb_shot_decide(call, bot)
+    ok(any(c[0] == "grant" and c[2].get("target") == "333" and c[2].get("tier") == "l" and c[2].get("count") == 1 for c in fs.calls), "после «Выдать» сайту ушла выдача на этого человека")
+    ok(any(cid == 333 and "начислено презентаций: 1" in t for cid, t in bot.sent), "человеку пришло сообщение о награде")
+    call = FakeCall("ow:shot:ok1:333", tg=111)
+    n = len(fs.calls)
+    await H.cb_shot_decide(call, bot)
+    ok(len(fs.calls) == n, "обычный человек выдать награду не может")
+
+    # владелец выдаёт презентации из бота: кому → размер → сколько
+    await H.cb_grant_start(FakeCall("ow:grant", tg=999), ctx(999))
+    m = FakeMessage(tg=999, text="@student")
+    await H.got_grant_target(m, ctx(999))
+    ok("Какого размера" in texts_of(m), "после «кому» бот спрашивает размер")
+    await H.cb_grant_tier(FakeCall("ow:gt:l", tg=999), ctx(999))
+    call = FakeCall("ow:gc:3", tg=999)
+    await H.cb_grant_count(call, ctx(999), bot)
+    ok(any(c[0] == "grant" and c[2].get("target") == "@student" and c[2].get("count") == 3 and c[2].get("tier") == "l" for c in fs.calls), "выдача ушла сайту с получателем, размером и числом")
+    ok("Выдано: 3" in texts_of(call.message), "владельцу подтверждено, кому и сколько выдано")
+    ok(any(cid == 444 and "начислено презентаций: 3" in t for cid, t in bot.sent), "получателю в Telegram пришло сообщение")
+    call = FakeCall("ow:leaders", tg=999)
+    await H.cb_leaders(call)
+    ok("@top — оплатили 4, пришло 6" in texts_of(call.message), "лидеры месяца показаны")
 
     # объявление: только владельцу, с подтверждением; заблокировавшие бота пропускаются
+    bot.sent.clear()
     call = FakeCall("ow:announce", tg=999)
     await H.cb_announce(call, ctx(999))
     ok("текст объявления" in texts_of(call.message), "владельцу предлагают написать объявление")
@@ -1052,16 +1075,35 @@ async def share_checks() -> None:
     await H.cb_announce_send(call, ctx(999), bot)
     ok([c for c, _ in bot.sent] == [501, 503], "доставлено двоим, заблокировавший пропущен")
     ok("доставлено 2, не доставлено 1" in texts_of(call.message), "итог рассылки назван")
-    ok("MedAP Slide" in bot.sent[0][1] and "100 студенческих Telegram-чатов" in bot.sent[0][1], "текст — кампания «100 чатов»")
-    # обычный человек объявление создать не может
+    ok("100 студенческих Telegram-чатов" in bot.sent[0][1], "текст — кампания «100 чатов»")
     call = FakeCall("ow:announce", tg=111)
     before = len(call.message.sent)
     await H.cb_announce(call, ctx(111))
     ok(len(call.message.sent) == before, "обычному человеку раздел объявлений не открывается")
-    # отказ от новостей
     call = FakeCall("news:off", tg=501)
     await H.cb_news(call)
     ok(any(c[0] == "news_off" for c in fs.calls) and "новости больше не пришлю" in texts_of(call.message), "отказ от новостей сохраняется")
+
+    # серия напоминаний: текст по шагам и по тому, делал ли человек презентации; отправка по списку сайта
+    ok("ещё не сделали" in T.nudge_text(1, False) and "Как вам первая презентация" in T.nudge_text(1, True), "первое напоминание зависит от того, была ли презентация")
+    ok("ссылки на статьи" in T.nudge_text(2, False) and "ссылку друзьям" in T.nudge_text(3, True) and "разыгрываем" in T.nudge_text(5, True) and "не будем надоедать" in T.nudge_text(6, False), "тексты шагов 2–6")
+    ok(any(b.callback_data == "m:ref" for row in T.nudge_kb(3).inline_keyboard for b in row) and not any(b.callback_data == "m:ref" for row in T.nudge_kb(1).inline_keyboard for b in row), "кнопка приглашения только с третьего напоминания")
+    ok(any(b.callback_data == "news:off" for row in T.nudge_kb(1).inline_keyboard for b in row), "в каждом напоминании есть «Не присылать»")
+    from slides_bot import runner as R
+
+    bot.sent.clear()
+    fs.due = [{"telegramId": 601, "step": 1, "hasRun": False}, {"telegramId": 502, "step": 3, "hasRun": True}, {"telegramId": 603, "step": 6, "hasRun": True}]
+    settings.ADMIN_IDS_RAW = "999"
+    sent = await R._send_nudges(bot)
+    ok(sent == 2 and [c for c, _ in bot.sent] == [601, 603], "напоминания ушли по списку сайта, заблокировавший пропущен")
+
+
+def bot2_with_username():
+    class B:
+        async def get_me(self):
+            return SimpleNamespace(username="MedapSlideBot")
+
+    return B()
 
 
 async def gift_checks() -> None:

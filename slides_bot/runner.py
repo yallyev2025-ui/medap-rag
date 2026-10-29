@@ -93,6 +93,40 @@ async def digest_loop() -> None:
         await asyncio.sleep(60)
 
 
+NUDGE_HOURS = range(10, 20)  # напоминания только днём по Москве
+
+
+async def _send_nudges(bot: Bot) -> int:
+    """Напоминания по расписанию (дни 1, 3, 7, 14, 28, 42). Список и отметка «отправлено» — на сайте, чтобы сообщение не ушло дважды."""
+    from slides_bot import texts as T
+
+    if not settings.ADMIN_IDS:
+        return 0
+    r = await slides_site.site.call("nudges", settings.ADMIN_IDS[0])
+    sent = 0
+    for item in (r.get("due") or []) if r.get("ok") else []:
+        try:
+            await bot.send_message(int(item["telegramId"]), T.nudge_text(int(item["step"]), bool(item.get("hasRun"))), reply_markup=T.nudge_kb(int(item["step"])))
+            sent += 1
+        except Exception:  # noqa: BLE001 — человек заблокировал бота: пропускаем
+            pass
+        await asyncio.sleep(0.05)
+    return sent
+
+
+async def nudge_loop(bot: Bot) -> None:
+    """Раз в час проверяет, кому пора напомнить; ночью (до 10 и после 20 по Москве) молчит. Сбой — в журнал, цикл живёт."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            if datetime.now(MSK).hour in NUDGE_HOURS:
+                n = await _send_nudges(bot)
+                if n:
+                    logger.info("Отправлено напоминаний: %s", n)
+        except Exception:
+            logger.exception("Серия напоминаний не отработала")
+
+
 async def run_slides_bot() -> None:
     """Long polling второго бота. Любой сбой превращается в понятное сообщение владельцу и не останавливает основной бот."""
     if not settings.SLIDES_BOT_TOKEN:
@@ -112,10 +146,12 @@ async def run_slides_bot() -> None:
         report = await handlers.version_report()
         await _tell_owners(f"Бот презентаций запущен: @{me.username}. Откройте его и нажмите «Начать».\n{report}" + ("".join(f"\n⚠ {p}" for p in problems)))
         digest_task = asyncio.create_task(digest_loop())
+        nudge_task = asyncio.create_task(nudge_loop(bot))
         try:
             await build_dispatcher().start_polling(bot)
         finally:
             digest_task.cancel()
+            nudge_task.cancel()
     except TelegramUnauthorizedError:
         logger.error("Telegram не принял SLIDES_BOT_TOKEN")
         await _tell_owners("Бот презентаций не запущен: Telegram не принял токен (SLIDES_BOT_TOKEN). Скопируйте токен из @BotFather целиком, без пробелов и кавычек.")

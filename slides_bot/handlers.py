@@ -73,7 +73,11 @@ class Announce(StatesGroup):
 
 
 class Share(StatesGroup):
-    post = State()  # человек пересылает пост из своего канала со своей ссылкой
+    shot = State()  # человек присылает скриншот своего поста — владелец проверит и выдаст награду
+
+
+class Grant(StatesGroup):
+    target = State()  # владелец вводит, кому выдать презентации (почта, @ник или номер Telegram)
 
 
 def site():
@@ -271,6 +275,7 @@ async def _join_referral(message: Message, tg: int, code: str) -> None:
 
 @router.callback_query(F.data == "m:ref")
 async def cb_referral(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """Пригласить друга: картинка с готовым текстом поста (скопировать и вставить) и отдельным сообщением счёт, условия и кнопки."""
     await call.answer()
     me = await _ensure_login(call.message, state, call.from_user.id)
     if me is None:
@@ -284,76 +289,142 @@ async def cb_referral(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     if not link:
         await call.message.answer("Не получилось собрать ссылку: не задано имя бота (SLIDES_BOT_USERNAME).", reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
         return
+    post = T.CHANNEL_POST.format(link=link)
+    try:
+        with open(_WELCOME_PICTURE, "rb") as fh:
+            await call.message.answer_photo(BufferedInputFile(fh.read(), filename="medap-slide.png"), caption=post[:1000])
+    except Exception:  # noqa: BLE001 — нет картинки: тот же текст сообщением
+        logger.warning("картинка для поста не отправилась", exc_info=True)
+        await call.message.answer(post)
     share = "https://t.me/share/url?url=" + quote(link, safe="") + "&text=" + quote(T.REF_SHARE_TEXT, safe="")
     await call.message.answer(T.referral_text(r, link), reply_markup=T.ref_kb(share))
 
 
-@router.callback_query(F.data == "m:post")
-async def cb_channel_post(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Готовый текст поста со своей личной ссылкой: скопировать и опубликовать в канале или чате."""
+@router.callback_query(F.data == "m:terms")
+async def cb_terms(call: CallbackQuery) -> None:
+    await call.answer()
+    await call.message.answer(T.TERMS, reply_markup=T.kb([[("🤝 К приглашению", "m:ref")], [("⬅ В меню", "m:home")]]))
+
+
+@router.callback_query(F.data == "m:shot")
+async def cb_shot(call: CallbackQuery, state: FSMContext) -> None:
+    """Человек хочет получить награду за пост в своём канале: просим скриншот, владелец проверит вручную."""
     await call.answer()
     me = await _ensure_login(call.message, state, call.from_user.id)
     if me is None:
         return
-    r = await site().call("referral", call.from_user.id)
-    username = await _bot_username(bot)
-    if not r.get("ok") or not username:
-        await call.message.answer(str(r.get("error") or "Не получилось собрать ссылку"))
-        return
-    await call.message.answer("Скопируйте этот текст и опубликуйте в канале или чате группы:")
-    await call.message.answer(T.CHANNEL_POST.format(link=f"https://t.me/{username}?start=ref_{r['code']}"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+    await state.set_state(Share.shot)
+    await call.message.answer(T.SHOT_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
 
 
-@router.callback_query(F.data == "m:chan")
-async def cb_channel(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    me = await _ensure_login(call.message, state, call.from_user.id)
-    if me is None:
-        return
-    await state.set_state(Share.post)
-    await call.message.answer(T.CHANNEL_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
-
-
-def _origin_channel(message: Message) -> Any:
-    """Канал, из которого переслан пост (None — пост не из канала)."""
-    origin = getattr(message, "forward_origin", None)
-    chat = getattr(origin, "chat", None) if origin is not None and getattr(origin, "type", "") == "channel" else None
-    return chat
-
-
-@router.message(Share.post)
-async def got_channel_post(message: Message, state: FSMContext, bot: Bot) -> None:
-    """Проверяем пересланный пост: он из канала, свежий, в нём ваша личная ссылка, подписчиков не меньше 100. Награду выдаёт сайт."""
-    chat = _origin_channel(message)
-    if chat is None:
-        await message.answer(T.CHANNEL_NOT_FORWARD, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
-        return
+@router.message(Share.shot, F.photo)
+async def got_shot(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Скриншот уходит владельцам с кнопками «Выдать» / «Отклонить». Награду начисляет только человек."""
     tg = message.from_user.id
-    r = await site().call("referral", tg)
-    code = str(r.get("code") or "") if r.get("ok") else ""
-    body = (message.text or message.caption or "")
-    for ent in list(message.entities or []) + list(message.caption_entities or []):
-        if getattr(ent, "url", None):
-            body += " " + ent.url
-    if not code or f"ref_{code}" not in body:
-        await message.answer(T.CHANNEL_NO_LINK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+    r = await site().call("ref_shot", tg)
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Не получилось отправить скриншот"))
         return
-    sent = getattr(message.forward_origin, "date", None)
-    if sent is not None and (time.time() - sent.timestamp()) > 14 * 86400:
-        await message.answer(T.CHANNEL_OLD)
-        return
-    try:
-        count = int(await bot.get_chat_member_count(chat.id))
-    except Exception:  # noqa: BLE001 — закрытый канал или нет прав: честно просим публичный канал
-        logger.warning("не получилось узнать число подписчиков канала", exc_info=True)
-        await message.answer(T.CHANNEL_NO_COUNT)
-        return
-    res = await site().call("channel_claim", tg, channelId=str(chat.id), subscribers=count)
-    if not res.get("ok"):
-        await message.answer(str(res.get("error") or "Не получилось выдать награду"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
-        return
+    who = f"@{message.from_user.username}" if message.from_user.username else f"Telegram {tg}"
+    caption = f"Скриншот поста от {who} (номер {tg}). Проверьте канал и число подписчиков."
+    sent = 0
+    for admin in settings.ADMIN_IDS:
+        try:
+            await bot.send_photo(admin, message.photo[-1].file_id, caption=caption, reply_markup=T.shot_kb(tg))
+            sent += 1
+        except Exception:  # noqa: BLE001 — владелец не открывал бота
+            logger.warning("Скриншот не дошёл до владельца %s", admin, exc_info=True)
     await state.clear()
-    await _menu(message, tg, T.CHANNEL_DONE.format(count=res.get("count", 1), subs=count))
+    await _menu(message, tg, T.SHOT_SENT if sent else T.SHOT_NOBODY)
+
+
+@router.message(Share.shot)
+async def got_shot_wrong(message: Message) -> None:
+    await message.answer("Пришлите именно картинку — скриншот вашего поста. Или нажмите «Отмена» в сообщении выше.")
+
+
+@router.callback_query(F.data.startswith("ow:shot:"))
+async def cb_shot_decide(call: CallbackQuery, bot: Bot) -> None:
+    """Владелец решил по скриншоту: выдать презентацию(и) до 20 слайдов или отклонить."""
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    _, _, kind, tg = call.data.split(":")
+    if kind == "no":
+        await call.message.answer("Отклонено. Человеку ничего не отправлено.")
+        try:
+            await bot.send_message(int(tg), T.SHOT_NO)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    count = 3 if kind == "ok3" else 1
+    r = await site().call("grant", call.from_user.id, target=tg, tier="l", count=count, days=30, note="скриншот поста")
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось выдать"))
+        return
+    await call.message.answer(f"Выдано: {count} × до 20 слайдов — {r.get('to')}.")
+    try:
+        await bot.send_message(int(tg), T.GRANTED.format(count=count, label="до 20 слайдов", days=30))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------- владелец: выдать презентации и лидеры месяца ----------
+
+@router.callback_query(F.data == "ow:grant")
+async def cb_grant_start(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    await state.set_state(Grant.target)
+    await call.message.answer(T.GRANT_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+
+
+@router.message(Grant.target, F.text)
+async def got_grant_target(message: Message, state: FSMContext) -> None:
+    if not await _owner_confirmed(message.from_user.id):
+        return
+    await state.update_data(grant_target=(message.text or "").strip()[:120])
+    await message.answer("Какого размера презентации?", reply_markup=T.kb([[("до 10 слайдов", "ow:gt:s"), ("до 20", "ow:gt:l"), ("до 30", "ow:gt:xxl")], [("⬅ Отмена", "m:home")]]))
+
+
+@router.callback_query(F.data.startswith("ow:gt:"))
+async def cb_grant_tier(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    await state.update_data(grant_tier=call.data.split(":")[2])
+    await call.message.answer("Сколько презентаций выдать?", reply_markup=T.kb([[(str(n), f"ow:gc:{n}") for n in (1, 2, 3, 5, 10)], [("⬅ Отмена", "m:home")]]))
+
+
+@router.callback_query(F.data.startswith("ow:gc:"))
+async def cb_grant_count(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    data = await state.get_data()
+    target, tier = str(data.get("grant_target") or ""), str(data.get("grant_tier") or "")
+    count = int(call.data.split(":")[2])
+    await state.clear()
+    r = await site().call("grant", call.from_user.id, target=target, tier=tier, count=count, days=30, note="выдано из бота")
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось выдать"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+        return
+    await call.message.answer(f"Выдано: {r.get('count')} × {r.get('label')} на {r.get('days')} дн. — {r.get('to')}.", reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
+    if r.get("telegramId"):
+        try:
+            await bot.send_message(int(r["telegramId"]), T.GRANTED.format(count=r.get("count"), label=r.get("label"), days=r.get("days")))
+        except Exception:  # noqa: BLE001 — человек заблокировал бота
+            pass
+
+
+@router.callback_query(F.data == "ow:leaders")
+async def cb_leaders(call: CallbackQuery) -> None:
+    await call.answer()
+    if not await _owner_confirmed(call.from_user.id):
+        return
+    r = await site().call("leaders", call.from_user.id)
+    await call.message.answer(T.leaders_text(r.get("leaders") or []) if r.get("ok") else str(r.get("error") or "Нет данных"), reply_markup=T.kb([[("⬅ В меню", "m:home")]]))
 
 
 # ---------- меню ----------
@@ -1610,7 +1681,7 @@ async def cb_owner(call: CallbackQuery) -> None:
     if not r.get("ok"):
         await call.message.answer(str(r.get("error") or "Нет данных"))
         return
-    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("📊 Сводка сейчас", "ow:digest"), ("📥 Клиенты (CSV)", "ow:csv:clients")], [("📥 События за 30 дн. (CSV)", "ow:csv:events")], [("📢 Объявление всем", "ow:announce")], [("⬅ В меню", "m:home")]]))
+    await call.message.answer(T.owner_text(r, 30), reply_markup=T.kb([[("📊 Сводка сейчас", "ow:digest"), ("📥 Клиенты (CSV)", "ow:csv:clients")], [("📥 События за 30 дн. (CSV)", "ow:csv:events")], [("📢 Объявление всем", "ow:announce")], [("🎁 Выдать презентации", "ow:grant"), ("🏆 Лидеры месяца", "ow:leaders")], [("⬅ В меню", "m:home")]]))
 
 
 @router.callback_query(F.data.startswith("ow:"))
