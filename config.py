@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     # Токен от @BotFather. Пусто = бот презентаций не запускается (основной бот работает как раньше).
     SLIDES_BOT_TOKEN: str = ""
     # Имя бота без @ (для ссылок «открыть бота»).
-    SLIDES_BOT_USERNAME: str = ""
+    SLIDES_BOT_USERNAME: str = "medapslides_bot"
     # Адрес сайта (https://…) и общий секрет, которым бот подписывает запросы к сайту. Тот же секрет
     # записан на сайте в SLIDES_SITE_SECRET: одна и та же длинная случайная строка на обеих сторонах.
     SLIDES_SITE_URL: str = ""
