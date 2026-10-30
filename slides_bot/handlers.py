@@ -126,7 +126,7 @@ async def _menu(target: Message, tg_id: int, text: str = "Что дальше?")
     await target.answer(text, reply_markup=T.main_menu(await _owner_confirmed(tg_id)))
 
 
-_WELCOME_PICTURE = os.path.join(os.path.dirname(__file__), "assets", "welcome.png")
+_WELCOME_PICTURE = os.path.join(os.path.dirname(__file__), "assets", "cards", "welcome.png")
 
 
 async def _send_welcome(message: Message) -> None:

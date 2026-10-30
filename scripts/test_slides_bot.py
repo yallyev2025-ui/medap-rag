@@ -968,8 +968,7 @@ async def referral_checks() -> None:
     await H.cb_referral(call, ctx(333), bot)
     text = texts_of(call.message)
     ok("https://t.me/MedapSlideBot?start=ref_abcd2345" in text, "в экране приглашения есть личная ссылка с кодом")
-    ok("Пришло по вашей ссылке: 7" in text and "оплатили: 3" in text and "скидка: 0 %" in text, "статус коротко: пришло, оплатили, скидка")
-    ok("Ещё 2 друга" in text and "скидка 5 %" in text, "сказано, сколько друзей осталось до следующей ступени")
+    ok("Пришло по вашей ссылке: 7" in text and "оплатили: 3" in text and "%" not in text, "статус коротко: пришло, оплатили, без процентов")
     ok(len(text) < 900, "экран приглашения короткий, не простыня")
     ok("m:ref" in [b.callback_data for row in T.main_menu().inline_keyboard for b in row if b.callback_data], "в меню есть «Пригласить друга»")
     ok(T._friends_word(1) == "друг" and T._friends_word(3) == "друга" and T._friends_word(11) == "друзей" and T._friends_word(5) == "друзей", "склонение слова «друг»")
@@ -1030,12 +1029,13 @@ async def share_checks() -> None:
     call = FakeCall("m:perks", tg=333)
     await H.cb_perks(call)
     cards = [t for t, _ in call.message.sent]
-    ok(len(cards) == 4 and all(len(c) < 200 for c in cards), "«Что я получу» — четыре короткие карточки отдельными сообщениями")
-    ok("в подарок" in cards[0] and "5 друзей за месяц" in cards[1] and "Каждый оплативший друг — ваш билет" in cards[2] and "от 100 подписчиков" in cards[3], "подарок, скидка, розыгрыш и пост в канале — по одной карточке")
+    ok(len(cards) == 3 and all(len(c) < 200 for c in cards), "«Что я получу» — три короткие карточки отдельными сообщениями")
+    ok("больше 100 человек" in cards[0] and "оплатил презентацию" in cards[1] and "10 презентаций или подписка MedAP" in cards[2], "подарок за пост, подарок за друга и приз месяца — по одной карточке")
+    ok(all("%" not in c and "розыгр" not in c.lower() for c in cards), "в карточках нет процентов и слова «розыгрыш»")
     ok(any(b.callback_data == "m:rules" for row in call.message.sent[-1][1].inline_keyboard for b in row), "под последней карточкой — кнопка «Правила»")
     call = FakeCall("m:rules", tg=333)
     await H.cb_rules(call)
-    ok("1 оплативший друг = 1 билет" in texts_of(call.message) and len(texts_of(call.message)) < 700, "правила — коротко, одним сообщением")
+    ok("Приз месяца" in texts_of(call.message) and "10 презентаций до 20 слайдов или подписка MedAP" in texts_of(call.message) and len(texts_of(call.message)) < 900, "правила — коротко, одним сообщением")
 
     # скриншот: уходит владельцу с кнопками; награду выдаёт только он
     await H.cb_shot(FakeCall("m:shot", tg=333), ctx(333))
@@ -1082,7 +1082,7 @@ async def share_checks() -> None:
     await H.cb_announce_send(call, ctx(999), bot)
     ok([c for c, _ in bot.sent] == [501, 503], "доставлено двоим, заблокировавший пропущен")
     ok("доставлено 2, не доставлено 1" in texts_of(call.message), "итог рассылки назван")
-    ok("100 студенческих Telegram-чатов" in bot.sent[0][1], "текст — кампания «100 чатов»")
+    ok("100 студенческих Telegram-чатов" in bot.sent[0][1] and "%" not in bot.sent[0][1], "текст — кампания «100 чатов», без процентов")
     call = FakeCall("ow:announce", tg=111)
     before = len(call.message.sent)
     await H.cb_announce(call, ctx(111))
@@ -1093,7 +1093,7 @@ async def share_checks() -> None:
 
     # серия напоминаний: текст по шагам и по тому, делал ли человек презентации; отправка по списку сайта
     ok("ещё не сделали" in T.nudge_text(1, False) and "Как вам первая презентация" in T.nudge_text(1, True), "первое напоминание зависит от того, была ли презентация")
-    ok("ссылки на статьи" in T.nudge_text(2, False) and "ссылку друзьям" in T.nudge_text(3, True) and "разыгрываем" in T.nudge_text(5, True) and "не будем надоедать" in T.nudge_text(6, False), "тексты шагов 2–6")
+    ok("ссылки на статьи" in T.nudge_text(2, False) and "ссылку друзьям" in T.nudge_text(3, True) and "дарим приз" in T.nudge_text(5, True) and "не будем надоедать" in T.nudge_text(6, False), "тексты шагов 2–6")
     ok(any(b.callback_data == "m:ref" for row in T.nudge_kb(3).inline_keyboard for b in row) and not any(b.callback_data == "m:ref" for row in T.nudge_kb(1).inline_keyboard for b in row), "кнопка приглашения только с третьего напоминания")
     ok(any(b.callback_data == "news:off" for row in T.nudge_kb(1).inline_keyboard for b in row), "в каждом напоминании есть «Не присылать»")
     from slides_bot import runner as R
