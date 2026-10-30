@@ -5,11 +5,10 @@
 | Этап | Файл (в Medapsite) | Что в боте |
 |---|---|---|
 | 1 | `docs/medap/plan/etap-1-fundament-i-uchebniki.md` | `rag/processor.py`: главы, печатные страницы, таблицы, рисунки с подписями (`BookFigure`, S3), флаг «плохо читается», дедуп, версии; `GET /v1/books`, `/v1/figures`; Luna главной в `app/llm/task_map.py`; pytest и CI |
-| 2 | `docs/medap/plan/etap-2-pasporta-i-baza-znaniy.md` | поиск по книгам предмета для паспортов и извлечения знаний |
-| 3 | `docs/medap/plan/etap-3-konveyer-materialov-i-proverki.md` | писатель/проверка по учебникам, PubMed для пробелов, подбор рисунков, сводка в Telegram |
-| 4 | `docs/medap/plan/etap-4-mentor-i-kachestvo.md` | `/v1/chat` с пакетом знаний, фильтры поиска, PubMed сразу, метки происхождения, противоречия; Telegram наравне с сайтом, согласие в БД |
-| 5 | `docs/medap/plan/etap-5-samoobuchenie.md` | версии промптов (`PromptVersion`) под проверкой контрольным набором |
-| 6 | `docs/medap/plan/etap-6-golos.md` | синтез речи (Piper / OpenAI), голосовые в Telegram, faster-whisper вместо Whisper API, живой диалог, мониторинг клинреков |
+| 2 | `docs/medap/plan/etap-2-konveyer.md` | конвейер целиком: поиск по книгам предмета для паспортов и знаний, писатель и проверка по учебникам, PubMed для пробелов, подбор рисунков, сводка в Telegram |
+| 3 | `docs/medap/plan/etap-3-mentor-i-kachestvo.md` | `/v1/chat` с пакетом знаний, фильтры поиска, PubMed сразу, метки происхождения, противоречия; Telegram наравне с сайтом, согласие в БД |
+| 4 | `docs/medap/plan/etap-4-samoobuchenie.md` | версии промптов (`PromptVersion`) под проверкой контрольным набором |
+| 5 | `docs/medap/plan/etap-5-golos.md` | синтез речи (Piper / OpenAI), голосовые в Telegram, faster-whisper вместо Whisper API, живой диалог, мониторинг клинреков |
 
 **Конспекты не генерируются**, пока владелец сам не включит запуск (решение 31.10.2026: сначала вся архитектура). Карта «пункт ТЗ → этап» — `Medapsite/docs/medap/plan/TZ-COVERAGE.md`.
 
