@@ -254,8 +254,8 @@ class FakeMessage:
     async def edit_reply_markup(self, reply_markup=None, **_):
         self.sent.append(("(кнопки обновлены)", reply_markup))
 
-    async def answer_photo(self, photo, caption=None, **_):
-        self.sent.append((caption or "", None))
+    async def answer_photo(self, photo, caption=None, reply_markup=None, **_):
+        self.sent.append((caption or "", reply_markup))
 
     async def answer_document(self, document, caption=None, **_):
         self.docs.append((document.filename, document.data))
@@ -968,10 +968,9 @@ async def referral_checks() -> None:
     await H.cb_referral(call, ctx(333), bot)
     text = texts_of(call.message)
     ok("https://t.me/MedapSlideBot?start=ref_abcd2345" in text, "в экране приглашения есть личная ссылка с кодом")
-    ok("Пришло по вашей ссылке: 7" in text and "Оплатили всего: 3 (43 %" in text and "за последние 30 дней: 3" in text, "показано, сколько пришло и сколько оплатило, с процентом")
-    ok("от 5 — 5 %" in text and "от 15 — 15 %" in text and "Максимум — 15 %" in text and "каждый месяц нужны новые оплаты" in text, "ступени скидки названы")
-    ok("ещё 2 друга" in text, "сказано, сколько друзей осталось до следующей ступени")
-    ok(any(b.url and "t.me/share/url" in b.url for row in call.message.sent[-1][1].inline_keyboard for b in row), "есть кнопка «Отправить другу»")
+    ok("Пришло по вашей ссылке: 7" in text and "оплатили: 3" in text and "скидка: 0 %" in text, "статус коротко: пришло, оплатили, скидка")
+    ok("Ещё 2 друга" in text and "скидка 5 %" in text, "сказано, сколько друзей осталось до следующей ступени")
+    ok(len(text) < 900, "экран приглашения короткий, не простыня")
     ok("m:ref" in [b.callback_data for row in T.main_menu().inline_keyboard for b in row if b.callback_data], "в меню есть «Пригласить друга»")
     ok(T._friends_word(1) == "друг" and T._friends_word(3) == "друга" and T._friends_word(11) == "друзей" and T._friends_word(5) == "друзей", "склонение слова «друг»")
 
@@ -1013,6 +1012,8 @@ async def share_checks() -> None:
             self.sent.append((chat_id, text))
 
         async def send_photo(self, chat_id, photo, caption="", reply_markup=None, **_):
+            if chat_id == 502:
+                raise RuntimeError("blocked")
             self.photos.append((chat_id, caption, reply_markup))
 
     bot = Bot2()
@@ -1021,14 +1022,20 @@ async def share_checks() -> None:
     call = FakeCall("m:ref", tg=333)
     await H.cb_referral(call, ctx(333), bot2_with_username())
     texts = [t for t, _ in call.message.sent]
-    ok(any("t.me/MedapSlideBot?start=ref_abcd2345" in t and "MedAP Slide" in t for t in texts), "готовый текст поста с личной ссылкой (под картинкой)")
+    post = next((t for t in texts if "презентации" in t and "t.me/MedapSlideBot?start=ref_abcd2345" in t), "")
+    ok(post.rstrip().endswith("https://t.me/MedapSlideBot?start=ref_abcd2345") and post.index("презентации") < post.index("https://"), "в готовом посте сначала описание, ссылка в самом конце")
     ok(any("Пришло по вашей ссылке: 7" in t for t in texts), "счёт показан отдельным сообщением")
     cbs = [b.callback_data for row in call.message.sent[-1][1].inline_keyboard for b in row if b.callback_data]
-    ok("m:terms" in cbs and "m:shot" in cbs, "есть кнопки «Условия» и «Скриншот поста»")
-    call = FakeCall("m:terms", tg=333)
-    await H.cb_terms(call)
-    terms = texts_of(call.message)
-    ok("Ежемесячный розыгрыш" in terms and "один оплативший друг — один билет" in terms and "от 100 подписчиков" in terms.replace("не меньше 100", "от 100") and "подписка MedAP" in terms, "условия розыгрыша и приза читаются в боте")
+    ok("m:perks" in cbs and "m:shot" in cbs, "есть кнопки «Что я получу» и «Скриншот поста»")
+    call = FakeCall("m:perks", tg=333)
+    await H.cb_perks(call)
+    cards = [t for t, _ in call.message.sent]
+    ok(len(cards) == 4 and all(len(c) < 200 for c in cards), "«Что я получу» — четыре короткие карточки отдельными сообщениями")
+    ok("в подарок" in cards[0] and "5 друзей за месяц" in cards[1] and "Каждый оплативший друг — ваш билет" in cards[2] and "от 100 подписчиков" in cards[3], "подарок, скидка, розыгрыш и пост в канале — по одной карточке")
+    ok(any(b.callback_data == "m:rules" for row in call.message.sent[-1][1].inline_keyboard for b in row), "под последней карточкой — кнопка «Правила»")
+    call = FakeCall("m:rules", tg=333)
+    await H.cb_rules(call)
+    ok("1 оплативший друг = 1 билет" in texts_of(call.message) and len(texts_of(call.message)) < 700, "правила — коротко, одним сообщением")
 
     # скриншот: уходит владельцу с кнопками; награду выдаёт только он
     await H.cb_shot(FakeCall("m:shot", tg=333), ctx(333))
@@ -1094,8 +1101,13 @@ async def share_checks() -> None:
     bot.sent.clear()
     fs.due = [{"telegramId": 601, "step": 1, "hasRun": False}, {"telegramId": 502, "step": 3, "hasRun": True}, {"telegramId": 603, "step": 6, "hasRun": True}]
     settings.ADMIN_IDS_RAW = "999"
+    bot.photos.clear()
     sent = await R._send_nudges(bot)
     ok(sent == 2 and [c for c, _ in bot.sent] == [601, 603], "напоминания ушли по списку сайта, заблокировавший пропущен")
+    fs.due = [{"telegramId": 701, "step": 3, "hasRun": True}, {"telegramId": 702, "step": 5, "hasRun": False}]
+    bot.photos.clear()
+    await R._send_nudges(bot)
+    ok([c for c, _, _ in bot.photos] == [701, 702], "на 3-м и 5-м шаге напоминание идёт с картинкой (подарок, розыгрыш)")
 
 
 def bot2_with_username():

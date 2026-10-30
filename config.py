@@ -200,6 +200,8 @@ class Settings(BaseSettings):
     SLIDES_SITE_URL: str = ""
     # Ссылка на Telegram-канал (https://t.me/…): показывается в приветствии бота презентаций; пусто — строки про канал нет
     SLIDES_CHANNEL_URL: str = ""
+    # Куда ещё можно прислать скриншот поста (например @имя владельца): показывается рядом с просьбой прислать скриншот боту
+    SLIDES_REVIEW_CONTACT: str = ""
     SLIDES_SITE_SECRET: str = ""
 
     # Ключ для внешнего HTTP /search (api/main.py) — сервис-сервис вызов от

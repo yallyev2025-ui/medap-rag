@@ -296,14 +296,30 @@ async def cb_referral(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     except Exception:  # noqa: BLE001 — нет картинки: тот же текст сообщением
         logger.warning("картинка для поста не отправилась", exc_info=True)
         await call.message.answer(post)
-    share = "https://t.me/share/url?url=" + quote(link, safe="") + "&text=" + quote(T.REF_SHARE_TEXT, safe="")
-    await call.message.answer(T.referral_text(r, link), reply_markup=T.ref_kb(share))
+    await call.message.answer(T.referral_text(r, link), reply_markup=T.ref_kb())
 
 
-@router.callback_query(F.data == "m:terms")
-async def cb_terms(call: CallbackQuery) -> None:
+_CARDS_DIR = os.path.join(os.path.dirname(__file__), "assets", "cards")
+
+
+@router.callback_query(F.data == "m:perks")
+async def cb_perks(call: CallbackQuery) -> None:
+    """«Что я получу»: четыре короткие карточки, каждая отдельным сообщением с картинкой (а не одна простыня условий)."""
     await call.answer()
-    await call.message.answer(T.TERMS, reply_markup=T.kb([[("🤝 К приглашению", "m:ref")], [("⬅ В меню", "m:home")]]))
+    for i, (card, caption) in enumerate(T.PERKS):
+        markup = T.perks_kb() if i == len(T.PERKS) - 1 else None
+        try:
+            with open(os.path.join(_CARDS_DIR, f"{card}.png"), "rb") as fh:
+                await call.message.answer_photo(BufferedInputFile(fh.read(), filename=f"{card}.png"), caption=caption, reply_markup=markup)
+        except Exception:  # noqa: BLE001 — нет картинки: тот же текст сообщением
+            logger.warning("карточка %s не отправилась", card, exc_info=True)
+            await call.message.answer(caption, reply_markup=markup)
+
+
+@router.callback_query(F.data == "m:rules")
+async def cb_rules(call: CallbackQuery) -> None:
+    await call.answer()
+    await call.message.answer(T.RULES, reply_markup=T.kb([[("🤝 К приглашению", "m:ref")], [("⬅ В меню", "m:home")]]))
 
 
 @router.callback_query(F.data == "m:shot")
@@ -314,7 +330,7 @@ async def cb_shot(call: CallbackQuery, state: FSMContext) -> None:
     if me is None:
         return
     await state.set_state(Share.shot)
-    await call.message.answer(T.SHOT_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+    await call.message.answer(T.shot_ask(settings.SLIDES_REVIEW_CONTACT.strip()), reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
 
 
 @router.message(Share.shot, F.photo)

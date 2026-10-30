@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramConflictError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
@@ -106,7 +108,13 @@ async def _send_nudges(bot: Bot) -> int:
     sent = 0
     for item in (r.get("due") or []) if r.get("ok") else []:
         try:
-            await bot.send_message(int(item["telegramId"]), T.nudge_text(int(item["step"]), bool(item.get("hasRun"))), reply_markup=T.nudge_kb(int(item["step"])))
+            step = int(item["step"])
+            text, markup, card = T.nudge_text(step, bool(item.get("hasRun"))), T.nudge_kb(step), T.NUDGE_CARDS.get(step)
+            if card:
+                with open(os.path.join(os.path.dirname(__file__), "assets", "cards", f"{card}.png"), "rb") as fh:
+                    await bot.send_photo(int(item["telegramId"]), BufferedInputFile(fh.read(), filename=f"{card}.png"), caption=text, reply_markup=markup)
+            else:
+                await bot.send_message(int(item["telegramId"]), text, reply_markup=markup)
             sent += 1
         except Exception:  # noqa: BLE001 — человек заблокировал бота: пропускаем
             pass
