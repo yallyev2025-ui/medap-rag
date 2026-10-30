@@ -114,3 +114,14 @@ def download_to(key: str, dest_path: str) -> bool:
         logger.exception("Не удалось скачать объект из S3 (%s)", key)
         return False
     return True
+
+
+def get_bytes(key: str) -> bytes | None:
+    """Содержимое объекта (вырезанный рисунок) целиком. None — нет S3 или ошибка."""
+    if not is_configured():
+        return None
+    try:
+        return _client().get_object(Bucket=settings.S3_BUCKET, Key=key)["Body"].read()
+    except Exception:
+        logger.exception("Не удалось прочитать объект из S3 (%s)", key)
+        return None

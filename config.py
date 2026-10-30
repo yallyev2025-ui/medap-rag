@@ -183,6 +183,8 @@ class Settings(BaseSettings):
     DEEP_PARSE: bool = False
     FIGURE_DPI: int = 150
     MAX_FIGURES_PER_BOOK: int = 400
+    # Потолок описаний рисунков моделью на одну книгу (расход предсказуем; одинаковые картинки берут кэш)
+    FIGURE_DESCRIBE_MAX_PER_BOOK: int = 300
 
     # Батч 16: без этого PyTorch/BLAS (расчёт эмбеддингов, rag/embedder.py)
     # по умолчанию претендует на ВСЕ видимые ядра процессора — во время

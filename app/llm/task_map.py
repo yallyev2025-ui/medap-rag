@@ -64,6 +64,8 @@ class Task(str, Enum):
     # Служебные дешёвые задачи: роутинг интента и переписывание запроса.
     INTENT_ROUTER = "INTENT_ROUTER"
     QUERY_REWRITE = "QUERY_REWRITE"
+    # MedAP, этап 1: краткое описание рисунка учебника (по картинке и подписи) — один раз на рисунок, с кэшем.
+    FIGURE_DESCRIBE = "FIGURE_DESCRIBE"
 
 
 DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
@@ -74,17 +76,17 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.GROUNDED_QA: OPENAI,
     Task.EXPLAIN: OPENAI,
     Task.CLASS_QUICK: DEEPSEEK,
-    Task.TEST_SOLVE_TEXT: DEEPSEEK,
+    Task.TEST_SOLVE_TEXT: OPENAI,
     Task.DOCUMENT_QA: OPENAI,
-    Task.TARGETED_REPAIR: DEEPSEEK,
-    Task.WEB_RESEARCH: DEEPSEEK,
-    Task.WEB_SEARCH: DEEPSEEK,
-    Task.PUBMED_SEARCH: DEEPSEEK,
+    Task.TARGETED_REPAIR: OPENAI,
+    Task.WEB_RESEARCH: OPENAI,
+    Task.WEB_SEARCH: OPENAI,
+    Task.PUBMED_SEARCH: OPENAI,
     Task.PUBMED_QUERY: DEEPSEEK,
-    Task.QUICK_OUTLINE: DEEPSEEK,
-    Task.CONTENT_RECALL: DEEPSEEK,
-    Task.CONTENT_TEST: DEEPSEEK,
-    Task.CONTENT_CASE: DEEPSEEK,
+    Task.QUICK_OUTLINE: OPENAI,
+    Task.CONTENT_RECALL: OPENAI,
+    Task.CONTENT_TEST: OPENAI,
+    Task.CONTENT_CASE: OPENAI,
     # OpenAI, а не DeepSeek (04.10.2026): на DeepSeek конспект выходил сплошным текстом
     # без структуры, с пустыми ответами и обрывами. Вернуть можно без выкатки кода:
     # TASK_MODEL_MAP_OVERRIDES={"CONSPECT_WRITE": "deepseek"} или админка.
@@ -97,7 +99,13 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.CLAIM_EVIDENCE_CHECK: OPENAI,
     Task.INTENT_ROUTER: DEEPSEEK,
     Task.QUERY_REWRITE: DEEPSEEK,
+    Task.FIGURE_DESCRIBE: OPENAI,
 }
+# Решение владельца 30.10.2026: Luna — главная модель всей содержательной работы. DeepSeek остаётся только
+# там, где модель не пишет и не проверяет медицинское содержание: быстрая классификация вопроса
+# (CLASS_QUICK), перевод запроса для PubMed (PUBMED_QUERY), маршрутизация (INTENT_ROUTER) и переписывание
+# запроса (QUERY_REWRITE); дальше — как второй проверяющий спорных мест (этап 2 плана MedAP).
+# Вернуть любую задачу можно без выкатки: TASK_MODEL_MAP_OVERRIDES или админка «Модели».
 
 
 def _overrides() -> dict[Task, str]:

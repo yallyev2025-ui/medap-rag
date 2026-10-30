@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  bot-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Тяжёлые модели поиска (torch и др.) в проверки не нужны: файлы подменяют их сами
+      - name: Install light dependencies
+        run: |
+          grep -vE '^(torch|sentence-transformers|transformers|onnxruntime)' requirements.txt > /tmp/req-light.txt
+          pip install -r /tmp/req-light.txt pytest reportlab numpy
+      - name: Run bot tests
+        run: python -m scripts.run_tests
