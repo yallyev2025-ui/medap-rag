@@ -56,6 +56,9 @@ class ChunkResult:
     chunk_index: int | None = None
 
 
+# MedAP, этап 1: у книги может быть несколько версий разбора рядом; на поиск отвечает только
+# активная (Book.active_version), пока владелец не переключит книгу. Условие стоит во всех
+# запросах поиска: старая выдача не меняется, новые фрагменты не видны до переключения.
 def _base_filters(
     stmt,
     source_type: str | None,
@@ -67,7 +70,7 @@ def _base_filters(
     # Отключённые/архивные источники не участвуют в поиске (§8 ТЗ, раздел 3
     # дополнения): фильтр по Book.status через JOIN — денормализовать статус в
     # каждый чанк не нужно, включение/отключение источника меняет одну строку.
-    stmt = stmt.join(Book, Book.id == BookChunk.book_id).where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+    stmt = stmt.join(Book, Book.id == BookChunk.book_id).where(Book.status.in_(ACTIVE_SOURCE_STATUSES), BookChunk.processing_version == Book.active_version)
     if source_type is not None:
         stmt = stmt.where(BookChunk.source_type == source_type)
     if subject is not None:
@@ -466,7 +469,7 @@ async def count_document_chunks(book_ids: Sequence[int], user_id: str) -> int:
     stmt = select(func.count(BookChunk.id)).where(
         BookChunk.book_id.in_(list(book_ids)), BookChunk.user_id == user_id
     )
-    stmt = stmt.join(Book, Book.id == BookChunk.book_id).where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+    stmt = stmt.join(Book, Book.id == BookChunk.book_id).where(Book.status.in_(ACTIVE_SOURCE_STATUSES), BookChunk.processing_version == Book.active_version)
     async with async_session() as session:
         return int((await session.execute(stmt)).scalar_one() or 0)
 
@@ -478,7 +481,7 @@ async def fetch_document_chunks(book_ids: Sequence[int], user_id: str) -> list[C
         select(*_CHUNK_COLUMNS)
         .where(BookChunk.book_id.in_(list(book_ids)), BookChunk.user_id == user_id)
         .join(Book, Book.id == BookChunk.book_id)
-        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES), BookChunk.processing_version == Book.active_version)
         .order_by(BookChunk.book_id, BookChunk.chunk_index)
     )
     async with async_session() as session:
@@ -503,7 +506,7 @@ async def fetch_neighbors(chunks: list[ChunkResult], user_id: str, score: float)
         select(*_CHUNK_COLUMNS)
         .where(tuple_(BookChunk.book_id, BookChunk.chunk_index).in_(sorted(pairs)), BookChunk.user_id == user_id)
         .join(Book, Book.id == BookChunk.book_id)
-        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES))
+        .where(Book.status.in_(ACTIVE_SOURCE_STATUSES), BookChunk.processing_version == Book.active_version)
     )
     async with async_session() as session:
         rows = (await session.execute(stmt)).all()

@@ -90,6 +90,12 @@ class Chunk:
     # (см. _add_char_offsets). Нужны для подсветки места ответа на этапе 3.
     char_start: int | None = None
     char_end: int | None = None
+    # MedAP, этап 1: структура учебника (заполняет rag.layout.annotate_chunks в глубоком
+    # разборе; у обычного разбора остаются умолчания, и действующая загрузка не меняется).
+    kind: str = "text"  # text | table
+    page_printed: int | None = None
+    section_path: str | None = None
+    needs_review: bool = False
 
 
 # Сколько подряд идущих страниц рендерим одним вызовом convert_from_path. Батч

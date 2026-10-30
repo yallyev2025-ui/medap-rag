@@ -90,3 +90,27 @@ def presigned_url(key: str, expires_seconds: int = 3600) -> str | None:
     except Exception:
         logger.exception("Не удалось создать presigned URL для %s", key)
         return None
+
+
+def upload_bytes(key: str, data: bytes, content_type: str = "image/png") -> str | None:
+    """Загружает бинарный артефакт (вырезанный рисунок учебника) по готовому ключу."""
+    if not is_configured():
+        return None
+    try:
+        _client().put_object(Bucket=settings.S3_BUCKET, Key=key, Body=data, ContentType=content_type)
+    except Exception:
+        logger.exception("Не удалось загрузить объект в S3 (%s)", key)
+        return None
+    return key
+
+
+def download_to(key: str, dest_path: str) -> bool:
+    """Скачивает объект в файл (оригинал книги для переобработки). False — нет S3 или ошибка."""
+    if not is_configured():
+        return False
+    try:
+        _client().download_file(settings.S3_BUCKET, key, dest_path)
+    except Exception:
+        logger.exception("Не удалось скачать объект из S3 (%s)", key)
+        return False
+    return True

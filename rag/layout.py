@@ -189,6 +189,94 @@ def table_to_text(rows: list[list[str]], caption: str | None = None) -> str:
     return f"{caption}\n{body}" if caption else body
 
 
+TABLE_PIECE_MAX_CHARS = 1400  # окно эмбеддера ~512 токенов; большая таблица режется по строкам
+
+
+def split_table_text(rows: list[list[str]], caption: str | None = None, max_chars: int = TABLE_PIECE_MAX_CHARS) -> list[str]:
+    """Таблица кусками для поиска. Режем только между строками, шапка повторяется в каждом
+    куске, чтобы фрагмент без шапки не терял смысл столбцов. Одна сверхдлинная строка остаётся целой."""
+    if not rows:
+        return []
+    header, body = rows[0], rows[1:]
+    head_text = ((caption + "\n") if caption else "") + " | ".join(header)
+    if not body:
+        return [head_text]
+    pieces: list[str] = []
+    current: list[str] = []
+    size = len(head_text)
+    for row in body:
+        line = " | ".join(row)
+        if current and size + len(line) + 1 > max_chars:
+            pieces.append(head_text + "\n" + "\n".join(current))
+            current, size = [], len(head_text)
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        pieces.append(head_text + "\n" + "\n".join(current))
+    return pieces
+
+
+def annotate_chunks(chunks: list, layouts: list["PageLayout"], low_confidence_pages: set[int] | None = None) -> list:
+    """Дополняет фрагменты текста структурой (печатная страница, путь раздела, «плохо читается»)
+    и добавляет фрагменты-таблицы. Возвращает новый список: сначала текст, затем таблицы."""
+    from rag.processor import Chunk  # ленивый импорт: processor не знает про layout
+
+    low = low_confidence_pages or set()
+    by_index = {layout.index: layout for layout in layouts}
+
+    for chunk in chunks:
+        if chunk.page_from is None:
+            continue
+        layout = by_index.get(chunk.page_from)
+        if layout is not None:
+            chunk.page_printed = layout.printed_page
+            chunk.section_path = layout.section_path
+        last = chunk.page_to if chunk.page_to is not None else chunk.page_from
+        chunk.needs_review = any(page in low for page in range(chunk.page_from, last + 1))
+
+    tables = []
+    for layout in layouts:
+        for table in layout.tables:
+            caption = None
+            if table.caption:
+                caption = f"{table.caption.kind_label} {table.caption.number}. {table.caption.text}".strip()
+            for piece in split_table_text(table.rows, caption):
+                tables.append(
+                    Chunk(
+                        content=piece,
+                        page_from=layout.index,
+                        page_to=layout.index,
+                        section=layout.headings[-1].text if layout.headings else None,
+                        kind="table",
+                        page_printed=layout.printed_page,
+                        section_path=layout.section_path,
+                        needs_review=layout.index in low,
+                    )
+                )
+    return list(chunks) + tables
+
+
+def ocr_page_confidences(pdf_path: str, page_numbers: list[int], dpi: int = 150) -> dict[int, float]:
+    """Средняя уверенность Tesseract по страницам-сканам (1-based). Без OCR в окружении — пусто.
+    Отдельный проход на меньшем разрешении: действующий OCR (`processor._ocr_pdf_pages`) не трогаем."""
+    try:
+        import pytesseract
+        from pdf2image import convert_from_path
+    except ImportError:
+        return {}
+    result: dict[int, float] = {}
+    for page in page_numbers:
+        try:
+            image = convert_from_path(pdf_path, dpi=dpi, first_page=page, last_page=page)[0]
+            data = pytesseract.image_to_data(image, lang="rus+eng", output_type=pytesseract.Output.DICT)
+        except Exception:
+            continue
+        confidence = ocr_confidence(data)
+        if confidence is not None:
+            result[page] = confidence
+    return result
+
+
 # --- Рисунки ------------------------------------------------------------------
 
 MIN_FIGURE_SIDE_PT = 80  # меньше — значок или логотип

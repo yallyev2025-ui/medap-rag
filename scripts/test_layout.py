@@ -3,10 +3,26 @@
 
 import io
 import os
+import sys
 import tempfile
+import types
+
+try:
+    import torch  # noqa: F401
+except ImportError:
+    sys.modules.setdefault(
+        "rag.embedder",
+        types.SimpleNamespace(embed_query=None, embed_passages=None, limited_threads=None, _get_model=None),
+    )
 
 from rag.layout import (
+    Caption,
+    FigureBlock,
     Heading,
+    PageLayout,
+    TableBlock,
+    annotate_chunks,
+    split_table_text,
     Line,
     body_font_size,
     clean_table,
@@ -92,6 +108,63 @@ def test_ocr_confidence() -> None:
     data = {"conf": ["95", "-1", "40", "60"], "text": ["слово", "", "плохо", "норм"]}
     assert round(ocr_confidence(data), 1) == 65.0
     assert needs_review(45.0) is True and needs_review(80.0) is False and needs_review(None) is False
+
+
+def test_big_table_is_split_between_rows_with_repeated_header() -> None:
+    rows = [["Вид", "Причина"]] + [[f"Строка {i}", "причина " * 20] for i in range(30)]
+    pieces = split_table_text(rows, "Таблица 1. Отёки", max_chars=600)
+    assert len(pieces) > 1
+    for piece in pieces:
+        assert piece.startswith("Таблица 1. Отёки\nВид | Причина")  # шапка в каждом куске
+        assert len(piece) < 900
+    assert sum(p.count("Строка") for p in pieces) == 30  # ни одна строка не потеряна
+    assert split_table_text([]) == []
+    assert split_table_text([["a", "b"]]) == ["a | b"]
+
+
+def test_annotate_chunks_adds_structure_and_tables() -> None:
+    from rag.processor import Chunk
+
+    chunks = [
+        Chunk("текст про отёк", page_from=2, page_to=2),
+        Chunk("текст на стыке страниц", page_from=2, page_to=3),
+        Chunk("без страницы", page_from=None, page_to=None),
+    ]
+    table = TableBlock(rows=[["Вид", "Причина"], ["Транссудат", "сердечная недостаточность"]], caption=Caption("table", "1", "Отёки"), bbox=(0, 0, 1, 1))
+    layouts = [
+        PageLayout(index=1, text="", printed_page=None),
+        PageLayout(index=2, text="x", printed_page=1, section_path="Глава 1 → Отёк", tables=[table], headings=[Heading(2, "Отёк")]),
+        PageLayout(index=3, text="y", printed_page=2, section_path="Глава 1 → Асцит"),
+    ]
+    result = annotate_chunks(chunks, layouts, low_confidence_pages={3})
+    assert result[0].page_printed == 1 and result[0].section_path == "Глава 1 → Отёк" and result[0].needs_review is False
+    assert result[1].needs_review is True  # захватывает страницу 3 с плохим OCR
+    assert result[2].page_printed is None
+    tables = [c for c in result if c.kind == "table"]
+    assert len(tables) == 1 and "Таблица 1. Отёки" in tables[0].content and tables[0].page_printed == 1
+    assert all(c.kind == "text" for c in result[:3])  # обычные фрагменты не тронуты
+
+
+def test_figure_rows_skip_repeated_decoration() -> None:
+    from PIL import Image
+    from scripts.load_books import _figure_rows
+
+    def png(color):
+        buffer = io.BytesIO()
+        Image.new("RGB", (200, 150), color).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    logo, schema = png((10, 10, 10)), png((200, 50, 50))
+    layouts = [
+        PageLayout(index=i, text="x", printed_page=i, figures=[FigureBlock(bbox=(0, 0, 200, 150), caption=None, png=logo)])
+        for i in range(1, 6)
+    ]
+    layouts[2].figures.append(FigureBlock(bbox=(0, 200, 200, 350), caption=Caption("figure", "1.1", "Механизм"), png=schema))
+    rows = _figure_rows(7, 2, layouts)
+    kinds = [(f.page, f.number, f.caption) for f, _ in rows]
+    assert (3, "1.1", "Механизм") in kinds
+    assert sum(1 for f, _ in rows if f.page != 3) == 2  # эмблема на 5 страницах остаётся не больше двух раз
+    assert all(f.s3_key.startswith("figures/7/v2/") and f.processing_version == 2 for f, _ in rows)
 
 
 def test_real_pdf_structure() -> None:
