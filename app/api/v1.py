@@ -39,6 +39,7 @@ from app.workflows.user_documents import (
     list_user_documents,
     search_user_documents,
 )
+from app.workflows.sources import get_figure_url, list_sources, search_figures
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
@@ -1447,6 +1448,121 @@ class UsageMonthResponse(BaseModel):
     userId: str
     month: str
     spendRub: float
+
+
+class SourceBook(BaseModel):
+    id: int
+    title: str
+    authors: list[str]
+    subject: str
+    sourceType: str
+    edition: str | None = None
+    year: int | None = None
+    publisher: str | None = None
+    isbn: str | None = None
+    authorityLevel: str
+    rights: str
+    status: str
+    processingVersion: int
+    activeVersion: int
+    chunks: int
+    tables: int
+    figures: int
+    needsReview: int
+    processedAt: str | None = None
+
+
+class SourceBooksResponse(BaseModel):
+    books: list[SourceBook]
+
+
+class FigureOut(BaseModel):
+    id: int
+    bookId: int
+    bookTitle: str
+    page: int
+    pagePrinted: int | None = None
+    sectionPath: str | None = None
+    kind: str
+    number: str | None = None
+    caption: str | None = None
+    description: str | None = None
+    rights: str
+
+
+class FiguresResponse(BaseModel):
+    figures: list[FigureOut]
+
+
+class FigureDetailResponse(BaseModel):
+    figure: FigureOut
+    # Временная ссылка на картинку; None — у книги права «только внутри» или картинки нет
+    imageUrl: str | None = None
+
+
+def _figure_out(item) -> FigureOut:
+    return FigureOut(
+        id=item.id,
+        bookId=item.book_id,
+        bookTitle=item.book_title,
+        page=item.page,
+        pagePrinted=item.page_printed,
+        sectionPath=item.section_path,
+        kind=item.kind,
+        number=item.number,
+        caption=item.caption,
+        description=item.description,
+        rights=item.rights,
+    )
+
+
+@router.get("/books", response_model=SourceBooksResponse)
+async def source_books(subject: str | None = None) -> SourceBooksResponse:
+    """Реестр источников для сайта (MedAP, этап 1): книги предмета со счётчиками активной версии."""
+    items = await list_sources(subject)
+    return SourceBooksResponse(
+        books=[
+            SourceBook(
+                id=i.id,
+                title=i.title,
+                authors=i.authors,
+                subject=i.subject,
+                sourceType=i.source_type,
+                edition=i.edition,
+                year=i.year,
+                publisher=i.publisher,
+                isbn=i.isbn,
+                authorityLevel=i.authority_level,
+                rights=i.rights,
+                status=i.status,
+                processingVersion=i.processing_version,
+                activeVersion=i.active_version,
+                chunks=i.chunks,
+                tables=i.tables,
+                figures=i.figures,
+                needsReview=i.needs_review,
+                processedAt=i.processed_at,
+            )
+            for i in items
+        ]
+    )
+
+
+@router.get("/figures", response_model=FiguresResponse)
+async def figures_search(
+    bookId: int | None = None, q: str | None = None, section: str | None = None, limit: int = 20
+) -> FiguresResponse:
+    """Рисунки учебников активной версии: по книге, разделу и словам подписи/описания."""
+    return FiguresResponse(figures=[_figure_out(i) for i in await search_figures(bookId, q, limit, section)])
+
+
+@router.get("/figures/{figure_id}", response_model=FigureDetailResponse)
+async def figure_detail(figure_id: int) -> FigureDetailResponse:
+    found = await get_figure_url(figure_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Рисунок не найден")
+    item, url = found
+    return FigureDetailResponse(figure=_figure_out(item), imageUrl=url)
 
 
 @router.get("/usage/month", response_model=UsageMonthResponse)

@@ -104,6 +104,23 @@ async def init_db() -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_books_status ON books (status);")
         )
+
+        # MedAP, этап 1: реестр источников, версии обработки, структура учебника.
+        # Только добавления: действующий поиск и контракты /v1 не меняются.
+        for stmt in (
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS processing_version INTEGER NOT NULL DEFAULT 1;",
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS active_version INTEGER NOT NULL DEFAULT 1;",
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS rights VARCHAR(16) NOT NULL DEFAULT 'show';",
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS isbn VARCHAR(32);",
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS publisher VARCHAR(255);",
+            "ALTER TABLE books ADD COLUMN IF NOT EXISTS authors_json TEXT;",
+            "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS processing_version INTEGER NOT NULL DEFAULT 1;",
+            "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS kind VARCHAR(12) NOT NULL DEFAULT 'text';",
+            "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS page_printed INTEGER;",
+            "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS section_path TEXT;",
+            "ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE;",
+        ):
+            await conn.execute(text(stmt))
     await engine.dispose()
 
 

@@ -81,6 +81,19 @@ class Book(Base):
     # определяется, что версия обновилась. None у обычных источников.
     external_ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # --- MedAP, этап 1: реестр источников и версии обработки -----------------
+    # Версия разбора книги. Новая версия строится РЯДОМ со старой (фрагменты с
+    # другим processing_version); отвечает на поиск `active_version`, пока владелец
+    # не переключит книгу по отчёту (docs/medap/plan, часть Б0).
+    processing_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # show — рисунки/страницы можно показывать студентам; internal — только для внутренней работы
+    rights: Mapped[str] = mapped_column(String(16), nullable=False, default="show")
+    isbn: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    publisher: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Список авторов JSON-массивом строк (поле author остаётся одной строкой для показа)
+    authors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class BookChunk(Base):
     __tablename__ = "book_chunks"
@@ -129,6 +142,18 @@ class BookChunk(Base):
     # места в учебнике на этапе 3 (Source Viewer).
     char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- MedAP, этап 1: структура учебника ------------------------------------
+    # Версия обработки книги, к которой относится фрагмент (см. Book.active_version)
+    processing_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # text | table | footnote | formula — вид фрагмента; таблицы не режутся посреди строки
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, default="text")
+    # Номер страницы, напечатанный в книге (page_from — индекс страницы PDF)
+    page_printed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Путь «Глава → раздел → подраздел» (section — только ближайший заголовок)
+    section_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Плохо читается (OCR с низкой уверенностью): слабое подтверждение, нужна проверка
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # BM25 (§7 ТЗ): GENERATED ALWAYS AS ... STORED-колонка. Computed() здесь
     # даёт то же выражение, что и идемпотентный ALTER в db/init_db.py (нужный
@@ -450,4 +475,34 @@ class SlidesBenchFile(Base):
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BookFigure(Base):
+    """Рисунок, схема или фрагмент страницы учебника с подписью (MedAP, этап 1).
+
+    Картинка лежит в S3; здесь — где она была в книге, подпись и (позже) описание, по
+    которому её находят при написании темы. Права на показ — `Book.rights`.
+    """
+
+    __tablename__ = "book_figures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True, nullable=False)
+    processing_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Индекс страницы PDF и напечатанный номер
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_printed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # figure | scheme | graph | page_fragment
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="figure")
+    number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Что на рисунке (кратко, одним вызовом модели с кэшем по хэшу картинки); None — ещё не описан
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    s3_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
