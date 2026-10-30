@@ -1,9 +1,9 @@
 """Версия бота презентаций и сверка с сайтом: по команде /version владелец видит, выложено ли новое и бот, и сайт (а не одно из двух)."""
 
 # Поднимать вместе с `BOT_API_VERSION` в apps/web/src/lib/slides/bot-api.ts, когда меняется «дверь» между ботом и сайтом.
-BOT_VERSION = "2026-10-29.1"
+BOT_VERSION = "2026-10-30.1"
 # Что бот ждёт от сайта (те же имена, что `BOT_API_FEATURES` на сайте)
-NEEDS = ("options", "articles", "photo_upload", "open_link", "suggest_photos", "create_modes", "uploads", "upload_file", "photo_auto", "review", "digest", "gift", "public_stats", "referral", "channel_claim", "news")
+NEEDS = ("options", "articles", "photo_upload", "open_link", "suggest_photos", "create_modes", "uploads", "upload_file", "photo_auto", "review", "digest", "gift", "public_stats", "referral", "ref_shot", "news", "grant", "leaders", "nudges", "ref_notices", "plan_photos")
 
 
 def compare(site_reply: dict) -> str:

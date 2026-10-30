@@ -135,6 +135,37 @@ async def nudge_loop(bot: Bot) -> None:
             logger.exception("Серия напоминаний не отработала")
 
 
+NOTICE_EVERY = 300  # раз в пять минут
+
+
+async def _send_paid_notices(bot: Bot) -> int:
+    """«Друг оплатил» пригласившим: сайт отдаёт список и сразу отмечает его отправленным (двойной отправки нет)."""
+    from slides_bot import texts as T
+
+    if not settings.ADMIN_IDS:
+        return 0
+    r = await slides_site.site.call("ref_notices", settings.ADMIN_IDS[0])
+    sent = 0
+    for n in (r.get("notices") or []) if r.get("ok") else []:
+        try:
+            await bot.send_message(int(n["telegramId"]), T.paid_notice_text(n), reply_markup=T.kb([[("🤝 Пригласить друга", "m:ref")]]))
+            sent += 1
+        except Exception:  # noqa: BLE001 — человек заблокировал бота
+            pass
+        await asyncio.sleep(0.05)
+    return sent
+
+
+async def notice_loop(bot: Bot) -> None:
+    """Раз в пять минут: кому из пригласивших сообщить, что друг оплатил. Сбой — в журнал, цикл живёт."""
+    while True:
+        await asyncio.sleep(NOTICE_EVERY)
+        try:
+            await _send_paid_notices(bot)
+        except Exception:
+            logger.exception("Уведомления «друг оплатил» не отработали")
+
+
 async def run_slides_bot() -> None:
     """Long polling второго бота. Любой сбой превращается в понятное сообщение владельцу и не останавливает основной бот."""
     if not settings.SLIDES_BOT_TOKEN:
@@ -155,11 +186,13 @@ async def run_slides_bot() -> None:
         await _tell_owners(f"Бот презентаций запущен: @{me.username}. Откройте его и нажмите «Начать».\n{report}" + ("".join(f"\n⚠ {p}" for p in problems)))
         digest_task = asyncio.create_task(digest_loop())
         nudge_task = asyncio.create_task(nudge_loop(bot))
+        notice_task = asyncio.create_task(notice_loop(bot))
         try:
             await build_dispatcher().start_polling(bot)
         finally:
             digest_task.cancel()
             nudge_task.cancel()
+            notice_task.cancel()
     except TelegramUnauthorizedError:
         logger.error("Telegram не принял SLIDES_BOT_TOKEN")
         await _tell_owners("Бот презентаций не запущен: Telegram не принял токен (SLIDES_BOT_TOKEN). Скопируйте токен из @BotFather целиком, без пробелов и кавычек.")

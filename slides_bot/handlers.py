@@ -68,6 +68,10 @@ class Topup(StatesGroup):
     amount = State()
 
 
+class PlanEdit(StatesGroup):
+    wish = State()  # человек пишет словами, что поменять в плане картинки
+
+
 class Announce(StatesGroup):
     text = State()  # владелец пишет объявление всем пользователям бота
 
@@ -1365,20 +1369,73 @@ PHOTO_POLL_SECONDS = 4
 PHOTO_POLL_LIMIT = 75  # ~5 минут
 
 
+async def _send_plans(bot: Bot, chat_id: int, run_id: str, plans: list[dict[str, Any]]) -> None:
+    """Показать план картинок: по сообщению на картинку, с кнопками «Нарисовать», «Изменить», «Убрать». Пока человек не нажал «Нарисовать», ничего не рисуется и не тратится."""
+    await bot.send_message(chat_id, T.PLAN_HEAD)
+    for pl in plans:
+        await bot.send_message(chat_id, T.picture_plan_text(pl), reply_markup=T.picture_plan_kb(run_id, str(pl["id"])))
+
+
 @router.callback_query(F.data.startswith("ph:"))
 async def cb_photos(call: CallbackQuery, bot: Bot) -> None:
-    """«Подобрать фото ИИ»: сайт делает подбор фоном, бот ждёт и показывает предложения с кнопками «Поставить» и «Убрать»."""
+    """«Подобрать фото ИИ»: сначала план — что именно нарисует ИИ (до трёх картинок), человек правит словами и рисует по одной."""
     await call.answer()
     run_id = call.data[3:]
-    tg = call.from_user.id
-    r = await site().call("suggest_photos", tg, runId=run_id)
+    r = await site().call("plan_photos", call.from_user.id, runId=run_id)
     if not r.get("ok"):
-        await call.message.answer(str(r.get("error") or "Не получилось начать подбор"))
+        await call.message.answer(str(r.get("error") or "Не получилось составить план картинок"))
         return
-    await call.message.answer(T.PHOTO_WAIT)
+    plans = list(r.get("plans") or [])
+    if not plans:
+        await call.message.answer(T.PHOTO_NONE)
+        return
+    await _send_plans(bot, call.message.chat.id, run_id, plans)
+
+
+@router.callback_query(F.data.startswith("pp:d:"))
+async def cb_plan_draw(call: CallbackQuery, bot: Bot) -> None:
+    """Нарисовать одну картинку по плану; ждём результат и показываем её с кнопками «Поставить»/«Убрать»."""
+    await call.answer()
+    _, _, run_id, plan_id = call.data.split(":")
+    tg = call.from_user.id
+    r = await site().call("plan_draw", tg, runId=run_id, planId=plan_id)
+    if not r.get("ok"):
+        await call.message.answer(str(r.get("error") or "Не получилось начать рисование"))
+        return
+    await call.message.answer(T.PLAN_DRAWING)
     t = asyncio.create_task(_poll_photos(bot, call.message.chat.id, tg, run_id, str(r["jobId"])))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
+
+
+@router.callback_query(F.data.startswith("pp:x:"))
+async def cb_plan_drop(call: CallbackQuery) -> None:
+    await call.answer()
+    _, _, run_id, plan_id = call.data.split(":")
+    r = await site().call("plan_drop", call.from_user.id, runId=run_id, planId=plan_id)
+    await call.message.answer("Убрал из плана." if r.get("ok") else str(r.get("error") or "Не получилось убрать"))
+
+
+@router.callback_query(F.data.startswith("pp:e:"))
+async def cb_plan_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    _, _, run_id, plan_id = call.data.split(":")
+    await state.set_state(PlanEdit.wish)
+    await state.update_data(plan_run=run_id, plan_id=plan_id)
+    await call.message.answer(T.PLAN_EDIT_ASK, reply_markup=T.kb([[("⬅ Отмена", "m:home")]]))
+
+
+@router.message(PlanEdit.wish, F.text)
+async def got_plan_wish(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Человек написал, что поменять: ИИ пересобирает подробное описание для художника, человек видит новый пересказ и решает дальше."""
+    data = await state.get_data()
+    run_id, plan_id = str(data.get("plan_run") or ""), str(data.get("plan_id") or "")
+    r = await site().call("plan_refine", message.from_user.id, runId=run_id, planId=plan_id, wish=(message.text or "").strip()[:600])
+    if not r.get("ok"):
+        await message.answer(str(r.get("error") or "Не получилось изменить план"))
+        return
+    await state.clear()
+    await message.answer(T.picture_plan_text(r["plan"]), reply_markup=T.picture_plan_kb(run_id, plan_id))
 
 
 async def _poll_photos(bot: Bot, chat_id: int, tg: int, run_id: str, job_id: str) -> None:

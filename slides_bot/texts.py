@@ -856,3 +856,31 @@ def nudge_kb(step: int) -> InlineKeyboardMarkup:
 
 # Какие шаги серии идут с картинкой-карточкой
 NUDGE_CARDS = {3: "friend", 5: "month"}
+
+
+# ---------- план картинок ИИ (Telegram) ----------
+
+PLAN_HEAD = "Вот что нарисует ИИ. Пока вы не нажмёте «Нарисовать», ничего не рисуется и не тратится. Можно поправить словами."
+PLAN_DRAWING = "Рисую эту картинку, обычно до минуты. Пришлю, как будет готово."
+PLAN_EDIT_ASK = "Что поменять на картинке? Напишите своими словами, например: «сердце крупнее, без стента»."
+
+
+def picture_plan_text(pl: dict[str, Any]) -> str:
+    slide = int(pl.get("slide") or 0) + 1
+    edited = int(pl.get("edits") or 0)
+    return f"Слайд {slide}: {pl.get('scene', '')}" + (f"\n(описание обновлено по вашему пожеланию: {edited})" if edited else "")
+
+
+def picture_plan_kb(run_id: str, plan_id: str) -> InlineKeyboardMarkup:
+    return kb([[("🎨 Нарисовать", f"pp:d:{run_id}:{plan_id}")], [("✏️ Изменить", f"pp:e:{run_id}:{plan_id}"), ("🗑 Убрать", f"pp:x:{run_id}:{plan_id}")]])
+
+
+def paid_notice_text(n: dict[str, Any]) -> str:
+    """Пригласившему: друг оплатил презентацию — подарок начислен."""
+    count = int(n.get("count") or 1)
+    label = str(n.get("label") or "")
+    head = "🎉 Ваш друг оплатил презентацию — вам в подарок такая же" + (f" ({label})" if label else "") + "." if count == 1 else f"🎉 Друзья оплатили презентации: {count}. Подарки начислены вам на баланс презентаций."
+    month = int(n.get("paidMonth") or 0)
+    disc = int(n.get("discountPercent") or 0)
+    tail = f"\nОплатили за последние 30 дней: {month}." + (f" Ваша скидка на отдельные презентации: {disc} %." if disc else "")
+    return head + tail + "\nПодарок спишется автоматически, когда вы создадите новую презентацию."

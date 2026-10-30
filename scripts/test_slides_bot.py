@@ -166,6 +166,16 @@ class FakeSite:
             return {"ok": True, "code": "abcd2345", "joined": 7, "paid": 3, "rate": 43, "discountPercent": 0, "next": {"need": 2, "percent": 5}, "steps": [{"friends": 5, "percent": 5}, {"friends": 10, "percent": 10}, {"friends": 15, "percent": 15}]}
         if action == "ref_shot":
             return {"ok": True}
+        if action == "plan_photos":
+            return {"ok": True, "plans": [{"id": "plan0000000000000001", "slide": 2, "scene": "Крупное сердце в разрезе, видны четыре камеры", "edits": 0}, {"id": "plan0000000000000002", "slide": 5, "scene": "Ступка с таблетками на светлом фоне", "edits": 0}]}
+        if action == "plan_refine":
+            return {"ok": True, "plan": {"id": p.get("planId"), "slide": 2, "scene": "Крупное сердце без стента", "edits": 1}}
+        if action == "plan_draw":
+            return {"ok": True, "jobId": "job-draw"}
+        if action == "plan_drop":
+            return {"ok": True}
+        if action == "ref_notices":
+            return {"ok": True, "notices": getattr(self, "notices", [])}
         if action == "grant":
             if telegram_id not in (999,):
                 return {"ok": False, "error": "Нет доступа"}
@@ -696,7 +706,13 @@ async def flow_checks() -> None:
     bot_p = fake_bot()
     call = FakeCall("ph:run1")
     await H.cb_photos(call, bot_p)
-    ok(T.PHOTO_WAIT in texts_of(call.message) and [c for c in fs.calls if c[0] == "suggest_photos"][-1][2] == {"runId": "run1"}, "кнопка «Подобрать фото ИИ» запускает подбор на сайте и говорит человеку подождать")
+    shown = [str(c.args[1]) for c in bot_p.send_message.await_args_list]
+    ok([c for c in fs.calls if c[0] == "plan_photos"][-1][2] == {"runId": "run1"} and len(shown) == 3 and "ничего не рисуется" in shown[0], "кнопка «Подобрать фото ИИ» сначала показывает план: что нарисует ИИ, без рисования")
+    ok(not any(c[0] == "suggest_photos" for c in fs.calls[-3:]), "сразу ничего не рисуется")
+    bot_p.send_message.reset_mock()
+    call = FakeCall("pp:d:run1:plan0000000000000001")
+    await H.cb_plan_draw(call, bot_p)
+    ok(T.PLAN_DRAWING in texts_of(call.message) and [c for c in fs.calls if c[0] == "plan_draw"][-1][2] == {"runId": "run1", "planId": "plan0000000000000001"}, "«Нарисовать» запускает рисование одной картинки по плану")
     await asyncio.gather(*list(H._tasks))
     sent_p = [str(c.args[1]) for c in bot_p.send_message.await_args_list]
     ok(any("предложено картинок — 2" in t and "Слайд 5" in t and "клише" in t for t in sent_p), f"по слайдам объяснено, что получилось и почему нет: {sent_p}")
@@ -1118,6 +1134,56 @@ def bot2_with_username():
     return B()
 
 
+async def plan_checks() -> None:
+    """План картинок ИИ в Telegram: сначала показываем, что будет нарисовано; правка словами; рисуется по одной; «друг оплатил» пригласившему."""
+    fs = FakeSite()
+    fs.linked = True
+    slides_site.site = fs
+    storage = MemoryStorage()
+
+    def ctx(tg: int) -> FSMContext:
+        return FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=tg, user_id=tg))
+
+    class B:
+        def __init__(self) -> None:
+            self.sent: list[tuple[int, str, object]] = []
+
+        async def send_message(self, chat_id, text, reply_markup=None, **_):
+            if chat_id == 502:
+                raise RuntimeError("blocked")
+            self.sent.append((chat_id, text, reply_markup))
+
+    bot = B()
+    call = FakeCall("ph:run0000000000000001", tg=333)
+    await H.cb_photos(call, bot)
+    ok(len(bot.sent) == 3, "бот показал заголовок и два плана (по сообщению на картинку)")
+    ok("ничего не рисуется и не тратится" in bot.sent[0][1], "сказано, что пока ничего не рисуется и не тратится")
+    ok("Слайд 3: Крупное сердце в разрезе" in bot.sent[1][1], "в плане описание того, что будет нарисовано, по-русски")
+    cbs = [b.callback_data for row in bot.sent[1][2].inline_keyboard for b in row]
+    ok(cbs == ["pp:d:run0000000000000001:plan0000000000000001", "pp:e:run0000000000000001:plan0000000000000001", "pp:x:run0000000000000001:plan0000000000000001"], "у плана кнопки «Нарисовать», «Изменить», «Убрать»")
+    ok(not any(c[0] == "plan_draw" for c in fs.calls), "до нажатия «Нарисовать» рисование не запущено")
+    # правка словами
+    await H.cb_plan_edit(FakeCall("pp:e:run0000000000000001:plan0000000000000001", tg=333), ctx(333))
+    ok(await ctx(333).get_state() == H.PlanEdit.wish.state, "бот ждёт, что человек напишет")
+    m = FakeMessage(tg=333, text="сделай сердце крупнее, без стента")
+    await H.got_plan_wish(m, ctx(333), bot)
+    ok(any(c[0] == "plan_refine" and "без стента" in c[2].get("wish", "") for c in fs.calls), "пожелание ушло сайту")
+    ok("Крупное сердце без стента" in texts_of(m) and "обновлено по вашему пожеланию" in texts_of(m), "человек видит новый пересказ плана")
+    # убрать
+    call = FakeCall("pp:x:run0000000000000001:plan0000000000000002", tg=333)
+    await H.cb_plan_drop(call)
+    ok("Убрал из плана" in texts_of(call.message), "план можно убрать")
+    # «друг оплатил»
+    from slides_bot import runner as R
+
+    fs.notices = [{"telegramId": 801, "count": 1, "label": "до 20 слайдов", "paidMonth": 1, "discountPercent": 0}, {"telegramId": 502, "count": 2, "label": "", "paidMonth": 5, "discountPercent": 5}, {"telegramId": 803, "count": 3, "label": "", "paidMonth": 6, "discountPercent": 5}]
+    bot.sent.clear()
+    sent = await R._send_paid_notices(bot)
+    ok(sent == 2 and [c for c, _, _ in bot.sent] == [801, 803], "уведомления ушли по списку сайта, заблокировавший пропущен")
+    ok("Ваш друг оплатил презентацию" in bot.sent[0][1] and "до 20 слайдов" in bot.sent[0][1] and "спишется автоматически" in bot.sent[0][1], "одному другу — понятное сообщение с размером подарка")
+    ok("Друзья оплатили презентации: 3" in bot.sent[1][1] and "скидка на отдельные презентации: 5 %" in bot.sent[1][1], "нескольким — одно сообщение со счётом и скидкой")
+
+
 async def gift_checks() -> None:
     """Подарок презентации через Telegram: ссылка-подарок для друга (с входом по пути), подарить из пакета, отменить."""
     fs = FakeSite()
@@ -1203,6 +1269,7 @@ async def main() -> None:
     await gift_checks()
     await referral_checks()
     await share_checks()
+    await plan_checks()
     print(f"OK: {checks} проверок")
 
 
