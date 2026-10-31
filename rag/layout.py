@@ -163,6 +163,63 @@ def section_path(stack: list[Heading]) -> str | None:
     return " → ".join(h.text for h in stack) or None
 
 
+# --- Сноски и формулы ------------------------------------------------------------
+
+FOOTNOTE_ZONE_SHARE = 0.80  # сноски стоят в нижних 20 % страницы
+FOOTNOTE_SIZE_RATIO = 0.90  # и набраны мельче основного текста
+_FOOTNOTE_MARK = re.compile(r"^\s*(?:\d{1,2}|[*†‡§¹²³⁴⁵⁶⁷⁸⁹])\s*[).:]?\s+\S")
+
+_MATH_CHARS = set("=+−×÷±≈≠≤≥<>∑∫√∞∂∆∇^_")
+_GREEK = set("αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΘΛΞΠΣΦΨΩ")
+FORMULA_MAX_CHARS = 160
+
+
+def detect_footnotes(lines: list[Line], body_size: float | None, page_height: float) -> list[str]:
+    """Сноски: строки в нижней зоне страницы, мельче основного текста, начинающиеся с номера или
+    значка (`1 Текст`, `* Текст`). Продолжение сноски (строка мельче без значка сразу под ней) приклеивается."""
+    if not body_size:
+        return []
+    notes: list[str] = []
+    for line in lines:
+        small = line.size <= body_size * FOOTNOTE_SIZE_RATIO
+        in_zone = line.top >= page_height * FOOTNOTE_ZONE_SHARE
+        if not (small and in_zone):
+            continue
+        if _FOOTNOTE_MARK.match(line.text):
+            notes.append(line.text)
+        elif notes:
+            notes[-1] = f"{notes[-1]} {line.text}"
+    return notes
+
+
+def is_formula_line(text: str) -> bool:
+    """Короткая строка, где много математических знаков и мало слов: `pH = pK + lg([A⁻]/[HA])`.
+    Обычное предложение со знаком «=» формулой не считается."""
+    stripped = text.strip()
+    if not stripped or len(stripped) > FORMULA_MAX_CHARS:
+        return False
+    symbols = sum(1 for ch in stripped if ch in _MATH_CHARS or ch in _GREEK)
+    words = [w for w in re.findall(r"[A-Za-zА-Яа-яЁё]{4,}", stripped)]
+    has_equals = "=" in stripped
+    return symbols >= 2 and len(words) <= 3 and (has_equals or symbols >= 3)
+
+
+def collect_formulas(lines: list[Line]) -> list[str]:
+    """Формулы страницы: подряд идущие формульные строки склеиваются в одну."""
+    formulas: list[str] = []
+    previous_was_formula = False
+    for line in lines:
+        if is_formula_line(line.text):
+            if previous_was_formula:
+                formulas[-1] = f"{formulas[-1]} {line.text.strip()}"
+            else:
+                formulas.append(line.text.strip())
+            previous_was_formula = True
+        else:
+            previous_was_formula = False
+    return formulas
+
+
 # --- Таблицы ------------------------------------------------------------------
 
 
@@ -253,7 +310,25 @@ def annotate_chunks(chunks: list, layouts: list["PageLayout"], low_confidence_pa
                         needs_review=layout.index in low,
                     )
                 )
-    return list(chunks) + tables
+    extras = []
+    for layout in layouts:
+        for kind, items in (("footnote", layout.footnotes), ("formula", layout.formulas)):
+            for text in items:
+                if len(text) < 6:
+                    continue
+                extras.append(
+                    Chunk(
+                        content=text,
+                        page_from=layout.index,
+                        page_to=layout.index,
+                        section=layout.headings[-1].text if layout.headings else None,
+                        kind=kind,
+                        page_printed=layout.printed_page,
+                        section_path=layout.section_path,
+                        needs_review=layout.index in low,
+                    )
+                )
+    return list(chunks) + tables + extras
 
 
 def ocr_page_confidences(pdf_path: str, page_numbers: list[int], dpi: int = 150) -> dict[int, float]:
@@ -344,6 +419,8 @@ class PageLayout:
     section_path: str | None = None
     tables: list[TableBlock] = field(default_factory=list)
     figures: list[FigureBlock] = field(default_factory=list)
+    footnotes: list[str] = field(default_factory=list)
+    formulas: list[str] = field(default_factory=list)
 
 
 def _group_lines(words: list[dict]) -> list[Line]:
@@ -389,7 +466,8 @@ def analyze_pdf(pdf_path: str, with_figure_images: bool = False, figure_dpi: int
 
             candidates.append(printed_page_candidate([line.text for line in lines]))
 
-            headings = detect_headings(lines, body_font_size(lines))
+            body_size = body_font_size(lines)
+            headings = detect_headings(lines, body_size)
             stack = update_section_stack(stack, headings)
 
             tables: list[TableBlock] = []
@@ -415,6 +493,8 @@ def analyze_pdf(pdf_path: str, with_figure_images: bool = False, figure_dpi: int
                     section_path=section_path(stack),
                     tables=tables,
                     figures=figures,
+                    footnotes=detect_footnotes(lines, body_size, page.height),
+                    formulas=collect_formulas(lines),
                 )
             )
             page.flush_cache()

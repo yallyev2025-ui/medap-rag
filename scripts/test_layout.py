@@ -18,6 +18,9 @@ except ImportError:
 from rag.layout import (
     Caption,
     FigureBlock,
+    collect_formulas,
+    detect_footnotes,
+    is_formula_line,
     Heading,
     PageLayout,
     TableBlock,
@@ -108,6 +111,37 @@ def test_ocr_confidence() -> None:
     data = {"conf": ["95", "-1", "40", "60"], "text": ["слово", "", "плохо", "норм"]}
     assert round(ocr_confidence(data), 1) == 65.0
     assert needs_review(45.0) is True and needs_review(80.0) is False and needs_review(None) is False
+
+
+def test_footnotes_in_bottom_zone_small_font_with_mark() -> None:
+    lines = [
+        Line("Основной текст страницы про отёк и его механизмы.", 10, 100),
+        Line("1 Здесь и далее — по данным Новицкого.", 7, 760),
+        Line("продолжение сноски на второй строке", 7, 770),
+        Line("* Второе примечание.", 7, 785),
+        Line("2 мелкий текст, но выше зоны сносок", 7, 300),  # не в нижней зоне
+        Line("3 крупный текст внизу", 10, 790),  # не мелкий
+    ]
+    notes = detect_footnotes(lines, 10, 842)
+    assert notes == ["1 Здесь и далее — по данным Новицкого. продолжение сноски на второй строке", "* Второе примечание."]
+    assert detect_footnotes(lines, None, 842) == []
+
+
+def test_formulas_are_recognised_but_sentences_are_not() -> None:
+    assert is_formula_line("pH = pK + lg([A] / [HA])") is True
+    assert is_formula_line("СО = ЧСС × УО") is True
+    assert is_formula_line("Р = Q × R ≥ 90") is True
+    assert is_formula_line("Артериальное давление равно произведению сердечного выброса на сопротивление = норма") is False
+    assert is_formula_line("") is False
+    lines = [Line("СО = ЧСС × УО", 10, 100), Line("МОК = СО × ЧСС", 10, 112), Line("Обычный текст между формулами про сердце.", 10, 124), Line("АД = МОК × ОПСС", 10, 136)]
+    assert collect_formulas(lines) == ["СО = ЧСС × УО МОК = СО × ЧСС", "АД = МОК × ОПСС"]
+
+
+def test_annotate_adds_footnote_and_formula_chunks() -> None:
+    layout = PageLayout(index=4, text="x", printed_page=3, section_path="Глава 2", footnotes=["1 Сноска про дозу."], formulas=["СО = ЧСС × УО"])
+    result = annotate_chunks([], [layout])
+    kinds = sorted((c.kind, c.page_printed) for c in result)
+    assert kinds == [("footnote", 3), ("formula", 3)]
 
 
 def test_big_table_is_split_between_rows_with_repeated_header() -> None:

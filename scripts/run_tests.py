@@ -14,6 +14,7 @@ PYTEST_FILES = [
     "scripts/test_layout.py",
     "scripts/test_sources.py",
     "scripts/test_versions.py",
+    "scripts/test_book_admin.py",
     "scripts/test_verification.py",
     "scripts/test_reranker_switch.py",
 ]

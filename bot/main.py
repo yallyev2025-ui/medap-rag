@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 async def _run_bot() -> None:
     admin.cleanup_addbook_tmp()
     await init_db()
+    # MedAP, этап 1: задачи над книгами, прерванные перезапуском, больше не выполняются
+    from app.workflows.book_admin import mark_stale_tasks_failed
+
+    await mark_stale_tasks_failed()
 
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     dp = Dispatcher()

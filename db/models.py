@@ -506,3 +506,22 @@ class BookFigure(Base):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bbox: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BookTask(Base):
+    """Фоновая задача над книгой, запущенная с сайта (MedAP, этап 1): переобработка новой версией,
+    описание рисунков. Состояние в БД, а не в памяти процесса: переживает перезапуск контейнера и
+    видно владельцу в Studio. Переключение версии выполняется сразу и задачи не требует."""
+
+    __tablename__ = "book_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True, nullable=False)
+    # reprocess | describe
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # running → done | error
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", index=True)
+    # Итог словами для владельца (что сделано) или причина ошибки
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

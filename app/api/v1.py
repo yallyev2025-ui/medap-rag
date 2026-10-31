@@ -39,6 +39,7 @@ from app.workflows.user_documents import (
     list_user_documents,
     search_user_documents,
 )
+from app.workflows import book_admin
 from app.workflows.sources import get_figure_url, list_sources, search_figures
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
@@ -1563,6 +1564,168 @@ async def figure_detail(figure_id: int) -> FigureDetailResponse:
         raise HTTPException(status_code=404, detail="Рисунок не найден")
     item, url = found
     return FigureDetailResponse(figure=_figure_out(item), imageUrl=url)
+
+
+class VersionOut(BaseModel):
+    version: int
+    active: bool
+    chunks: int
+    tables: int
+    needsReview: int
+    pagesCovered: int
+    figures: int
+
+
+class BookTaskOut(BaseModel):
+    id: int
+    kind: str
+    status: str
+    detail: str
+    createdAt: str
+    finishedAt: str | None = None
+
+
+class BookDetailResponse(BaseModel):
+    versions: list[VersionOut]
+    tasks: list[BookTaskOut]
+
+
+class BookTaskStartResponse(BaseModel):
+    taskId: int | None = None
+    error: str | None = None
+
+
+class SwitchVersionRequest(BaseModel):
+    version: int = Field(ge=1)
+    force: bool = False
+
+
+class SwitchVersionResponse(BaseModel):
+    ok: bool
+    version: int | None = None
+    chunks: int | None = None
+    # Замечание перед переключением (новая версия хуже действующей); с `force` переключение проходит
+    error: str | None = None
+
+
+@router.get("/books/{book_id}", response_model=BookDetailResponse)
+async def book_detail(book_id: int) -> BookDetailResponse:
+    """Версии разбора книги и последние задачи — для отчёта перед переключением (Studio → Знания)."""
+    try:
+        reports = await book_admin.version_reports(book_id)
+    except book_admin.BookAdminError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    tasks = await book_admin.list_tasks(book_id)
+    return BookDetailResponse(
+        versions=[
+            VersionOut(
+                version=r.version, active=r.active, chunks=r.chunks, tables=r.tables,
+                needsReview=r.needs_review, pagesCovered=r.pages_covered, figures=r.figures,
+            )
+            for r in reports
+        ],
+        tasks=[
+            BookTaskOut(
+                id=t.id, kind=t.kind, status=t.status, detail=t.detail, createdAt=t.created_at.isoformat(),
+                finishedAt=t.finished_at.isoformat() if t.finished_at else None,
+            )
+            for t in tasks
+        ],
+    )
+
+
+async def _start_book_task(book_id: int, kind: str) -> BookTaskStartResponse:
+    try:
+        return BookTaskStartResponse(taskId=await book_admin.start_task(book_id, kind))
+    except book_admin.BookAdminError as exc:
+        return BookTaskStartResponse(error=str(exc))
+
+
+@router.post("/books/{book_id}/reprocess", response_model=BookTaskStartResponse)
+async def book_reprocess(book_id: int) -> BookTaskStartResponse:
+    """Пересобрать книгу глубоким разбором новой версией рядом со старой; поиск не меняется."""
+    return await _start_book_task(book_id, "reprocess")
+
+
+@router.post("/books/{book_id}/describe-figures", response_model=BookTaskStartResponse)
+async def book_describe_figures(book_id: int) -> BookTaskStartResponse:
+    """Описать рисунки книги моделью (один раз на картинку, с кэшем и потолком)."""
+    return await _start_book_task(book_id, "describe")
+
+
+@router.post("/books/{book_id}/switch", response_model=SwitchVersionResponse)
+async def book_switch(book_id: int, payload: SwitchVersionRequest) -> SwitchVersionResponse:
+    """Переключить поиск на версию книги (или откатить на прежнюю)."""
+    try:
+        result = await book_admin.switch_version(book_id, payload.version, payload.force)
+    except (book_admin.BookAdminError, ValueError) as exc:
+        return SwitchVersionResponse(ok=False, error=str(exc))
+    return SwitchVersionResponse(ok=True, version=result["version"], chunks=result["chunks"])
+
+
+class TaskModelOut(BaseModel):
+    task: str
+    provider: str
+    # код | окружение | админка
+    source: str
+    model: str
+
+
+class TaskModelsResponse(BaseModel):
+    tasks: list[TaskModelOut]
+    providers: list[str]
+
+
+class TaskModelSetRequest(BaseModel):
+    task: str
+    # Пусто — вернуть значение из кода/окружения (снять переопределение)
+    provider: str | None = None
+
+
+@router.get("/task-models", response_model=TaskModelsResponse)
+async def task_models() -> TaskModelsResponse:
+    """Какая модель стоит за каждой AI-задачей бота (страница Studio «Модели»)."""
+    from app.llm.registry import model_registry
+    from app.llm.task_map import effective_task_model_map
+
+    registry = model_registry()
+    mapping = await effective_task_model_map()
+    return TaskModelsResponse(
+        tasks=[
+            TaskModelOut(task=t.value, provider=p, source=src, model=registry[p].model_id if p in registry else "")
+            for t, (p, src) in sorted(mapping.items(), key=lambda kv: kv[0].value)
+        ],
+        providers=sorted(registry),
+    )
+
+
+@router.post("/task-models", response_model=TaskModelsResponse)
+async def task_models_set(payload: TaskModelSetRequest) -> TaskModelsResponse:
+    """Сменить модель задачи без выкладки (история сохраняется, возврат — пустой provider)."""
+    from app.llm.registry import model_registry
+    from app.llm.task_map import Task, clear_override_cache
+    from db.crud import apply_model_override
+
+    try:
+        task = Task(payload.task)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Неизвестная задача")
+    async with async_session() as session:
+        if payload.provider:
+            if payload.provider not in model_registry():
+                raise HTTPException(status_code=400, detail="Неизвестный провайдер")
+            await apply_model_override(session, task.value, payload.provider, actor="studio")
+        else:
+            from sqlalchemy import update as sa_update
+
+            from db.models import TaskModelOverride
+
+            await session.execute(
+                sa_update(TaskModelOverride).where(TaskModelOverride.task == task.value).values(active=False)
+            )
+        await session.commit()
+    clear_override_cache()
+    return await task_models()
 
 
 @router.get("/usage/month", response_model=UsageMonthResponse)
