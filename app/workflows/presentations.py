@@ -31,7 +31,14 @@ SONNET_MODEL = "claude-sonnet-5-5"
 LUNA_MODEL = "gpt-6-luna"
 
 # Шаги конвейера сайта: незнакомый шаг отклоняется (опечатка в сайте не должна молча уходить в модель).
-STEPS = frozenset({"outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place", "photoplan", "photojudge"})
+STEPS = frozenset(
+    {
+        "outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place", "photoplan", "photojudge",
+        # MedAP, этап 1: роли конвейера знаний (docs/medap/plan, таблица ролей) идут через тот же посредник:
+        # сайт стоит в России и до модели не дотягивается, бот — да. Потолки и учёт расхода общие.
+        "role_passport", "role_extractor", "role_writer", "role_checker", "role_fixer", "role_completeness",
+    }
+)
 
 # Снимки человека (шаг «look») и найденные/нарисованные картинки на строгом отборе (шаг «photojudge»): картинки уходят модели только на этом шаге; потолки защищают счёт и память.
 IMAGE_STEPS = frozenset({"look", "photojudge"})
