@@ -84,3 +84,18 @@ def test_outline_keeps_order_adds_parents_and_earliest_page() -> None:
         ("Глава 2", 55, 1),
         ("Глава 2 > Опухоли", 55, 2),
     ]
+
+
+def test_fragments_filter_books_dedupe_and_cut_text() -> None:
+    from types import SimpleNamespace
+
+    from app.workflows.sources import MAX_FRAGMENT_CHARS, fragments_from_chunks
+
+    def chunk(i, book, text="т"):
+        return SimpleNamespace(id=i, book_id=book, title="К", author="А", page_from=i, section="С", content=text, rerank_score=0.5)
+
+    chunks = [chunk(1, 10), chunk(1, 10), chunk(2, 11), chunk(3, 10, "я" * 5000), chunk(4, 10)]
+    out = fragments_from_chunks(chunks, {10}, 2)
+    assert [f.id for f in out] == [1, 3]
+    assert len(out[1].text) == MAX_FRAGMENT_CHARS
+    assert [f.id for f in fragments_from_chunks(chunks, None, 10)] == [1, 2, 3, 4]

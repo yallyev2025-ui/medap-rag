@@ -40,7 +40,7 @@ from app.workflows.user_documents import (
     search_user_documents,
 )
 from app.workflows import book_admin
-from app.workflows.sources import book_outline, get_figure_url, list_sources, search_figures
+from app.workflows.sources import book_outline, fragments_from_chunks, get_figure_url, list_sources, search_figures
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
@@ -1622,6 +1622,28 @@ class BookOutlineResponse(BaseModel):
     entries: list[OutlineEntryOut]
 
 
+class BookSearchRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=500)
+    subject: str | None = None
+    bookIds: list[int] | None = Field(default=None, max_length=30)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class FragmentOut(BaseModel):
+    id: int
+    bookId: int | None = None
+    title: str
+    author: str
+    page: int | None = None
+    section: str | None = None
+    text: str
+    score: float | None = None
+
+
+class BookSearchResponse(BaseModel):
+    fragments: list[FragmentOut]
+
+
 class SwitchVersionRequest(BaseModel):
     version: int = Field(ge=1)
     force: bool = False
@@ -1783,3 +1805,20 @@ async def book_outline_endpoint(book_id: int) -> BookOutlineResponse:
     if entries is None:
         raise HTTPException(status_code=404, detail="книги нет")
     return BookOutlineResponse(entries=[OutlineEntryOut(path=e.path, page=e.page, level=e.level) for e in entries])
+
+
+@router.post("/books/search", response_model=BookSearchResponse)
+async def books_search(payload: BookSearchRequest) -> BookSearchResponse:
+    """Фрагменты учебников для агентов сайта (паспорт, извлечение знаний, проверка): настоящие id и страницы,
+    чтобы сайт мог проверить цитату дословно. Только активные версии книг; личные документы не ищутся."""
+    with request_context(user_id="system", channel="api", workflow="BOOKS_SEARCH"):
+        # Берём с запасом: после отбора по книгам должно остаться `limit`
+        chunks = await retrieve(payload.query, subject=payload.subject, source_type=SOURCE_TEXTBOOK, top_k=min(60, payload.limit * 3))
+    books = set(payload.bookIds) if payload.bookIds else None
+    frags = fragments_from_chunks(chunks, books, payload.limit)
+    return BookSearchResponse(
+        fragments=[
+            FragmentOut(id=f.id, bookId=f.book_id, title=f.title, author=f.author, page=f.page, section=f.section, text=f.text, score=f.score)
+            for f in frags
+        ]
+    )

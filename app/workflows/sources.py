@@ -262,3 +262,39 @@ async def book_outline(book_id: int) -> list[OutlineEntry] | None:
         )
         rows = [(r[0], r[1], r[2]) for r in result]
     return outline_from_rows(rows)
+
+
+@dataclass
+class Fragment:
+    id: int
+    book_id: int | None
+    title: str
+    author: str
+    page: int | None
+    section: str | None
+    text: str
+    score: float | None
+
+
+MAX_FRAGMENT_CHARS = 2400
+
+
+def fragments_from_chunks(chunks, book_ids: set[int] | None, limit: int) -> list[Fragment]:
+    """Фрагменты для агентов сайта: только нужные книги, без повторов, текст обрезан по потолку."""
+    out: list[Fragment] = []
+    seen: set[int] = set()
+    for c in chunks:
+        if c.id in seen:
+            continue
+        if book_ids is not None and c.book_id not in book_ids:
+            continue
+        seen.add(c.id)
+        out.append(
+            Fragment(
+                id=c.id, book_id=c.book_id, title=c.title, author=c.author, page=c.page_from,
+                section=c.section, text=(c.content or "")[:MAX_FRAGMENT_CHARS], score=c.rerank_score,
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
