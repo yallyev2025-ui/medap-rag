@@ -52,7 +52,7 @@ from app.workflows.web_page import fetch_page_text
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
 from constants import SOURCE_TEXTBOOK
-from db.crud import month_spend_rub_by_id, request_cost
+from db.crud import month_spend_rub_by_id, request_cost, usage_summary
 from db.session import async_session
 from rag.generator import generate_repair
 from rag.retriever import retrieve
@@ -1451,6 +1451,23 @@ class UsageMonthResponse(BaseModel):
     spendRub: float
 
 
+class UsageChannel(BaseModel):
+    channel: str
+    calls: int
+    users: int
+    usd: float
+    rub: float
+
+
+class UsageSummaryResponse(BaseModel):
+    days: int
+    channels: list[UsageChannel]
+    telegramUsersThisMonth: int
+    telegramUsersAtLimit: int
+    freeLimitRub: float
+    premiumLimitRub: float
+
+
 class SourceBook(BaseModel):
     id: int
     title: str
@@ -1740,3 +1757,10 @@ async def usage_month(userId: str) -> UsageMonthResponse:
     async with async_session() as session:
         spend = await month_spend_rub_by_id(session, userId.strip()[:64])
     return UsageMonthResponse(userId=userId.strip()[:64], month=datetime.now(timezone.utc).strftime("%Y-%m"), spendRub=round(spend, 4))
+
+
+@router.get("/usage/summary", response_model=UsageSummaryResponse)
+async def usage_summary_endpoint(days: int = 30) -> UsageSummaryResponse:
+    """Расход ИИ по каналам (Telegram, сайт, админка, разбор книг) за `days` суток — для пульта владельца."""
+    async with async_session() as session:
+        return UsageSummaryResponse(**await usage_summary(session, days))

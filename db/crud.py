@@ -620,3 +620,57 @@ async def rollback_model_override(session: AsyncSession, task: str, actor: str =
     session.add(TaskModelOverride(task=task, provider=previous.provider, active=True, created_by=actor))
     await session.flush()
     return previous.provider
+
+
+async def usage_summary(session: AsyncSession, days: int = 30) -> dict:
+    """Расход ИИ за `days` суток по каналам (telegram / api = сайт / admin / ingest) и счётчики лимитов.
+
+    Для пульта владельца на сайте. Лимит месяца у каждого студента свой (FREE/PREMIUM_MONTHLY_BUDGET_RUB),
+    здесь считаем, сколько Telegram-студентов уже упёрлось в него в этом месяце."""
+    from datetime import timedelta
+
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))
+    rows = (
+        await session.execute(
+            select(
+                AIUsageEvent.channel,
+                func.count(AIUsageEvent.id),
+                func.count(func.distinct(AIUsageEvent.user_id)),
+                func.coalesce(func.sum(AIUsageEvent.provider_cost_usd), 0.0),
+                func.coalesce(func.sum(AIUsageEvent.provider_cost_rub), 0.0),
+            )
+            .where(AIUsageEvent.created_at >= since)
+            .group_by(AIUsageEvent.channel)
+        )
+    ).all()
+    channels = [
+        {"channel": r[0], "calls": int(r[1]), "users": int(r[2]), "usd": round(float(r[3]), 4), "rub": round(float(r[4]), 2)}
+        for r in rows
+    ]
+    month = (
+        await session.execute(
+            select(AIUsageEvent.user_id, func.sum(AIUsageEvent.provider_cost_rub))
+            .where(AIUsageEvent.created_at >= _month_start(), AIUsageEvent.user_id.like("telegram:%"))
+            .group_by(AIUsageEvent.user_id)
+        )
+    ).all()
+    ids = [int(u.split(":", 1)[1]) for u, _ in month if u.split(":", 1)[1].isdigit()]
+    premium: set[int] = set()
+    if ids:
+        premium = set((await session.execute(select(User.id).where(User.id.in_(ids), User.is_premium.is_(True)))).scalars())
+    at_limit = 0
+    for uid, total in month:
+        tail = uid.split(":", 1)[1]
+        if not tail.isdigit() or int(tail) in settings.ADMIN_IDS:
+            continue
+        limit = settings.PREMIUM_MONTHLY_BUDGET_RUB if int(tail) in premium else settings.FREE_MONTHLY_BUDGET_RUB
+        if float(total or 0) >= limit:
+            at_limit += 1
+    return {
+        "days": days,
+        "channels": channels,
+        "telegramUsersThisMonth": len(month),
+        "telegramUsersAtLimit": at_limit,
+        "freeLimitRub": settings.FREE_MONTHLY_BUDGET_RUB,
+        "premiumLimitRub": settings.PREMIUM_MONTHLY_BUDGET_RUB,
+    }

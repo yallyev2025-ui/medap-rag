@@ -21,6 +21,7 @@ PYTEST_FILES = [
 
 SCRIPT_MODULES = [
     "scripts.test_cost",
+    "scripts.test_usage_summary",
     "scripts.test_documents_search",
     "scripts.test_presentations_relay",
     "scripts.test_reranker_fallback",
