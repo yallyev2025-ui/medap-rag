@@ -1,7 +1,7 @@
 """CRUD-операции для пользователей, лимитов и истории запросов."""
 
 import json
-from datetime import date, datetime, timezone
+from datetime import timedelta, date, datetime, timezone
 
 from aiogram.types import User as TelegramUser
 from sqlalchemy import delete, func, select, update
@@ -25,6 +25,7 @@ from db.models import (
     BookChunk,
     EvalCase,
     EvalRun,
+    PendingQuestion,
     PromptVersion,
     Query,
     TaskModelOverride,
@@ -674,3 +675,30 @@ async def usage_summary(session: AsyncSession, days: int = 30) -> dict:
         "freeLimitRub": settings.FREE_MONTHLY_BUDGET_RUB,
         "premiumLimitRub": settings.PREMIUM_MONTHLY_BUDGET_RUB,
     }
+
+
+# --- Вопрос, ожидающий согласия (переживает перезапуск бота; MedAP, этап 3) ---------------------
+
+PENDING_QUESTION_TTL = timedelta(hours=6)
+
+
+async def save_pending_question(session: AsyncSession, user_id: int, question: str) -> None:
+    row = await session.get(PendingQuestion, user_id)
+    if row is None:
+        session.add(PendingQuestion(user_id=user_id, question=question))
+    else:
+        row.question = question
+        row.created_at = datetime.now(timezone.utc)
+    await session.flush()
+
+
+async def take_pending_question(session: AsyncSession, user_id: int) -> str | None:
+    """Забрать и удалить ожидающий вопрос; просроченный (старше TTL) считается устаревшим."""
+    row = await session.get(PendingQuestion, user_id)
+    if row is None:
+        return None
+    question = row.question
+    fresh = datetime.now(timezone.utc) - row.created_at <= PENDING_QUESTION_TTL
+    await session.delete(row)
+    await session.flush()
+    return question if fresh else None

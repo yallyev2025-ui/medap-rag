@@ -525,3 +525,16 @@ class BookTask(Base):
     detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PendingQuestion(Base):
+    """Вопрос, ожидающий согласия на «общие знания / интернет / PubMed» (MedAP, этап 3).
+
+    Раньше жил в памяти процесса и терялся при перезапуске бота: кнопка согласия отвечала «запрос устарел».
+    Теперь в базе: одна запись на пользователя, живёт ограниченное время."""
+
+    __tablename__ = "pending_questions"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -30,6 +30,8 @@ from bot.handlers.panel import explain_problem, prepare_scope
 from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK
 from db.crud import (
     get_or_create_user,
+    save_pending_question,
+    take_pending_question,
     get_recent_turns,
     increment_usage,
     is_limit_exceeded,
@@ -56,6 +58,10 @@ NOT_FOUND_ASK = (
     "В загруженных материалах по этому вопросу ничего нет. Как ответить?\n"
     "Учти: общие знания ИИ, интернет и PubMed — не официальные источники MedAP, перепроверяйте."
 )
+NOT_FOUND_ASK_NO_PUBMED = (
+    "В учебниках и научных статьях по этому вопросу ничего не нашлось. Как ответить?\n"
+    "Учти: общие знания ИИ и интернет — не официальные источники MedAP, перепроверяйте."
+)
 # Для клинреков fallback (общие знания/интернет/PubMed) запрещён полностью —
 # никаких вариантов не предлагается, в отличие от учебников выше.
 CLINREK_NOT_FOUND_TEXT = "Этой информации нет в представленных клинических рекомендациях."
@@ -76,8 +82,31 @@ CONSENT_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
-# Вопрос, ожидающий согласия на ответ из общих знаний (по пользователю).
-_pending_general: dict[int, str] = {}
+# Без PubMed: он уже искал сам (MedAP, этап 3); остаются общие знания и интернет — только по согласию
+CONSENT_KEYBOARD_NO_PUBMED = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Общие знания", callback_data="genk:yes"),
+            InlineKeyboardButton(text="🌐 Интернет", callback_data="web:yes"),
+        ],
+        [
+            InlineKeyboardButton(text="Нет", callback_data="genk:no"),
+        ],
+    ]
+)
+
+async def _remember_pending(user_id: int, question: str) -> None:
+    """Вопрос, ожидающий согласия, — в базе, а не в памяти процесса: переживает перезапуск бота."""
+    async with async_session() as session:
+        await save_pending_question(session, user_id, question)
+        await session.commit()
+
+
+async def _take_pending(user_id: int) -> str | None:
+    async with async_session() as session:
+        question = await take_pending_question(session, user_id)
+        await session.commit()
+    return question
 
 
 class SearchStates(StatesGroup):
@@ -133,19 +162,26 @@ async def _run_web_search(message: Message, user_id: int, query: str) -> None:
     await _send_answer(message, result.answer)
 
 
-async def _run_pubmed_search(message: Message, user_id: int, query: str) -> None:
+async def _run_pubmed_search(message: Message, user_id: int, query: str, *, quiet: bool = False) -> bool:
+    """True — ответ по статьям отправлен. `quiet=True` (автопоиск): при неудаче статус-сообщение убирается, студент увидит выбор."""
     status = await message.answer("🔬 Ищу в PubMed…")
     try:
         with request_context(user_id=f"telegram:{user_id}", channel="telegram", workflow="PUBMED_SEARCH"):
             result = await search_pubmed(query)
     except Exception:
         logger.exception("Ошибка при поиске в PubMed")
-        await _set_status(status, ERROR_TEXT)
-        return
+        if quiet:
+            await _clear_status(status)
+        else:
+            await _set_status(status, ERROR_TEXT)
+        return False
 
-    if result.error:
-        await _set_status(status, f"⚠️ {result.error}")
-        return
+    if result.error or not (result.answer or "").strip():
+        if quiet:
+            await _clear_status(status)
+        else:
+            await _set_status(status, f"⚠️ {result.error or 'ничего не найдено'}")
+        return False
 
     await _clear_status(status)
     # Ссылка каждой статьи уже стоит под её описанием (собрано в app/workflows/pubmed.py).
@@ -153,6 +189,7 @@ async def _run_pubmed_search(message: Message, user_id: int, query: str) -> None
     if result.source == SOURCE_EUROPEPMC:
         answer = f"{answer}\n\n*Источник данных: Europe PMC — те же статьи PubMed/MEDLINE (PubMed напрямую сейчас недоступен).*"
     await _send_answer(message, answer)
+    return True
 
 
 @router.message(Command("new"))
@@ -275,8 +312,11 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
             elif source_type == SOURCE_CLINREK:
                 await message.answer(CLINREK_NOT_FOUND_TEXT)
             else:
-                _pending_general[db_user.id] = question
-                await message.answer(NOT_FOUND_ASK, reply_markup=CONSENT_KEYBOARD)
+                # Учебники не ответили — научные статьи PubMed сразу, без кнопки (решение 37); общие знания и интернет — по кнопке
+                if await _run_pubmed_search(message, db_user.id, question, quiet=True):
+                    return
+                await _remember_pending(db_user.id, question)
+                await message.answer(NOT_FOUND_ASK_NO_PUBMED, reply_markup=CONSENT_KEYBOARD_NO_PUBMED)
             usage_ctx["count"] = False
             return
 
@@ -302,7 +342,7 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
 @router.callback_query(F.data == "genk:yes")
 async def consent_general_yes(callback: CallbackQuery) -> None:
     await callback.answer()
-    question = _pending_general.pop(callback.from_user.id, None)
+    question = await _take_pending(callback.from_user.id)
     try:
         await callback.message.edit_reply_markup()
     except Exception:
@@ -333,7 +373,7 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "web:yes")
 async def consent_web_search(callback: CallbackQuery) -> None:
     await callback.answer()
-    question = _pending_general.pop(callback.from_user.id, None)
+    question = await _take_pending(callback.from_user.id)
     try:
         await callback.message.edit_reply_markup()
     except Exception:
@@ -354,7 +394,7 @@ async def consent_web_search(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "pubmed:yes")
 async def consent_pubmed_search(callback: CallbackQuery) -> None:
     await callback.answer()
-    question = _pending_general.pop(callback.from_user.id, None)
+    question = await _take_pending(callback.from_user.id)
     try:
         await callback.message.edit_reply_markup()
     except Exception:
@@ -375,7 +415,7 @@ async def consent_pubmed_search(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "genk:no")
 async def consent_general_no(callback: CallbackQuery) -> None:
     await callback.answer()
-    _pending_general.pop(callback.from_user.id, None)
+    await _take_pending(callback.from_user.id)
     try:
         await callback.message.edit_reply_markup()
     except Exception:
