@@ -40,7 +40,7 @@ from app.workflows.user_documents import (
     search_user_documents,
 )
 from app.workflows import book_admin
-from app.workflows.sources import get_figure_url, list_sources, search_figures
+from app.workflows.sources import book_outline, get_figure_url, list_sources, search_figures
 from app.workflows.vision import TestSolveResult, solve_from_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
@@ -1612,6 +1612,16 @@ class BookTaskStartResponse(BaseModel):
     error: str | None = None
 
 
+class OutlineEntryOut(BaseModel):
+    path: str
+    page: int | None = None
+    level: int
+
+
+class BookOutlineResponse(BaseModel):
+    entries: list[OutlineEntryOut]
+
+
 class SwitchVersionRequest(BaseModel):
     version: int = Field(ge=1)
     force: bool = False
@@ -1764,3 +1774,12 @@ async def usage_summary_endpoint(days: int = 30) -> UsageSummaryResponse:
     """Расход ИИ по каналам (Telegram, сайт, админка, разбор книг) за `days` суток — для пульта владельца."""
     async with async_session() as session:
         return UsageSummaryResponse(**await usage_summary(session, days))
+
+
+@router.get("/books/{book_id}/outline", response_model=BookOutlineResponse)
+async def book_outline_endpoint(book_id: int) -> BookOutlineResponse:
+    """Оглавление книги (разделы по порядку) — для структуры предмета на сайте (MedAP, этап 2)."""
+    entries = await book_outline(book_id)
+    if entries is None:
+        raise HTTPException(status_code=404, detail="книги нет")
+    return BookOutlineResponse(entries=[OutlineEntryOut(path=e.path, page=e.page, level=e.level) for e in entries])

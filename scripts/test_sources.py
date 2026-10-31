@@ -63,3 +63,24 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_outline_keeps_order_adds_parents_and_earliest_page() -> None:
+    from app.workflows.sources import outline_from_rows
+
+    rows = [
+        ("Глава 1 > Воспаление", 12, 0),
+        ("Глава 1 > Воспаление", 11, 1),
+        ("Глава 1 > Тромбоз", 30, 2),
+        ("Глава 2 > Опухоли", 55, 3),
+        ("", 70, 4),
+        (None, 71, 5),
+    ]
+    out = outline_from_rows(rows)
+    assert [(e.path, e.page, e.level) for e in out] == [
+        ("Глава 1", 11, 1),
+        ("Глава 1 > Воспаление", 11, 2),
+        ("Глава 1 > Тромбоз", 30, 2),
+        ("Глава 2", 55, 1),
+        ("Глава 2 > Опухоли", 55, 2),
+    ]

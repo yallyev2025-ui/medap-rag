@@ -36,7 +36,7 @@ STEPS = frozenset(
         "outline", "write", "rewrite", "parse", "command", "notes", "verify", "look", "place", "photoplan", "photojudge",
         # MedAP, этап 1: роли конвейера знаний (docs/medap/plan, таблица ролей) идут через тот же посредник:
         # сайт стоит в России и до модели не дотягивается, бот — да. Потолки и учёт расхода общие.
-        "role_passport", "role_extractor", "role_writer", "role_checker", "role_fixer", "role_completeness",
+        "role_structure", "role_passport", "role_extractor", "role_writer", "role_checker", "role_fixer", "role_completeness",
     }
 )
 

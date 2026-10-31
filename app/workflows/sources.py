@@ -209,3 +209,56 @@ async def get_figure_url(figure_id: int) -> tuple[FigureItem, str | None] | None
     )
     url = s3.presigned_url(figure.s3_key) if figure.s3_key and book.rights == "show" else None
     return item, url
+
+
+@dataclass
+class OutlineEntry:
+    path: str
+    page: int | None
+    level: int
+
+
+MAX_OUTLINE = 600
+_PATH_SEP = ">"
+
+
+def outline_from_rows(rows: list[tuple[str, int | None, int]]) -> list[OutlineEntry]:
+    """Оглавление из строк (путь раздела, печатная страница, номер фрагмента).
+
+    Каждый РАЗДЕЛ даёт одну запись в порядке появления в книге; страница — самая ранняя из фрагментов раздела.
+    Путь вида «Глава 3 > Воспаление > Острое» даёт и записи для родителей, если их фрагментов нет сами по себе."""
+    first: dict[str, tuple[int, int | None]] = {}
+    for path, page, idx in rows:
+        path = (path or "").strip()
+        if not path:
+            continue
+        parts = [p.strip() for p in path.split(_PATH_SEP) if p.strip()]
+        for depth in range(1, len(parts) + 1):
+            key = f" {_PATH_SEP} ".join(parts[:depth])
+            old = first.get(key)
+            if old is None:
+                first[key] = (idx, page)
+            else:
+                pages = [p for p in (old[1], page) if p is not None]
+                first[key] = (min(old[0], idx), min(pages) if pages else None)
+    ordered = sorted(first.items(), key=lambda kv: kv[1][0])
+    return [OutlineEntry(path=k, page=v[1], level=k.count(_PATH_SEP) + 1) for k, v in ordered][:MAX_OUTLINE]
+
+
+async def book_outline(book_id: int) -> list[OutlineEntry] | None:
+    """Оглавление активной версии книги; `None`, если книги нет."""
+    async with async_session() as session:
+        book = await session.get(Book, book_id)
+        if book is None:
+            return None
+        result = await session.execute(
+            select(BookChunk.section_path, BookChunk.page_printed, BookChunk.chunk_index)
+            .where(
+                BookChunk.book_id == book_id,
+                BookChunk.processing_version == book.active_version,
+                BookChunk.section_path.is_not(None),
+            )
+            .order_by(BookChunk.chunk_index)
+        )
+        rows = [(r[0], r[1], r[2]) for r in result]
+    return outline_from_rows(rows)
