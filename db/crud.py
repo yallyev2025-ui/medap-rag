@@ -19,6 +19,7 @@ from constants import (
     TIER_FAST,
 )
 from db.models import (
+    VoicePref,
     AIUsageEvent,
     AnswerLog,
     Book,
@@ -702,3 +703,17 @@ async def take_pending_question(session: AsyncSession, user_id: int) -> str | No
     await session.delete(row)
     await session.flush()
     return question if fresh else None
+
+
+async def get_voice(session: AsyncSession, user_id: int) -> str | None:
+    row = await session.get(VoicePref, user_id)
+    return row.voice if row else None
+
+
+async def set_voice(session: AsyncSession, user_id: int, voice: str) -> None:
+    row = await session.get(VoicePref, user_id)
+    if row is None:
+        session.add(VoicePref(user_id=user_id, voice=voice))
+    else:
+        row.voice = voice
+    await session.flush()

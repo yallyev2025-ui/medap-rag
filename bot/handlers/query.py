@@ -8,7 +8,7 @@ import time
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -32,7 +32,9 @@ from db.crud import (
     get_or_create_user,
     save_pending_question,
     take_pending_question,
+    can_use_deep,
     get_recent_turns,
+    get_voice,
     increment_usage,
     is_limit_exceeded,
     log_query,
@@ -43,6 +45,7 @@ from db.crud import (
 from db.models import User
 from db.session import async_session
 from rag.generator import generate_fallback
+from bot.voice_reply import VOICE_PREMIUM_TEXT, speak_to
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +230,67 @@ async def pubmed_run(message: Message, state: FSMContext, db_user: User, usage_c
     await _run_pubmed_search(message, db_user.id, message.text)
 
 
+SPEAK_BUTTON = InlineKeyboardButton(text="🔊 Озвучить", callback_data="speak:1")
+
+
+def _with_speak(markup, premium: bool):
+    """Подписчикам под последней частью ответа добавляется «🔊 Озвучить» (кнопки источников сохраняются)."""
+    if not premium:
+        return markup
+    rows = [list(r) for r in markup.inline_keyboard] if markup is not None else []
+    rows.append([SPEAK_BUTTON])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> None:
+    await answer_question(message, db_user, usage_ctx, message.text)
+
+
+@router.message(F.voice, StateFilter(None))
+async def handle_voice_question(message: Message, db_user: User, usage_ctx: dict) -> None:
+    """Голосовой вопрос (подписчикам): распознаём, отвечаем текстом и голосом. Остальным — вежливый отказ без траты лимита."""
+    from app.llm import provider as llm
+
+    if not can_use_deep(db_user):
+        await message.answer(VOICE_PREMIUM_TEXT)
+        usage_ctx["count"] = False
+        return
+    status = await message.answer("🎤 Слушаю…")
+    try:
+        buffer = await message.bot.download(message.voice)
+        with request_context(user_id=f"telegram:{db_user.id}", channel="telegram", workflow="SPEECH_TO_TEXT"):
+            question = await llm.transcribe(buffer.read(), "voice.ogg")
+    except Exception:
+        logger.exception("Ошибка распознавания голосового вопроса")
+        await _set_status(status, ERROR_TEXT)
+        usage_ctx["count"] = False
+        return
+    await _clear_status(status)
+    if not question.strip():
+        await message.answer("Не расслышал: повторите вопрос погромче.")
+        usage_ctx["count"] = False
+        return
+    await message.answer(f"🎤 Вы спросили: {question}")
+    await answer_question(message, db_user, usage_ctx, question, voice_reply=True)
+
+
+@router.callback_query(F.data == "speak:1")
+async def speak_callback(callback: CallbackQuery) -> None:
+    """«🔊 Озвучить» под ответом: берём текст самого сообщения; только подписчикам."""
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        premium = can_use_deep(user)
+        voice = await get_voice(session, user.id)
+    if not premium:
+        await callback.answer(VOICE_PREMIUM_TEXT, show_alert=True)
+        return
+    await callback.answer("Готовлю звук…")
+    text = (callback.message.text or callback.message.caption or "").strip()
+    await speak_to(callback.message, text, voice)
+
+
+async def answer_question(message: Message, db_user: User, usage_ctx: dict, question: str, voice_reply: bool = False) -> None:
     # Откуда отвечать (батч 27): учебники / мои документы / мои и учебники вместе.
     mode = user_scope(db_user)
     scope, problem = await prepare_scope(db_user)
@@ -246,7 +308,6 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
 
     source_type = db_user.current_source_type or SOURCE_TEXTBOOK
     subject = db_user.current_subject if mode != SCOPE_DOCUMENTS else None
-    question = message.text
 
     # Клинреки — только премиум/админ (режим мог быть выбран до отзыва премиума).
     if source_type == SOURCE_CLINREK and not has_clinrek_access(db_user):
@@ -329,8 +390,15 @@ async def handle_question(message: Message, db_user: User, usage_ctx: dict) -> N
         return
 
     await _clear_status(status)
-    # Кнопки «📖 источник · стр.» по реально процитированным источникам (проверенные id из базы).
-    await _send_answer(message, answer, citation_buttons(result.citations))
+    # Кнопки «📖 источник · стр.» по реально процитированным источникам (проверенные id из базы);
+    # подписчикам — ещё «🔊 Озвучить»
+    premium = can_use_deep(db_user)
+    await _send_answer(message, answer, _with_speak(citation_buttons(result.citations), premium))
+    # Вопрос задан голосом — ответ приходит и голосом тоже
+    if voice_reply and premium:
+        async with async_session() as session:
+            voice = await get_voice(session, db_user.id)
+        await speak_to(message, answer, voice)
 
     async with async_session() as session:
         await log_query(
@@ -423,3 +491,36 @@ async def consent_general_no(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Хорошо — отвечаю только по загруженным материалам. Задайте другой вопрос."
     )
+
+
+VOICE_LABELS = {"nova": "Нова (женский, мягкий)", "shimmer": "Шиммер (женский, ровный)", "alloy": "Эллой (нейтральный)", "echo": "Эхо (мужской, спокойный)", "onyx": "Оникс (мужской, низкий)", "fable": "Фейбл (выразительный)"}
+
+
+@router.message(Command("voice"))
+async def cmd_voice(message: Message, db_user: User, usage_ctx: dict) -> None:
+    """Выбор голоса озвучки (подписчикам)."""
+    usage_ctx["count"] = False
+    if not can_use_deep(db_user):
+        await message.answer(VOICE_PREMIUM_TEXT)
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=f"voice:{key}")] for key, label in VOICE_LABELS.items()])
+    await message.answer("Какой голос озвучивать ответы?", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("voice:"))
+async def voice_chosen(callback: CallbackQuery) -> None:
+    from db.crud import set_voice
+
+    key = (callback.data or "").split(":", 1)[1]
+    if key not in VOICE_LABELS:
+        await callback.answer("Такого голоса нет", show_alert=True)
+        return
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        if not can_use_deep(user):
+            await callback.answer(VOICE_PREMIUM_TEXT, show_alert=True)
+            return
+        await set_voice(session, user.id, key)
+        await session.commit()
+    await callback.answer("Голос выбран")
+    await callback.message.answer(f"Голос: {VOICE_LABELS[key]}. Нажмите «🔊 Озвучить» под ответом или задайте вопрос голосом.")

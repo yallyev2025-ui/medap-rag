@@ -538,3 +538,12 @@ class PendingQuestion(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class VoicePref(Base):
+    """Голос озвучки в Telegram (MedAP, этап 5): один выбранный голос на пользователя."""
+
+    __tablename__ = "voice_prefs"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    voice: Mapped[str] = mapped_column(String(20), nullable=False)

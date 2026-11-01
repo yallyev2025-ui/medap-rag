@@ -507,7 +507,7 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
 TTS_VOICES = ("nova", "alloy", "echo", "fable", "onyx", "shimmer")
 
 
-async def synthesize(text: str, voice: str = "", speed: float = 1.0) -> tuple[bytes, float]:
+async def synthesize(text: str, voice: str = "", speed: float = 1.0, fmt: str = "mp3") -> tuple[bytes, float]:
     """Text-to-Speech (MedAP, этап 5): озвучка ответа ментора. Только OpenAI, как и Whisper.
     Возвращает (mp3, цена в долларах); расход пишется в журнал по знакам, а не по токенам."""
     prof = profile(OPENAI)
@@ -518,7 +518,7 @@ async def synthesize(text: str, voice: str = "", speed: float = 1.0) -> tuple[by
     client = _client(OPENAI)
     started = time.monotonic()
     try:
-        response = await client.audio.speech.create(model=settings.TTS_MODEL, voice=chosen, input=text, speed=rate, response_format="mp3")
+        response = await client.audio.speech.create(model=settings.TTS_MODEL, voice=chosen, input=text, speed=rate, response_format=fmt if fmt in ("mp3", "opus") else "mp3")
         audio = response.content if hasattr(response, "content") else await response.aread()
     except openai.APIError as exc:
         reason = classify_error(exc, OPENAI, settings.TTS_MODEL)
