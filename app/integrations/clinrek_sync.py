@@ -194,3 +194,18 @@ async def apply_update(session: AsyncSession, update: ClinrecUpdate) -> int:
 
     await session.commit()
     return book_id
+
+
+def updates_payload(updates: "list[ClinrecUpdate]") -> list[dict]:
+    """Список обновлений для сайта (еженедельный мониторинг, MedAP этап 5): только то, что нужно сайту, чистая функция."""
+    return [
+        {
+            "code": u.remote.code,
+            "version": u.remote.version,
+            "title": u.remote.title,
+            "externalRef": u.remote.external_ref,
+            "isNew": u.is_new,
+            "previousBookId": u.previous_book_id,
+        }
+        for u in updates
+    ]

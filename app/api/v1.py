@@ -1920,6 +1920,35 @@ async def usage_summary_endpoint(days: int = 30) -> UsageSummaryResponse:
         return UsageSummaryResponse(**await usage_summary(session, days))
 
 
+class ClinrekUpdateItem(BaseModel):
+    code: str
+    version: str
+    title: str
+    externalRef: str
+    isNew: bool
+    previousBookId: int | None = None
+
+
+class ClinrekUpdatesResponse(BaseModel):
+    updates: list[ClinrekUpdateItem]
+    error: str | None = None
+
+
+@router.get("/clinrek/updates", response_model=ClinrekUpdatesResponse)
+async def clinrek_updates_endpoint() -> ClinrekUpdatesResponse:
+    """Какие клинрекомендации Минздрава обновились или появились (MedAP, этап 5: еженедельный мониторинг сайта).
+    Только проверка: ничего не загружается — загрузка новой версии остаётся кнопкой в админке (решение владельца)."""
+    from app.integrations.clinrek_sync import check_for_updates, updates_payload
+
+    try:
+        async with async_session() as session:
+            updates = await check_for_updates(session)
+    except Exception as exc:
+        logger.warning("Мониторинг клинреков: Рубрикатор не ответил: %s", exc)
+        return ClinrekUpdatesResponse(updates=[], error="Рубрикатор Минздрава не ответил или изменил формат ответа")
+    return ClinrekUpdatesResponse(updates=[ClinrekUpdateItem(**u) for u in updates_payload(updates)])
+
+
 @router.get("/books/{book_id}/outline", response_model=BookOutlineResponse)
 async def book_outline_endpoint(book_id: int) -> BookOutlineResponse:
     """Оглавление книги (разделы по порядку) — для структуры предмета на сайте (MedAP, этап 2)."""
