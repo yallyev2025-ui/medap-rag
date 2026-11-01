@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, or_, select
 
 from app.storage import s3
+from constants import SOURCE_USER_DOCUMENT
 from db.models import Book, BookChunk, BookFigure
 from db.session import async_session
 
@@ -63,7 +64,8 @@ class SourceItem:
 
 async def list_sources(subject: str | None = None) -> list[SourceItem]:
     async with async_session() as session:
-        stmt = select(Book).order_by(Book.subject, Book.id)
+        # Реестр учебников владельца: документы студентов и материалы для презентаций сюда не относятся
+        stmt = select(Book).where(Book.source_type != SOURCE_USER_DOCUMENT, Book.author != "студент").order_by(Book.subject, Book.id)
         if subject:
             stmt = stmt.where(Book.subject == subject)
         books = list((await session.execute(stmt)).scalars().all())
