@@ -20,7 +20,7 @@ from aiogram.types import BotCommandScopeDefault
 
 from api.main import app as api_app
 from bot.commands import USER_COMMANDS
-from bot.handlers import admin, exam, fragments, menu, panel, query, recall, start, user_documents, vision
+from bot.handlers import admin, call, exam, fragments, menu, panel, query, recall, start, user_documents, vision
 from bot.middlewares.limits import LimitsMiddleware
 from config import settings
 from db.init_db import init_db
@@ -53,6 +53,7 @@ async def _run_bot() -> None:
     dp.include_router(recall.router)
     # Режим «Экзамен»: его состояния и кнопка до общего обработчика вопросов, как и самопроверка
     dp.include_router(exam.router)
+    dp.include_router(call.router)
     dp.include_router(query.router)
     dp.include_router(vision.router)
     dp.include_router(user_documents.router)
