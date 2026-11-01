@@ -30,6 +30,7 @@ SCRIPT_MODULES = [
     "scripts.test_slides_bot",
     "scripts.test_slides_bot_dispatch",
     "scripts.test_waiting_content",
+    "scripts.test_voice_text",
 ]
 
 # Файлы, которые не входят сюда сознательно: test_generator.py и test_retrieve.py требуют модели

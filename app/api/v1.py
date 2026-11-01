@@ -532,6 +532,102 @@ async def vision_analyze(payload: VisionAnalyzeRequest, request: Request) -> Vis
     return _vision_response(result)
 
 
+# --- Голос (MedAP, этап 5): озвучка ответов ментора и распознавание речи для сайта. Права (только подписчики)
+# проверяет сайт; бот лишь защищён сервисным токеном и общим лимитом запросов.
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    voice: str = ""
+    speed: float = 1.0
+    context: StudentAIContext
+
+
+class SpeakResponse(BaseModel):
+    audioBase64: str
+    mimeType: str
+    chars: int
+    costUsd: float
+    voice: str
+    cached: bool
+    parts: int
+
+
+class TranscribeRequest(BaseModel):
+    audioBase64: str = Field(..., min_length=1)
+    filename: str = "audio.webm"
+    context: StudentAIContext
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+
+
+_speech_cache: dict[str, tuple[bytes, float]] = {}
+
+
+@router.get("/voice/voices")
+async def voice_voices() -> dict[str, Any]:
+    """Голоса, из которых выбирает студент (OpenAI TTS)."""
+    return {"voices": list(llm.TTS_VOICES), "default": settings.TTS_DEFAULT_VOICE, "provider": settings.TTS_PROVIDER}
+
+
+@router.post("/voice/speak", response_model=SpeakResponse)
+async def voice_speak(payload: SpeakRequest, request: Request) -> SpeakResponse:
+    """Озвучить текст ответа: разметка и ссылки убираются, сокращения раскрываются, длинное режется по абзацам.
+    Одинаковый текст с тем же голосом повторно не синтезируется (кэш)."""
+    import hashlib
+
+    from app.voice.text import prepare_for_speech, split_for_speech
+
+    rate_limiter.check(payload.context.userId)
+    spoken = prepare_for_speech(payload.text)
+    if not spoken:
+        raise HTTPException(status_code=400, detail="Нечего озвучивать: в тексте нет слов")
+    if len(spoken) > settings.TTS_MAX_CHARS * 4:
+        raise HTTPException(status_code=400, detail="Ответ слишком длинный для озвучки")
+    voice = payload.voice if payload.voice in llm.TTS_VOICES else settings.TTS_DEFAULT_VOICE
+    speed = min(max(payload.speed, 0.75), 1.5)
+    key = hashlib.sha256(f"{voice}|{speed}|{spoken}".encode()).hexdigest()
+    parts = split_for_speech(spoken, settings.TTS_MAX_CHARS)
+    if key in _speech_cache:
+        audio, usd = _speech_cache[key]
+        return SpeakResponse(audioBase64=base64.b64encode(audio).decode(), mimeType="audio/mpeg", chars=len(spoken), costUsd=0.0, voice=voice, cached=True, parts=len(parts))
+    with request_context(user_id=payload.context.userId, channel="api", workflow="TEXT_TO_SPEECH"):
+        chunks: list[bytes] = []
+        total = 0.0
+        try:
+            for part in parts:
+                audio, usd = await llm.synthesize(part, voice, speed)
+                chunks.append(audio)
+                total += usd
+        except llm.LLMError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    audio = b"".join(chunks)  # mp3-кадры склеиваются подряд без потери воспроизведения
+    if len(_speech_cache) >= settings.TTS_CACHE_ITEMS:
+        _speech_cache.pop(next(iter(_speech_cache)))
+    _speech_cache[key] = (audio, total)
+    return SpeakResponse(audioBase64=base64.b64encode(audio).decode(), mimeType="audio/mpeg", chars=len(spoken), costUsd=total, voice=voice, cached=False, parts=len(parts))
+
+
+@router.post("/voice/transcribe", response_model=TranscribeResponse)
+async def voice_transcribe(payload: TranscribeRequest, request: Request) -> TranscribeResponse:
+    """Распознать речь с микрофона сайта (Whisper). Размер ограничен, как у устного ответа."""
+    rate_limiter.check(payload.context.userId)
+    try:
+        audio = base64.b64decode(payload.audioBase64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="audioBase64 is not valid base64")
+    if len(audio) > settings.ORAL_MAX_AUDIO_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Запись больше {settings.ORAL_MAX_AUDIO_MB} МБ")
+    with request_context(user_id=payload.context.userId, channel="api", workflow="SPEECH_TO_TEXT"):
+        try:
+            text = await llm.transcribe(audio, payload.filename)
+        except llm.LLMError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return TranscribeResponse(text=text)
+
+
 @router.post("/quick-outline/generate", response_model=QuickOutlineResponse)
 async def quick_outline_generate(payload: QuickOutlineRequest, request: Request) -> QuickOutlineResponse:
     """Quick Outline — строго типизированная «схема для тетради» по загруженным

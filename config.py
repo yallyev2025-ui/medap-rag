@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     # --- Speech-to-Text (§20 ТЗ, этап 4A.7) — только OpenAI Whisper, у DeepSeek
     # нет STT API, поэтому TaskModelMap здесь не применяется, провайдер жёстко OpenAI.
     WHISPER_MODEL: str = "whisper-1"
+    # --- Синтез речи (MedAP, этап 5): ответы ментора голосом, только подписчикам. Поставщик — OpenAI;
+    # переключатель TTS_PROVIDER оставлен под открытую модель (piper) на будущее: пока поддержан только openai.
+    TTS_PROVIDER: str = "openai"
+    TTS_MODEL: str = "tts-1"
+    TTS_DEFAULT_VOICE: str = "nova"
+    # Цена OpenAI tts-1: $15 за миллион знаков (версионируется вместе с PRICING_VERSION)
+    TTS_USD_PER_1M_CHARS: float = 15.0
+    # Знаков на один запрос озвучки: длиннее — режется по абзацам и озвучивается частями
+    TTS_MAX_CHARS: int = 4000
+    TTS_CACHE_ITEMS: int = 64
     # МБ — устный ответ короткий, а тарификация у Whisper по минутам аудио, а не
     # по МБ файла, поэтому лимит на размер защищает не от лишних денег, а от
     # раздутого запроса.

@@ -504,6 +504,33 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
     return (response.text or "").strip()
 
 
+TTS_VOICES = ("nova", "alloy", "echo", "fable", "onyx", "shimmer")
+
+
+async def synthesize(text: str, voice: str = "", speed: float = 1.0) -> tuple[bytes, float]:
+    """Text-to-Speech (MedAP, этап 5): озвучка ответа ментора. Только OpenAI, как и Whisper.
+    Возвращает (mp3, цена в долларах); расход пишется в журнал по знакам, а не по токенам."""
+    prof = profile(OPENAI)
+    if not prof.enabled:
+        raise LLMError("Озвучка сейчас недоступна (OPENAI_API_KEY не задан)")
+    chosen = voice if voice in TTS_VOICES else settings.TTS_DEFAULT_VOICE
+    rate = min(max(float(speed or 1.0), 0.75), 1.5)
+    client = _client(OPENAI)
+    started = time.monotonic()
+    try:
+        response = await client.audio.speech.create(model=settings.TTS_MODEL, voice=chosen, input=text, speed=rate, response_format="mp3")
+        audio = response.content if hasattr(response, "content") else await response.aread()
+    except openai.APIError as exc:
+        reason = classify_error(exc, OPENAI, settings.TTS_MODEL)
+        logger.warning("TTS вернул ошибку: %s — %s", exc, reason)
+        _note_error(OPENAI, "TEXT_TO_SPEECH", reason)
+        await record_usage(task="TEXT_TO_SPEECH", profile=prof, input_tokens=0, cached_input_tokens=0, output_tokens=0, latency_ms=int((time.monotonic() - started) * 1000), error=str(exc), fixed_cost_usd=0.0)
+        raise LLMError(PROVIDER_ERROR_MESSAGE, reason=reason) from exc
+    usd = len(text) * settings.TTS_USD_PER_1M_CHARS / 1_000_000
+    await record_usage(task="TEXT_TO_SPEECH", profile=prof, input_tokens=0, cached_input_tokens=0, output_tokens=0, latency_ms=int((time.monotonic() - started) * 1000), fixed_cost_usd=usd)
+    return audio, usd
+
+
 def _parse_structured(text: str, json_schema: dict) -> dict[str, Any] | None:
     """Парсит JSON и проверяет обязательные поля верхнего уровня.
 
