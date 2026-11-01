@@ -41,7 +41,7 @@ from app.workflows.user_documents import (
 )
 from app.workflows import book_admin
 from app.workflows.sources import book_outline, fragments_from_chunks, get_figure_url, list_sources, search_figures
-from app.workflows.vision import TestSolveResult, solve_from_image
+from app.workflows.vision import TestSolveResult, solve_from_image, transcribe_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
 from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubmed
@@ -530,6 +530,32 @@ async def vision_analyze(payload: VisionAnalyzeRequest, request: Request) -> Vis
             subject=payload.context.subjectId,
         )
     return _vision_response(result)
+
+
+class VisionTranscribeResponse(BaseModel):
+    lines: list[str]
+    confidence: float
+    qualityIssue: str | None = None
+    error: str | None = None
+
+
+@router.post("/vision/transcribe", response_model=VisionTranscribeResponse)
+async def vision_transcribe(payload: VisionAnalyzeRequest, request: Request) -> VisionTranscribeResponse:
+    """Фото/скан плана, оглавления или списка вопросов → строки текста (мастер плана тем на сайте). Ничего не решает и не ищет."""
+    rate_limiter.check(payload.context.userId)
+    try:
+        image_bytes = base64.b64decode(payload.imageBase64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        raise HTTPException(status_code=400, detail="imageBase64 is not valid base64")
+    if len(image_bytes) > settings.VISION_MAX_IMAGE_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Изображение больше {settings.VISION_MAX_IMAGE_MB} МБ")
+    with request_context(user_id=payload.context.userId, channel="api", workflow="VISION_EXTRACT"):
+        try:
+            lines, confidence, issue = await transcribe_image(image_bytes, payload.mimeType)
+        except Exception:
+            logger.exception("Чтение фото плана не удалось")
+            return VisionTranscribeResponse(lines=[], confidence=0.0, error="Сервис распознавания сейчас недоступен — попробуйте позже или вставьте текст")
+    return VisionTranscribeResponse(lines=lines, confidence=confidence, qualityIssue=issue)
 
 
 # --- Голос (MedAP, этап 5): озвучка ответов ментора и распознавание речи для сайта. Права (только подписчики)
