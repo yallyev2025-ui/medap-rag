@@ -34,6 +34,8 @@ BTN_TIER = "⚙️ Режим ответа"
 BTN_BACK = "⬅️ Назад"
 BTN_UPLOAD = "➕ Загрузить документ"
 BTN_SYMPTOM = "🩺 Разбор по симптомам"
+BTN_EXAM = "🎓 Экзамен"
+BTN_CALL = "📞 Звонок"
 
 # Приставки динамических кнопок (предметы и категории зависят от базы).
 SUBJECT_PREFIX = "📘 "
@@ -47,7 +49,7 @@ SCOPE_LABELS = {
 _ACTIVE_MARK = "✅ "
 
 _STATIC_TEXTS = frozenset(
-    {BTN_TEXTBOOKS, BTN_DOCS, BTN_CLINREK, BTN_SCOPE, BTN_TIER, BTN_BACK, BTN_UPLOAD, BTN_SYMPTOM}
+    {BTN_TEXTBOOKS, BTN_DOCS, BTN_CLINREK, BTN_SCOPE, BTN_TIER, BTN_BACK, BTN_UPLOAD, BTN_SYMPTOM, BTN_EXAM, BTN_CALL}
     | set(SCOPE_LABELS.values())
     | {_ACTIVE_MARK + label for label in SCOPE_LABELS.values()}
     | set(TIER_LABELS.values())
@@ -134,6 +136,8 @@ def main_keyboard(show_clinrek: bool, placeholder: str = "Задай вопро�
     # Режим ответа — только тем, у кого есть «Глубокий» (Premium/админ): остальным выбирать не из чего.
     if show_tier:
         rows.append([KeyboardButton(text=BTN_TIER)])
+    # Экзамен — всем; «Звонок» (мини-приложение с голосовым разговором) — подписчикам
+    rows.append([KeyboardButton(text=BTN_EXAM)] + ([KeyboardButton(text=BTN_CALL)] if show_tier else []))
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

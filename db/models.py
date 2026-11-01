@@ -547,3 +547,24 @@ class VoicePref(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     voice: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class ExamList(Base):
+    """Свой список экзаменационных вопросов студента в Telegram (MedAP, этап 5, режим «Экзамен»).
+
+    Один список на пользователя и предмет: новая загрузка заменяет прежний. `position` — номер следующего вопроса
+    для «Спроси меня», `weak` — номера вопросов, которые студент просил повторить или ответил слабо (JSON-список).
+    """
+
+    __tablename__ = "exam_lists"
+    __table_args__ = (UniqueConstraint("user_id", "subject", name="uq_exam_list_user_subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    # Предмет, в котором студент сидел в момент загрузки; "" — предмет не выбран
+    subject: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    # JSON-список строк
+    questions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    weak: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

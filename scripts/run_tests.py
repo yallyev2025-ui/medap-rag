@@ -32,6 +32,8 @@ SCRIPT_MODULES = [
     "scripts.test_waiting_content",
     "scripts.test_voice_text",
     "scripts.test_voice_bot",
+    "scripts.test_exam_logic",
+    "scripts.test_exam_bot",
     "scripts.test_vision_transcribe",
 ]
 

@@ -11,6 +11,7 @@ USER_COMMANDS = [
     BotCommand(command="selfcheck", description="Проверить свой ответ (текст или голосом)"),
     BotCommand(command="websearch", description="Найти в интернете"),
     BotCommand(command="pubmed", description="Искать в PubMed"),
+    BotCommand(command="exam", description="Режим «Экзамен»: тренировка по своему списку вопросов"),
     BotCommand(command="voice", description="Голос озвучки (подписчикам)"),
 ]
 

@@ -19,6 +19,7 @@ from constants import (
     TIER_FAST,
 )
 from db.models import (
+    ExamList,
     VoicePref,
     AIUsageEvent,
     AnswerLog,
@@ -716,4 +717,36 @@ async def set_voice(session: AsyncSession, user_id: int, voice: str) -> None:
         session.add(VoicePref(user_id=user_id, voice=voice))
     else:
         row.voice = voice
+    await session.flush()
+
+
+# --- Режим «Экзамен» (MedAP, этап 5): свой список вопросов студента ---
+
+
+async def get_exam_list(session: AsyncSession, user_id: int, subject: str | None) -> ExamList | None:
+    return (
+        await session.execute(select(ExamList).where(ExamList.user_id == user_id, ExamList.subject == (subject or "")))
+    ).scalar_one_or_none()
+
+
+async def save_exam_list(session: AsyncSession, user_id: int, subject: str | None, questions: list[str]) -> ExamList:
+    """Новая загрузка заменяет прежний список предмета, прогресс начинается с начала."""
+    import json
+
+    row = await get_exam_list(session, user_id, subject)
+    if row is None:
+        row = ExamList(user_id=user_id, subject=subject or "")
+        session.add(row)
+    row.questions = json.dumps(questions, ensure_ascii=False)
+    row.position = 0
+    row.weak = "[]"
+    await session.flush()
+    return row
+
+
+async def update_exam_progress(session: AsyncSession, row: ExamList, position: int, weak: list[int]) -> None:
+    import json
+
+    row.position = position
+    row.weak = json.dumps(sorted(set(weak)))
     await session.flush()
