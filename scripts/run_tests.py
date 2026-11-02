@@ -37,7 +37,7 @@ SCRIPT_MODULES = [
     "scripts.test_call_link",
     "scripts.test_call_handler",
     "scripts.test_clinrek_monitor",
-    "scripts.test_vision_transcribe",
+    "scripts.test_vision_transcribe", "scripts.test_books_search_fallback",
 ]
 
 # Файлы, которые не входят сюда сознательно: test_generator.py и test_retrieve.py требуют модели

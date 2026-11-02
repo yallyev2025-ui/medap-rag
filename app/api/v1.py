@@ -57,6 +57,8 @@ from db.session import async_session
 from rag.generator import generate_repair
 from rag.retriever import retrieve
 
+from app.workflows.book_search import search_with_subject_fallback  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["student-ai"], dependencies=[Depends(require_service_token)])
@@ -1965,7 +1967,7 @@ async def books_search(payload: BookSearchRequest) -> BookSearchResponse:
     чтобы сайт мог проверить цитату дословно. Только активные версии книг; личные документы не ищутся."""
     with request_context(user_id="system", channel="api", workflow="BOOKS_SEARCH"):
         # Берём с запасом: после отбора по книгам должно остаться `limit`
-        chunks = await retrieve(payload.query, subject=payload.subject, source_type=SOURCE_TEXTBOOK, top_k=min(60, payload.limit * 3))
+        chunks = await search_with_subject_fallback(retrieve, payload.query, payload.subject, SOURCE_TEXTBOOK, min(60, payload.limit * 3))
     books = set(payload.bookIds) if payload.bookIds else None
     frags = fragments_from_chunks(chunks, books, payload.limit)
     return BookSearchResponse(
