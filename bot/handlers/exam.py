@@ -18,7 +18,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from app.exam.logic import load_list, load_weak, next_index, parse_questions, progress_line, question_by_number
 from app.observability.context import request_context
@@ -59,6 +59,7 @@ def menu_keyboard(total: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="❓ Спроси меня" + (f" ({total})" if total else ""), callback_data="ex:ask")],
             [InlineKeyboardButton(text="🎤 Расскажу тему", callback_data="ex:story")],
             [InlineKeyboardButton(text="📖 Ответь на вопрос", callback_data="ex:solve")],
+            [InlineKeyboardButton(text="🎙 Устный экзамен (звонок)", callback_data="ex:oral")],
             [InlineKeyboardButton(text="📋 Мой список вопросов" + (f" ({total})" if total else " — загрузить"), callback_data="ex:list")],
             [InlineKeyboardButton(text="⏹ Выйти из режима", callback_data="ex:stop")],
         ]
@@ -504,3 +505,32 @@ async def _evaluate_story(message: Message, state: FSMContext, db_user: User, us
 @router.message(ExamStates.waiting_list)
 async def wrong_type(message: Message) -> None:
     await message.answer("Не понял, что это. Пришли текст (или голос там, где можно). Выйти — /exam.")
+
+
+ORAL_TEXT = (
+    "🎙 Устный экзамен. Откроется окно звонка с твоими экзаменами с сайта: выбери вопрос, расскажи ответ голосом — "
+    "экзаменатор задаст точные вопросы по тому, что ты пропустил, и в конце разберёт ответ. Результат попадёт в план подготовки на сайте. "
+    "Режим работает по оплаченному предмету, Telegram должен быть привязан к аккаунту на сайте (Профиль → Telegram)."
+)
+
+
+@router.callback_query(F.data == "ex:oral")
+async def cb_oral(callback: CallbackQuery) -> None:
+    from app.voice.call_link import call_url, sign_call_token
+    from config import settings
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await session.commit()
+    await callback.answer()
+    if not can_use_deep(user):
+        await callback.message.answer("🎙 Голосовой экзамен — для подписчиков. Текстовый «Экзамен» работает как обычно.")
+        return
+    if not settings.SLIDES_SITE_URL or not settings.SERVICE_TOKEN:
+        await callback.message.answer("Звонок пока не настроен на сервере. Напиши администратору.")
+        return
+    token = sign_call_token(settings.SERVICE_TOKEN, user.id, user.current_subject)
+    await callback.message.answer(
+        ORAL_TEXT,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎙 Начать устный экзамен", web_app=WebAppInfo(url=call_url(settings.SLIDES_SITE_URL, token, "exam")))]]),
+    )

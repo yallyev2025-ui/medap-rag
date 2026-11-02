@@ -27,5 +27,6 @@ def sign_call_token(secret: str, tg_id: int, subject: str | None, now: float | N
     return f"{body}.{mac}"
 
 
-def call_url(base_url: str, token: str) -> str:
-    return f"{base_url.rstrip('/')}/call?t={token}"
+def call_url(base_url: str, token: str, mode: str | None = None) -> str:
+    """Адрес мини-приложения; `mode="exam"` открывает устный экзамен по экзаменам студента на сайте"""
+    return f"{base_url.rstrip('/')}/call?t={token}" + (f"&mode={mode}" if mode == "exam" else "")
