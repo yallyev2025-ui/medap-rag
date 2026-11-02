@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # растёт до плато и дальше падает от шума, обычная практика 5–15 после реранка. Владелец 13.10.2026 выбрал 15
     # (можно вернуть переменной TIER_DEEP_TOP_K). Проверить 10/15/20: scripts/compare_tiers
     TIER_DEEP_TOP_K: int = 15
-    TIER_FAST_PROVIDER: str = "openai"
+    TIER_FAST_PROVIDER: str = "deepseek"
     TIER_DEEP_PROVIDER: str = "openai"
     # Не больше стольких фрагментов с одного «места» учебника (книга + блок из трёх страниц):
     # так 14 фрагментов покрывают разные стороны вопроса, а не одну страницу.
