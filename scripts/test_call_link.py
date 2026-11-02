@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.voice.call_link import call_url, sign_call_token  # noqa: E402
+from app.voice.call_link import call_url, enter_url, sign_call_token  # noqa: E402
 
 checks = 0
 
@@ -28,4 +28,7 @@ data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
 check(data == {"tg": "12345", "subject": "Патологическая физиология", "exp": 1000 + 7200}, f"содержимое: {data}")
 check(sign_call_token("секрет", 1, None, now=0.0).split(".")[0] != body, "разные пользователи — разные ссылки")
 check(call_url("https://site.ru/", tok) == f"https://site.ru/call?t={tok}", "адрес без двойного слэша")
+check(enter_url("https://site.ru/", "T", "prepare") == "https://site.ru/api/tg/enter?t=T&to=prepare", "вход в «Подготовиться к паре»")
+check(enter_url("https://site.ru", "T", "evil") == "https://site.ru/api/tg/enter?t=T&to=exams", "чужое назначение заменяется на экзамен")
+check(call_url("https://site.ru", "T", "exam") == "https://site.ru/call?t=T&mode=exam", "режим устного экзамена")
 print(f"OK: {checks} проверок")

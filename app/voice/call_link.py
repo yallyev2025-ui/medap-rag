@@ -30,3 +30,9 @@ def sign_call_token(secret: str, tg_id: int, subject: str | None, now: float | N
 def call_url(base_url: str, token: str, mode: str | None = None) -> str:
     """Адрес мини-приложения; `mode="exam"` открывает устный экзамен по экзаменам студента на сайте"""
     return f"{base_url.rstrip('/')}/call?t={token}" + (f"&mode={mode}" if mode == "exam" else "")
+
+
+def enter_url(base_url: str, token: str, to: str) -> str:
+    """Вход в учёбу на сайте из мини-приложения: `to` — prepare («Подготовиться к паре»), exams («Экзамен») или learn"""
+    target = to if to in ("prepare", "exams", "learn") else "exams"
+    return f"{base_url.rstrip('/')}/api/tg/enter?t={token}&to={target}"

@@ -60,6 +60,7 @@ def menu_keyboard(total: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎤 Расскажу тему", callback_data="ex:story")],
             [InlineKeyboardButton(text="📖 Ответь на вопрос", callback_data="ex:solve")],
             [InlineKeyboardButton(text="🎙 Устный экзамен (звонок)", callback_data="ex:oral")],
+            [InlineKeyboardButton(text="📱 Подготовка в приложении", callback_data="ex:app")],
             [InlineKeyboardButton(text="📋 Мой список вопросов" + (f" ({total})" if total else " — загрузить"), callback_data="ex:list")],
             [InlineKeyboardButton(text="⏹ Выйти из режима", callback_data="ex:stop")],
         ]
@@ -534,3 +535,38 @@ async def cb_oral(callback: CallbackQuery) -> None:
         ORAL_TEXT,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎙 Начать устный экзамен", web_app=WebAppInfo(url=call_url(settings.SLIDES_SITE_URL, token, "exam")))]]),
     )
+
+
+APP_TEXT = (
+    "📱 Подготовка в приложении — то же, что на сайте, прямо в Telegram: «Подготовиться к паре» (краткий конспект, схема, карточки, тесты), "
+    "«Экзамен» (план по дням, цикл на вопрос: читаем → вспоминаем → перечитываем → вспоминаем) и «Звонок». "
+    "Нужен аккаунт на сайте с привязанным Telegram (Профиль → Telegram); экзамен открывается по купленному предмету."
+)
+
+
+@router.callback_query(F.data == "ex:app")
+async def cb_app(callback: CallbackQuery) -> None:
+    from app.voice.call_link import call_url, enter_url, sign_call_token
+    from config import settings
+
+    async with async_session() as session:
+        user = await get_or_create_user(session, callback.from_user)
+        await session.commit()
+    await callback.answer()
+    if not settings.SLIDES_SITE_URL or not settings.SERVICE_TOKEN:
+        await callback.message.answer("Приложение пока не настроено на сервере. Напиши администратору.")
+        return
+    base = settings.SLIDES_SITE_URL
+    token = sign_call_token(settings.SERVICE_TOKEN, user.id, user.current_subject)
+
+    def button(text: str, url: str) -> list[InlineKeyboardButton]:
+        return [InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))]
+
+    rows = [
+        button("📖 Подготовиться к паре", enter_url(base, token, "prepare")),
+        button("🎓 Экзамен: план и цикл", enter_url(base, token, "exams")),
+    ]
+    if can_use_deep(user):
+        rows.append(button("📞 Звонок", call_url(base, token)))
+        rows.append(button("🎙 Устный экзамен", call_url(base, token, "exam")))
+    await callback.message.answer(APP_TEXT, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
