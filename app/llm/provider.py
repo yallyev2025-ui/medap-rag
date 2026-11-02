@@ -472,7 +472,8 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg", hint: str 
         response = await client.audio.transcriptions.create(
             model=settings.WHISPER_MODEL,
             file=(filename, audio_bytes),
-            response_format="verbose_json",
+            # gpt-4o-transcribe (точнее на терминах) отдаёт только json; whisper-1 — verbose_json с длительностью
+            response_format="json" if settings.WHISPER_MODEL.startswith("gpt-4o") else "verbose_json",
             language="ru",
             temperature=0.0,
             # Подсказка из терминов предмета: Whisper иначе слышит «анемия» как «аниме». Лимит модели ~224 токена — режем по знакам
