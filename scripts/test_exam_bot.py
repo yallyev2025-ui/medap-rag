@@ -219,7 +219,7 @@ async def main() -> None:
     cb1 = CB(paid, "ex:ask")
     await ex.cb_ask(cb1, st)
     ok("Вопрос 1 из 3" in cb1.message.sent[0][0] and "Определение воспаления" in cb1.message.sent[0][0], "задан первый вопрос")
-    ok(spoken == ["Определение воспаления"], "подписчику вопрос ещё и озвучен")
+    ok(spoken == [], "вопрос приходит текстом, голосом бот не отвечает")
     ok(await st.get_state() == ex.ExamStates.waiting_answer.state, "ждём ответ")
     ans = FakeMessage(text="Это защитная реакция", user=paid)
     await ex.answer_text(ans, st, paid, {"count": True})
@@ -237,7 +237,6 @@ async def main() -> None:
     # бесплатный: загрузка, вопрос, голосовой ответ — отказ без траты лимита, вопрос остаётся
     await ex.got_list_text(FakeMessage(text="Тромбоз\nЭмболия вопросы", user=free), st1, free, {"count": True})
     await ex.cb_ask(CB(free, "ex:ask"), st1)
-    ok(spoken[-1] != "Тромбоз", "бесплатному вопрос голосом не озвучивается")
     fv = FakeMessage(voice=object(), user=free)
     fctx = {"count": True}
     await ex.answer_voice(fv, st1, free, fctx)
@@ -275,7 +274,7 @@ async def main() -> None:
     await ex.cb_solve(CB(paid, "ex:solve"), st3)
     r = FakeMessage(text="2", user=paid)
     await ex.solve_run(r, st3, paid, {"count": True})
-    ok(pipeline[-1] == "2:Стадии воспаления:True", f"ответ по номеру через обычный конвейер, подписчику с голосом: {pipeline}")
+    ok(pipeline[-1] == "2:Стадии воспаления:False", f"ответ по номеру через обычный конвейер, текстом: {pipeline}")
     await ex.cb_solve(CB(paid, "ex:solve"), st3)
     r2 = FakeMessage(text="Что такое лейкоцитоз?", user=paid)
     await ex.solve_run(r2, st3, paid, {"count": True})

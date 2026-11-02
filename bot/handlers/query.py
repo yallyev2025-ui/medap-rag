@@ -272,7 +272,8 @@ async def handle_voice_question(message: Message, db_user: User, usage_ctx: dict
         usage_ctx["count"] = False
         return
     await message.answer(f"🎤 Вы спросили: {question}")
-    await answer_question(message, db_user, usage_ctx, question, voice_reply=True)
+    # Отвечаем текстом: голосом отвечает только «Звонок» (решение владельца 02.11.2026)
+    await answer_question(message, db_user, usage_ctx, question)
 
 
 @router.callback_query(F.data == "speak:1")
@@ -390,16 +391,8 @@ async def answer_question(message: Message, db_user: User, usage_ctx: dict, ques
         return
 
     await _clear_status(status)
-    # Кнопки «📖 источник · стр.» по реально процитированным источникам (проверенные id из базы);
-    # подписчикам — ещё «🔊 Озвучить»
-    premium = can_use_deep(db_user)
-    await _send_answer(message, answer, _with_speak(citation_buttons(result.citations), premium))
-    # Вопрос задан голосом — ответ приходит и голосом тоже
-    if voice_reply and premium:
-        async with async_session() as session:
-            voice = await get_voice(session, db_user.id)
-        await speak_to(message, answer, voice)
-
+    # Кнопки «📖 источник · стр.» по реально процитированным источникам (проверенные id из базы)
+    await _send_answer(message, answer, citation_buttons(result.citations))
     async with async_session() as session:
         await log_query(
             session, db_user.id, question, answer, result.subject_used, response_time_ms

@@ -25,9 +25,9 @@ from app.observability.context import request_context
 from app.workflows.evaluate import EvaluationResult, evaluate_free_recall, evaluate_oral, evaluate_recall
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.panel import BTN_EXAM
-from bot.voice_reply import VOICE_PREMIUM_TEXT, speak_to
+from bot.voice_reply import VOICE_PREMIUM_TEXT
 from constants import SOURCE_TEXTBOOK
-from db.crud import can_use_deep, get_exam_list, get_or_create_user, get_voice, save_exam_list, update_exam_progress
+from db.crud import can_use_deep, get_exam_list, get_or_create_user, save_exam_list, update_exam_progress
 from db.models import User
 from db.session import async_session
 
@@ -290,13 +290,10 @@ async def cb_ask(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await update_exam_progress(session, row, position, weak)
         await session.commit()
-        voice = await get_voice(session, user.id)
     await state.set_state(ExamStates.waiting_answer)
     await state.update_data(index=index)
     text = f"{progress_line(index, len(questions), len(weak))}\n\n{questions[index]}\n\nОтвечай текстом или голосом (голос — для подписчиков)."
     await callback.message.answer(text)
-    if can_use_deep(user):
-        await speak_to(callback.message, questions[index], voice)
 
 
 async def _evaluate_and_show(message: Message, state: FSMContext, db_user: User, usage_ctx: dict, question: str, index: int, *, audio: bytes | None, text: str | None) -> None:
@@ -434,7 +431,7 @@ async def _answer_via_main_pipeline(message: Message, tg_user, user: User, quest
 
     # Для нажатия кнопки message — сообщение бота; подставляем автора, чтобы лимит и запись шли на студента
     proxy = message.model_copy(update={"from_user": tg_user})
-    await answer_question(proxy, user, usage_ctx if usage_ctx is not None else {"count": False}, question, voice_reply=can_use_deep(user))
+    await answer_question(proxy, user, usage_ctx if usage_ctx is not None else {"count": False}, question)
     await message.answer("Дальше?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➡️ Следующий вопрос", callback_data="ex:ask"), InlineKeyboardButton(text="🎓 Меню", callback_data="ex:menu")]]))
 
 

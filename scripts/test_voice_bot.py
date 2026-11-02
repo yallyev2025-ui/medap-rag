@@ -117,7 +117,7 @@ async def main() -> None:
     q.answer_question = fake_answer  # type: ignore[assignment]
     m2 = FakeMessage(voice=object())
     await q.handle_voice_question(m2, paid, {"count": True})
-    ok(asked == [("Какие стадии воспаления?", True)] and transcribed == ["voice.ogg"], "подписчик: вопрос распознан и отправлен в обычный поток с голосовым ответом")
+    ok(asked == [("Какие стадии воспаления?", False)] and transcribed == ["voice.ogg"], "подписчик: вопрос распознан и отправлен в обычный поток, ответ текстом (голосом отвечает только «Звонок»)")
     ok(any("Вы спросили" in t for t, _ in m2.sent), "бот показал, что услышал")
 
     # тишина в записи → просьба повторить, лимит не тратится
