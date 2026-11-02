@@ -213,8 +213,7 @@ def can_use_deep(user: User) -> bool:
 def user_tier(user: User) -> str:
     """Действующий режим ответа: выбранный глубокий — только если на него есть право,
     иначе быстрый (срок Premium закончился — режим тихо возвращается к быстрому)."""
-    if getattr(user, "answer_tier", None) == TIER_DEEP and can_use_deep(user):
-        return TIER_DEEP
+    # С 02.11.2026 режим один (владелец): выбор «быстрый/глубокий» убран, отвечает лучшая модель (Luna) для всех
     return TIER_FAST
 
 

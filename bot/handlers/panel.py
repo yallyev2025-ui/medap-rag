@@ -67,12 +67,22 @@ def _status(user: User) -> tuple[str, str]:
     return panel.status_line(*args, symptom=symptom), panel.context_placeholder(*args, symptom=symptom)
 
 
+def _app_url(user: User) -> str | None:
+    """Адрес мини-приложения MedAP для постоянной кнопки внизу: подписанная ссылка на неделю (кнопка внизу живёт долго)"""
+    from app.voice.call_link import app_url, sign_call_token
+    from config import settings
+
+    if not settings.SLIDES_SITE_URL or not settings.SERVICE_TOKEN:
+        return None
+    return app_url(settings.SLIDES_SITE_URL, sign_call_token(settings.SERVICE_TOKEN, user.id, user.current_subject, ttl=7 * 24 * 3600))
+
+
 async def show_main(message: Message, user: User, title: str = "Главное меню") -> None:
     """Главная нижняя панель + строка «Сейчас: …» (и подсказка в поле ввода)."""
     status, placeholder = _status(user)
     await message.answer(
         f"{title}\n{status}",
-        reply_markup=panel.main_keyboard(has_clinrek_access(user), placeholder, show_tier=can_use_deep(user)),
+        reply_markup=panel.main_keyboard(has_clinrek_access(user), placeholder, show_tier=can_use_deep(user), app_url=_app_url(user)),
     )
 
 
@@ -156,7 +166,7 @@ async def on_clinrek(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user), app_url=_app_url(user)))
         return
     await message.answer("Выбери категорию клинических рекомендаций:", reply_markup=panel.categories_keyboard())
 
@@ -166,7 +176,7 @@ async def on_pick_category(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user), app_url=_app_url(user)))
         return
     picked = panel.category_from_button(message.text)
     if picked is None:
@@ -186,7 +196,7 @@ async def on_symptom(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = await _load_user(message.from_user)
     if not has_clinrek_access(user):
-        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user)))
+        await message.answer(CLINREK_PREMIUM_TEXT, reply_markup=panel.main_keyboard(False, show_tier=can_use_deep(user), app_url=_app_url(user)))
         return
     async with async_session() as session:
         await set_user_selection(session, user.id, SOURCE_CLINREK, None, symptom_mode=True)

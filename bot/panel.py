@@ -9,6 +9,7 @@ Telegram сам сворачивает/разворачивает такую к�
 import json
 
 from aiogram.types import (
+    WebAppInfo,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -127,17 +128,18 @@ def status_line(source_type: str | None, subject: str | None, scope: str, docs_c
     return f"Сейчас: 📚 только учебники — {subj}"
 
 
-def main_keyboard(show_clinrek: bool, placeholder: str = "Задай вопрос…", show_tier: bool = False) -> ReplyKeyboardMarkup:
+def main_keyboard(show_clinrek: bool, placeholder: str = "Задай вопрос…", show_tier: bool = False, app_url: str | None = None) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=BTN_TEXTBOOKS), KeyboardButton(text=BTN_DOCS)]]
     second = [KeyboardButton(text=BTN_SCOPE)]
     if show_clinrek:
         second.insert(0, KeyboardButton(text=BTN_CLINREK))
     rows.append(second)
     # Режим ответа — только тем, у кого есть «Глубокий» (Premium/админ): остальным выбирать не из чего.
-    if show_tier:
-        rows.append([KeyboardButton(text=BTN_TIER)])
-    # Экзамен — всем; «Звонок» (мини-приложение с голосовым разговором) — подписчикам
-    rows.append([KeyboardButton(text=BTN_EXAM)] + ([KeyboardButton(text=BTN_CALL)] if show_tier else []))
+    # Режима ответа больше нет (один режим, Luna). Одна кнопка мини-приложения MedAP (звонок, экзамен/зачёт, к паре) и текстовый «Экзамен»
+    first = [KeyboardButton(text=BTN_EXAM)]
+    if app_url:
+        first.insert(0, KeyboardButton(text="📱 MedAP", web_app=WebAppInfo(url=app_url)))
+    rows.append(first)
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

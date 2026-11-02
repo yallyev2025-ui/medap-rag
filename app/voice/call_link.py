@@ -36,3 +36,8 @@ def enter_url(base_url: str, token: str, to: str) -> str:
     """Вход в учёбу на сайте из мини-приложения: `to` — prepare («Подготовиться к паре»), exams («Экзамен») или learn"""
     target = to if to in ("prepare", "exams", "learn") else "exams"
     return f"{base_url.rstrip('/')}/api/tg/enter?t={token}&to={target}"
+
+
+def app_url(base_url: str, token: str) -> str:
+    """Главный экран мини-приложения MedAP: плитки «Позвонить», «Экзамен или зачёт», «К паре»"""
+    return f"{base_url.rstrip('/')}/app?t={token}"
