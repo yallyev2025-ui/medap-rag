@@ -458,7 +458,7 @@ async def probe_provider(provider_key: str) -> ProbeResult:
     return result
 
 
-async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg", hint: str = "") -> str:
     """Speech-to-Text (§20 ТЗ, этап 4A.7) — Whisper, только OpenAI: у DeepSeek нет
     STT API, поэтому TaskModelMap здесь не применяется и провайдер жёстко OpenAI,
     без фолбэка (нет альтернативного провайдера, на который можно переключиться)."""
@@ -473,6 +473,10 @@ async def transcribe(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
             model=settings.WHISPER_MODEL,
             file=(filename, audio_bytes),
             response_format="verbose_json",
+            language="ru",
+            temperature=0.0,
+            # Подсказка из терминов предмета: Whisper иначе слышит «анемия» как «аниме». Лимит модели ~224 токена — режем по знакам
+            **({"prompt": hint.strip()[:700]} if hint.strip() else {}),
         )
     except openai.APIError as exc:
         latency_ms = int((time.monotonic() - started) * 1000)

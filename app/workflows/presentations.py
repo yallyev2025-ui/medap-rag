@@ -38,7 +38,7 @@ STEPS = frozenset(
         # сайт стоит в России и до модели не дотягивается, бот — да. Потолки и учёт расхода общие.
         "role_structure", "role_passport", "role_extractor", "role_writer", "role_checker", "role_fixer", "role_completeness",
         # MedAP, этап 5: голосовой «Звонок» (мини-приложение на сайте): короткие реплики быстрой моделью
-        "call_lead", "call_answer", "call_check",
+        "call_lead", "call_answer", "call_check", "call_fix", "call_full", "call_exam",
     }
 )
 

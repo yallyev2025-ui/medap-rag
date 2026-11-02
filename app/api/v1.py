@@ -582,6 +582,7 @@ class SpeakResponse(BaseModel):
 class TranscribeRequest(BaseModel):
     audioBase64: str = Field(..., min_length=1)
     filename: str = "audio.webm"
+    hint: str = Field("", max_length=1500)
     context: StudentAIContext
 
 
@@ -648,7 +649,7 @@ async def voice_transcribe(payload: TranscribeRequest, request: Request) -> Tran
         raise HTTPException(status_code=400, detail=f"Запись больше {settings.ORAL_MAX_AUDIO_MB} МБ")
     with request_context(user_id=payload.context.userId, channel="api", workflow="SPEECH_TO_TEXT"):
         try:
-            text = await llm.transcribe(audio, payload.filename)
+            text = await llm.transcribe(audio, payload.filename, hint=payload.hint)
         except llm.LLMError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return TranscribeResponse(text=text)
