@@ -68,20 +68,33 @@ def seconds_until_digest(now: datetime | None = None) -> float:
 
 
 async def _send_digests() -> None:
-    """Сводка CRM каждому владельцу из ADMIN_IDS: сайт отвечает только тому, чей Telegram привязан к аккаунту владельца."""
-    if not settings.TELEGRAM_BOT_TOKEN or not settings.ADMIN_IDS:
+    """Сводка CRM каждому владельцу из ADMIN_IDS: сайт отвечает только тому, чей Telegram привязан к аккаунту владельца.
+
+    Сводка про презентации приходит В БОТЕ ПРЕЗЕНТАЦИЙ (владелец 03.11.2026: «сводка пришла не туда» — раньше шла через основного бота).
+    Если бот презентаций ещё не запущен у владельца (он не нажимал «Начать») или не настроен — запасной путь через основного бота, чтобы сводка не потерялась.
+    """
+    tokens = [t for t in (settings.SLIDES_BOT_TOKEN, settings.TELEGRAM_BOT_TOKEN) if t]
+    tokens = list(dict.fromkeys(tokens))
+    if not tokens or not settings.ADMIN_IDS:
         return
-    notifier = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    bots = [Bot(token=t) for t in tokens]
     try:
         for admin_id in settings.ADMIN_IDS:
             try:
                 r = await slides_site.site.call("digest", admin_id, days=1)
-                if r.get("ok") and r.get("text"):
-                    await notifier.send_message(admin_id, str(r["text"]))
+                if not (r.get("ok") and r.get("text")):
+                    continue
+                for bot in bots:
+                    try:
+                        await bot.send_message(admin_id, str(r["text"]))
+                        break
+                    except Exception:  # noqa: BLE001 — этот бот владельцу писать не может: пробуем следующий
+                        logger.warning("Сводка владельцу %s не ушла через одного из ботов", admin_id, exc_info=True)
             except Exception:
                 logger.warning("Сводка владельцу %s не отправилась", admin_id, exc_info=True)
     finally:
-        await notifier.session.close()
+        for bot in bots:
+            await bot.session.close()
 
 
 async def digest_loop() -> None:
