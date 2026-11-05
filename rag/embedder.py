@@ -15,7 +15,7 @@ def _get_model() -> SentenceTransformer:
     # config.py) не всегда достаточно — если torch успел проинициализировать
     # свой пул потоков раньше, они не подхватятся. Явный вызов — вторая,
     # надёжная точка контроля; выполнится ровно один раз (lru_cache).
-    torch.set_num_threads(settings.CPU_THREAD_LIMIT)
+    torch.set_num_threads(settings.EMBED_THREADS)
     return SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
 
 

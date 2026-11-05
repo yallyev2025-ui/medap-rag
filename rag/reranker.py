@@ -87,7 +87,7 @@ def _get_onnx():
         raise FileNotFoundError(f"нет файла сжатой модели: {model_path}")
 
     options = ort.SessionOptions()
-    options.intra_op_num_threads = settings.CPU_THREAD_LIMIT
+    options.intra_op_num_threads = settings.RERANK_THREADS
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
     session = ort.InferenceSession(model_path, options, providers=["CPUExecutionProvider"])

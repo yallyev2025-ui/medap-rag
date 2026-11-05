@@ -7,6 +7,18 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def cpu_plan(cores: int, percent: int = 90, limit_override: int = 0) -> tuple[int, int, int]:
+    """(весь бюджет потоков, потоки реранкера, потоки эмбеддингов): вместе не больше `percent` % ядер, каждому минимум 1 поток.
+
+    Реранкер — главный потребитель (70% бюджета), эмбеддинг одного вопроса лёгкий и берёт остальное.
+    """
+    pct = min(100, max(10, percent))
+    budget = limit_override if limit_override > 0 else max(1, (max(1, cores) * pct) // 100)
+    rerank = max(1, round(budget * 0.7))
+    embed = max(1, budget - rerank)
+    return budget, rerank, embed
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -186,7 +198,8 @@ class Settings(BaseSettings):
     # Щадящая загрузка источников (владелец 28.10.2026: «грузишь учебники — презентации и ответы перестают работать»): во время загрузки
     # эмбеддер использует не больше INGEST_THREADS ядер (остальные остаются ответам), а между пачками делается пауза INGEST_PAUSE_S секунд,
     # чтобы запросы людей успевали проходить. Больше потоков и меньше пауза — загрузка быстрее, но ответы в это время медленнее.
-    INGEST_THREADS: int = 4
+    # По умолчанию не больше 4 и не больше доли эмбеддингов в общем бюджете процессора (иначе вместе с реранкером выйдем за 90% ядер)
+    INGEST_THREADS: int = Field(default_factory=lambda: max(1, min(4, cpu_plan(os.cpu_count() or 2, int(os.environ.get("CPU_BUDGET_PERCENT", "90")), int(os.environ.get("CPU_THREAD_LIMIT", "0")))[2])))
     INGEST_PAUSE_S: float = 0.4
     # MedAP, этап 1: глубокий разбор учебников (структура, таблицы, рисунки). По умолчанию выключен:
     # включается переменной DEEP_PARSE=1 после пробной книги (docs/medap/plan, часть Б0).
@@ -199,11 +212,17 @@ class Settings(BaseSettings):
     # Батч 16: без этого PyTorch/BLAS (расчёт эмбеддингов, rag/embedder.py)
     # по умолчанию претендует на ВСЕ видимые ядра процессора — во время
     # загрузки источника это отбирает процессор у event loop (бот/админка/API)
-    # настолько, что всё остальное подвисает. Авто-подбор: одно ядро оставляем
-    # свободным; переопределяется переменной окружения CPU_THREAD_LIMIT, если
-    # нужно вручную (например, если контейнер видит больше ядер, чем реально
-    # выделено тарифом Timeweb).
-    CPU_THREAD_LIMIT: int = Field(default_factory=lambda: max(1, (os.cpu_count() or 2) - 1))
+    # настолько, что всё остальное подвисает.
+    #
+    # Бюджет процессора (владелец 05.11.2026: «чтобы никогда не было 100%, свободными всегда ≥10%»): все расчёты вместе
+    # (реранкер + эмбеддинги) берут не больше CPU_BUDGET_PERCENT % ядер. Раньше одно ядро оставлялось свободным ДЛЯ КАЖДОГО пула отдельно,
+    # а пула два и они работают одновременно: на 11 ядрах до 20 потоков = 100%. Теперь бюджет делится между ними (см. `cpu_plan`).
+    # Переопределяется переменными CPU_BUDGET_PERCENT, CPU_THREAD_LIMIT (весь бюджет), RERANK_THREADS, EMBED_THREADS — например, если
+    # контейнер видит больше ядер, чем реально выделено тарифом.
+    CPU_BUDGET_PERCENT: int = 90
+    CPU_THREAD_LIMIT: int = Field(default_factory=lambda: cpu_plan(os.cpu_count() or 2, int(os.environ.get("CPU_BUDGET_PERCENT", "90")))[0])
+    RERANK_THREADS: int = Field(default_factory=lambda: cpu_plan(os.cpu_count() or 2, int(os.environ.get("CPU_BUDGET_PERCENT", "90")), int(os.environ.get("CPU_THREAD_LIMIT", "0")))[1])
+    EMBED_THREADS: int = Field(default_factory=lambda: cpu_plan(os.cpu_count() or 2, int(os.environ.get("CPU_BUDGET_PERCENT", "90")), int(os.environ.get("CPU_THREAD_LIMIT", "0")))[2])
 
     ADMIN_IDS_RAW: str = ""
 
@@ -440,9 +459,9 @@ def rerank_threshold() -> float:
 # config.py импортируется практически везде первым, поэтому это надёжная
 # точка. setdefault(), а не прямое присваивание: если оператор уже явно
 # выставил переменную окружения сам, не переписываем её.
-os.environ.setdefault("OMP_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
-os.environ.setdefault("MKL_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
-os.environ.setdefault("OPENBLAS_NUM_THREADS", str(settings.CPU_THREAD_LIMIT))
+os.environ.setdefault("OMP_NUM_THREADS", str(settings.EMBED_THREADS))
+os.environ.setdefault("MKL_NUM_THREADS", str(settings.EMBED_THREADS))
+os.environ.setdefault("OPENBLAS_NUM_THREADS", str(settings.EMBED_THREADS))
 
 # Батч 24: запасной DNS (DoH 1.1.1.1 / 8.8.8.8) на случай, когда системный DNS
 # Timeweb не отвечает. config.py импортируется первым — подключаем до любых сетевых вызовов.
