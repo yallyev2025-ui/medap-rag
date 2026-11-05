@@ -19,6 +19,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from rag.priority import read_priority
 from app.evidence.viewer import fetch_evidence
 from app.llm import provider as llm
 from app.llm.registry import cost_usd, profile, to_rub
@@ -61,7 +62,7 @@ from app.workflows.book_search import search_with_subject_fallback  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1", tags=["student-ai"], dependencies=[Depends(require_service_token)])
+router = APIRouter(prefix="/v1", tags=["student-ai"], dependencies=[Depends(require_service_token), Depends(read_priority)])
 
 
 class StudentAIContext(BaseModel):

@@ -19,6 +19,7 @@ from config import rerank_threshold, settings
 from constants import ACTIVE_SOURCE_STATUSES
 from db.models import Book, BookChunk
 from db.session import async_session
+from rag.priority import is_background
 from rag.embedder import embed_query
 from rag.reranker import rerank_scores
 
@@ -255,6 +256,21 @@ _rerank_sem: asyncio.Semaphore | None = None
 _rerank_sem_loop: asyncio.AbstractEventLoop | None = None
 
 
+_bg_sem: asyncio.Semaphore | None = None
+_bg_sem_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _background_semaphore() -> asyncio.Semaphore:
+    """Узкая очередь для фоновой работы: она занимает не больше BACKGROUND_RERANK_SLOTS из RERANK_CONCURRENCY мест."""
+    global _bg_sem, _bg_sem_loop
+    loop = asyncio.get_running_loop()
+    if _bg_sem is None or _bg_sem_loop is not loop:
+        limit = max(1, min(settings.BACKGROUND_RERANK_SLOTS, max(1, settings.RERANK_CONCURRENCY - 1)))
+        _bg_sem = asyncio.Semaphore(limit)
+        _bg_sem_loop = loop
+    return _bg_sem
+
+
 def _rerank_semaphore() -> asyncio.Semaphore:
     global _rerank_sem, _rerank_sem_loop
     loop = asyncio.get_running_loop()
@@ -268,10 +284,14 @@ async def _rerank(question: str, chunks: list[ChunkResult]) -> list[ChunkResult]
     """Переупорядочивает чанки cross-encoder реранкером (проставляет rerank_score).
     При недоступности реранкера мягко деградирует до порядка после RRF-фьюжна."""
     try:
-        async with _rerank_semaphore():
-            scores = await asyncio.to_thread(
-                rerank_scores, question, [c.content for c in chunks]
-            )
+        # Фоновая работа сначала встаёт в свою узкую очередь и только потом — в общую: срочные запросы её не ждут
+        if is_background():
+            async with _background_semaphore():
+                async with _rerank_semaphore():
+                    scores = await asyncio.to_thread(rerank_scores, question, [c.content for c in chunks])
+        else:
+            async with _rerank_semaphore():
+                scores = await asyncio.to_thread(rerank_scores, question, [c.content for c in chunks])
         for chunk, score in zip(chunks, scores):
             chunk.rerank_score = score
         chunks.sort(key=lambda c: c.rerank_score, reverse=True)
