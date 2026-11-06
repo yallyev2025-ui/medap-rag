@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     CONSPECT_POINTS_PER_BATCH_BRIEF: int = 8
     CONSPECT_FRAGMENTS_PER_POINT: int = 6
     CONSPECT_MAX_FRAGMENTS: int = 36
-    CONSPECT_CONCURRENCY: int = 2
+    CONSPECT_CONCURRENCY: int = 1
     CONSPECT_MAX_OUTPUT_TOKENS: int = 8192
     # Модель OpenAI: ответы студентам (в т.ч. глубокий режим), конспекты, Vision (фото
     # тестов), оценка ответов. С 13.10.2026 — GPT-6 Luna (дешевле и лучше GPT-5.4 Mini).
