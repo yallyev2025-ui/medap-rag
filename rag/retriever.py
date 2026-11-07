@@ -89,6 +89,12 @@ def _base_filters(
             stmt = stmt.where(BookChunk.book_id.in_(book_id))
     if user_id is not None:
         stmt = stmt.where(BookChunk.user_id == user_id)
+    else:
+        # Общий поиск по учебникам НИКОГДА не видит личные файлы студентов (владелец 07.11.2026:
+        # «память загруженных файлов не должна смешиваться с базой учебников»). Файл студента
+        # лежит с user_id; поиск без user_id берёт только общую базу (user_id пуст) — даже если
+        # source_type забыли передать или подставили неверно выше по стеку.
+        stmt = stmt.where(BookChunk.user_id.is_(None))
     return stmt
 
 

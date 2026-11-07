@@ -35,6 +35,14 @@ def test_new_version_chunks_do_not_hit_old_cached_answers() -> None:
     assert overlap(old_ids, [101, 102, 9001]) > 0.5  # до переключения кеш работает как раньше
 
 
+def test_general_search_never_sees_student_files() -> None:
+    # Личные файлы студентов лежат с user_id; общий поиск без user_id берёт только общую базу.
+    general = _sql(_base_filters(select(BookChunk.id), None, "pathphys", None))
+    assert "book_chunks.user_id IS NULL" in general
+    own = _sql(_base_filters(select(BookChunk.id), "документ_студента", None, None, 5, "u1"))
+    assert "book_chunks.user_id =" in own and "user_id IS NULL" not in own
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
