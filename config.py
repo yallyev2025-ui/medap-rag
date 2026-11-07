@@ -21,6 +21,16 @@ def cpu_plan(cores: int, percent: int = 100, limit_override: int = 0) -> tuple[i
     return budget, rerank, embed
 
 
+def ocr_workers_for(budget: int) -> int:
+    """Потоков распознавания сканов (владелец 08.11.2026: «для распознавания учебников больше ядер, иначе очень медленно»).
+
+    Из бюджета процессора три потока остаются ответам и реранкеру, всё остальное — распознаванию (каждый tesseract в один поток);
+    не меньше двух и не больше восьми: каждый поток держит отрендеренную страницу скана в памяти. Реранкер теперь сжатый (ONNX),
+    памяти свободно больше, чем при старой схеме.
+    """
+    return max(2, min(8, budget - 3))
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -196,7 +206,7 @@ class Settings(BaseSettings):
     # подберите под число vCPU тарифа Timeweb. Больше — быстрее, но выше
     # пиковая память при одновременном рендере нескольких страниц (в процессе
     # уже живут эмбеддер и реранкер).
-    OCR_WORKERS: int = 2
+    OCR_WORKERS: int = Field(default_factory=lambda: ocr_workers_for(cpu_plan(os.cpu_count() or 2, int(os.environ.get("CPU_BUDGET_PERCENT", "100")), int(os.environ.get("CPU_THREAD_LIMIT", "0")))[0]))
     # Щадящая загрузка источников (владелец 28.10.2026: «грузишь учебники — презентации и ответы перестают работать»): во время загрузки
     # эмбеддер использует не больше INGEST_THREADS ядер (остальные остаются ответам), а между пачками делается пауза INGEST_PAUSE_S секунд,
     # чтобы запросы людей успевали проходить. Больше потоков и меньше пауза — загрузка быстрее, но ответы в это время медленнее.
