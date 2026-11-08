@@ -55,6 +55,24 @@ for full in (False, True):
     html = env.from_string(block).render(ingest_full_power=full, ingest_cores=11)
     check(("ПОЛНАЯ МОЩНОСТЬ" in html) == full and ('name="full" value="%d"' % (0 if full else 1)) in html and "11" in html, f"админка: блок скорости при full_power={full}")
 
+# --- таблица загрузок: «Движение» (нулевая нагрузка не должна выглядеть как работа) ---
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+start = tpl_source.index('<h1 style="font-size:18px">Обработка</h1>')
+jobs_block = "<section>\n  " + tpl_source[start : tpl_source.index("</section>", start) + len("</section>")]
+now = datetime.now(timezone.utc)
+
+
+def job(status: str, minutes_ago: int, title: str) -> SimpleNamespace:
+    return SimpleNamespace(id=1, filename=f"{title}.pdf", title=title, subject="x", status=status, stage="эмбеддинги 96/540", chunks_count=None, error=None, updated_at=now - timedelta(minutes=minutes_ago))
+
+
+html = env.from_string(jobs_block).render(now=now, jobs=[job("running", 3, "живая"), job("running", 45, "зависшая"), job("done", 600, "готовая")])
+check("обновлено 3 мин назад" in html, "живая загрузка: «обновлено 3 мин назад»")
+check("нет движения 45 мин" in html and "зависла" in html, "зависшая: красное «нет движения 45 мин»")
+check(html.count("нет движения") == 1 and "эмбеддинги 96/540" in html, "готовая не помечается, стадия с прогрессом видна")
+
 # --- с базой ---
 if os.environ.get("TEST_DATABASE_URL"):
     from sqlalchemy import select  # noqa: E402

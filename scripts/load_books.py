@@ -79,7 +79,7 @@ def _analyze_deep(file_path: str, pages: list[str]):
     return layouts, low
 
 
-async def _insert_chunks(session, *, book_id: int, book_meta: dict, chunks, version: int) -> None:
+async def _insert_chunks(session, *, book_id: int, book_meta: dict, chunks, version: int, progress=None) -> None:
     """Эмбеддинги пачками и запись фрагментов книги (общий путь загрузки и переобработки)."""
     try:
         for batch_start in range(0, len(chunks), BATCH_SIZE):
@@ -114,6 +114,8 @@ async def _insert_chunks(session, *, book_id: int, book_meta: dict, chunks, vers
                 )
 
             await session.flush()
+            if progress is not None:  # «эмбеддинги 96/540» — по этой строке в админке видно, что загрузка действительно идёт
+                await progress(f"эмбеддинги {min(batch_start + BATCH_SIZE, len(chunks))}/{len(chunks)}")
             # Батч 18: flush() пишет в БД, но НЕ освобождает Python-объекты — уже добавленные
             # BookChunk (текст куска + вектор эмбеддинга) остались бы в identity map сессии до
             # самого commit() в конце. Для длинной книги (~1000+ кусков) это рост памяти монотонно
@@ -195,6 +197,7 @@ async def load_book(
     exam_id: str | None = None,
     deep: bool | None = None,
     allow_duplicate: bool = False,
+    progress=None,
 ) -> tuple[int, int]:
     checksum = await asyncio.to_thread(s3.file_checksum, file_path)
     extension = os.path.splitext(file_path)[1].lower()
@@ -208,7 +211,11 @@ async def load_book(
 
     # Извлечение текста (включая OCR сканов) и чанкинг — тяжёлая синхронная работа,
     # уводим в поток, чтобы не блокировать event loop бота во время /addbook.
+    if progress is not None:
+        await progress("чтение текста / OCR")
     pages, paged = await asyncio.to_thread(extract_document, file_path)
+    if progress is not None:
+        await progress("нарезка на фрагменты")
     chunks = await asyncio.to_thread(chunk_text, pages, paged=paged)
 
     if not chunks:
@@ -249,6 +256,8 @@ async def load_book(
         # Оригинал и постраничный текст в S3 — best-effort, ключи из book_id
         # известны только после flush(). Без S3 остаются None (мягкая деградация,
         # см. app/storage/s3.py).
+        if progress is not None:
+            await progress("сохранение оригинала в хранилище")
         book.file_path = await asyncio.to_thread(
             s3.upload_original, file_path, book_id, checksum, extension
         )
@@ -266,6 +275,7 @@ async def load_book(
             ),
             chunks=chunks,
             version=1,
+            progress=progress,
         )
         if layouts is not None:
             await _save_figures(session, book_id, 1, layouts)

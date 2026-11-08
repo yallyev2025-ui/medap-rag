@@ -16,6 +16,7 @@ async def init_db() -> None:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         await conn.run_sync(Base.metadata.create_all)
         # Миграция для таблиц, созданных до появления номеров страниц в чанках.
+        await conn.execute(text("ALTER TABLE ingest_jobs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();"))
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS page_from INTEGER;"))
         await conn.execute(text("ALTER TABLE book_chunks ADD COLUMN IF NOT EXISTS page_to INTEGER;"))
         # Миграция v2: разделение на учебники/клинреки + состояние выбора у пользователя.

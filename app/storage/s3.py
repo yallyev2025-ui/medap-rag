@@ -25,13 +25,17 @@ def is_configured() -> bool:
 @lru_cache(maxsize=1)
 def _client() -> Any:
     import boto3
+    from botocore.config import Config
 
+    # Без таймаутов недоступное хранилище подвешивало загрузку учебника на минуты и часы при нулевой нагрузке процессора
+    # (boto3 по умолчанию ждёт подолгу и повторяет до 5 раз). Теперь сбой виден через секунды, и загрузка идёт без оригинала (мягкая деградация).
     return boto3.client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT_URL,
         aws_access_key_id=settings.S3_ACCESS_KEY,
         aws_secret_access_key=settings.S3_SECRET_KEY,
         region_name=settings.S3_REGION,
+        config=Config(connect_timeout=10, read_timeout=120, retries={"max_attempts": 3, "mode": "standard"}),
     )
 
 

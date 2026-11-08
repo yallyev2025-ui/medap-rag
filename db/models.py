@@ -274,6 +274,8 @@ class IngestJob(Base):
     created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="admin")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Когда запись менялась в последний раз (стадия/прогресс): по ней админка видит «нет движения N минут» — загрузка с нулевой нагрузкой больше не выглядит работающей
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 
 
 class AuditLog(Base):

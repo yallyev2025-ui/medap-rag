@@ -305,6 +305,7 @@ async def _sources_context(**overrides) -> dict:
     from app import ingest_mode
 
     base = {
+        "now": datetime.now(timezone.utc),
         "ingest_full_power": ingest_mode.is_full_power(),
         "ingest_cores": ingest_mode.cores(),
         "books": books,
@@ -488,6 +489,10 @@ async def _run_ingest(
             await _set_job(job_id, stage="queued")
             async with SOURCE_INGEST_LOCK:
                 await _set_job(job_id, status="running", stage="parsing")
+
+                async def _progress(stage: str) -> None:
+                    await _set_job(job_id, stage=stage[:32])
+
                 _book_id, chunks = await load_book(
                     file_path,
                     subject,
@@ -501,6 +506,7 @@ async def _run_ingest(
                     authority_level=authority_level,
                     verification_status=verification_status,
                     language=language,
+                    progress=_progress,
                 )
             await _set_job(
                 job_id,
