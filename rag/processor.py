@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import pdfplumber
 
+from app import ingest_mode
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -135,15 +136,16 @@ def _ocr_pdf_pages(pdf_path: str, page_numbers: list[int]) -> dict[int, str]:
     results: dict[int, str] = {}
     for run in _contiguous_runs(page_numbers):
         for start in range(0, len(run), OCR_BATCH_SIZE):
+            workers = ingest_mode.ocr_workers()  # читается перед каждым батчем страниц: «полная мощность» подхватывается на лету
             batch = run[start : start + OCR_BATCH_SIZE]
             images = convert_from_path(
                 pdf_path,
                 dpi=OCR_DPI,
                 first_page=batch[0],
                 last_page=batch[-1],
-                thread_count=settings.OCR_WORKERS,
+                thread_count=workers,
             )
-            with ThreadPoolExecutor(max_workers=settings.OCR_WORKERS) as pool:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
                 recognized = pool.map(lambda img: pytesseract.image_to_string(img, lang=OCR_LANG), images)
                 for page_number, text in zip(batch, recognized):
                     results[page_number] = text

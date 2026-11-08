@@ -22,6 +22,7 @@ from constants import DEFAULT_AUTHORITY_LEVEL, DEFAULT_VERIFICATION_STATUS, SOUR
 from db.models import Book, BookChunk, BookFigure
 from db.session import async_session
 from config import settings
+from app import ingest_mode
 from rag.embedder import embed_passages, limited_threads
 from rag.processor import chunk_text, extract_document
 
@@ -85,11 +86,11 @@ async def _insert_chunks(session, *, book_id: int, book_meta: dict, chunks, vers
             batch = chunks[batch_start : batch_start + BATCH_SIZE]
             # щадящий режим: ограниченное число ядер и пауза между пачками, чтобы бот и сайт продолжали отвечать
             def _embed(texts: list[str] = [chunk.content for chunk in batch]) -> list[list[float]]:
-                with limited_threads(settings.INGEST_THREADS):
+                with limited_threads(ingest_mode.ingest_threads()):  # режим читается перед каждой пачкой: кнопка в админке действует на лету
                     return embed_passages(texts)
 
             embeddings = await asyncio.to_thread(_embed)
-            await asyncio.sleep(settings.INGEST_PAUSE_S)
+            await asyncio.sleep(ingest_mode.ingest_pause())
 
             for offset, (chunk, embedding) in enumerate(zip(batch, embeddings)):
                 session.add(

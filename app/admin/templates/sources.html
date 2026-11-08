@@ -106,6 +106,21 @@
 </section>
 
 <section>
+  <h1 style="font-size:18px">Скорость загрузки</h1>
+  <div class="card" style="{% if ingest_full_power %}border:2px solid #c0392b{% endif %}">
+    {% if ingest_full_power %}
+    <p><strong>Сейчас: ПОЛНАЯ МОЩНОСТЬ.</strong> Загрузка использует все {{ ingest_cores }} ядер процессора и идёт без пауз. Ответы студентам и презентации в это время могут замедляться.
+    Утром не забудьте вернуть щадящий режим.</p>
+    <form method="post" action="/admin/ingest-mode"><input type="hidden" name="full" value="0"><button type="submit">Вернуть щадящий режим</button></form>
+    {% else %}
+    <p><strong>Сейчас: щадящий режим.</strong> Загрузка берёт часть ядер и делает паузы, чтобы ответы и презентации не зависали. Загрузка идёт медленнее.</p>
+    <p class="note">Ставите учебники на ночь — нажмите кнопку: загрузка (в том числе уже идущая) пойдёт на всех {{ ingest_cores }} ядрах без пауз.</p>
+    <form method="post" action="/admin/ingest-mode"><input type="hidden" name="full" value="1"><button type="submit">Включить полную мощность (на ночь)</button></form>
+    {% endif %}
+  </div>
+</section>
+
+<section>
   <h1 style="font-size:18px">Обработка</h1>
   <table>
     <tr><th>Файл</th><th>Название</th><th>Предмет</th><th>Статус</th><th>Стадия</th><th>Чанков</th><th>Ошибка</th><th></th></tr>

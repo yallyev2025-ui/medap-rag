@@ -527,6 +527,16 @@ class BookTask(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AppFlag(Base):
+    """Переключатели, которые владелец ставит кнопкой в админке и которые должны пережить перезапуск (сейчас: «полная мощность» загрузки)."""
+
+    __tablename__ = "app_flags"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class PendingQuestion(Base):
     """Вопрос, ожидающий согласия на «общие знания / интернет / PubMed» (MedAP, этап 3).
 

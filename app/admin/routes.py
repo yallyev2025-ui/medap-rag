@@ -302,7 +302,11 @@ async def _sources_context(**overrides) -> dict:
         for code in await get_textbook_subjects(session):
             if code and code not in textbook_subjects:
                 textbook_subjects[code] = code.capitalize()
+    from app import ingest_mode
+
     base = {
+        "ingest_full_power": ingest_mode.is_full_power(),
+        "ingest_cores": ingest_mode.cores(),
         "books": books,
         "jobs": jobs,
         "subjects": SUBJECT_LABELS,
@@ -329,6 +333,19 @@ async def sources(request: Request):
     if not is_admin(request):
         return _login_redirect()
     return templates.TemplateResponse(request, "sources.html", await _sources_context())
+
+
+@router.post("/ingest-mode")
+async def set_ingest_mode(request: Request, full: str = Form("0")):
+    """Кнопка «Полная мощность» (владелец 08.11.2026): ночью — все ядра и без пауз, днём — щадящий режим. Действует и на уже идущую загрузку."""
+    if not is_admin(request):
+        return _login_redirect()
+    from app import ingest_mode
+
+    on = full == "1"
+    await ingest_mode.set_full_power(on)
+    await audit("ingest_mode", details="full_power" if on else "gentle")
+    return RedirectResponse(url="/admin/sources", status_code=303)
 
 
 @router.post("/sources/upload")

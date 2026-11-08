@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
 
-from db.models import Book, BookChunk, BookFigure, BookTask
+from db.models import Book, BookChunk, BookFigure, BookTask, IngestJob
 from db.session import async_session
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,23 @@ async def mark_stale_tasks_failed() -> int:
             update(BookTask)
             .where(BookTask.status == "running")
             .values(status="error", detail="Прервано перезапуском сервера. Запустите ещё раз.", finished_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+        return result.rowcount or 0
+
+
+async def mark_stale_ingest_jobs_failed() -> int:
+    """Загрузки учебников, прерванные перезапуском бота, больше не выполняются (задача жила в памяти процесса, файл — во временной папке и пропал).
+    Без этой отметки такая загрузка остаётся «running»/«pending» вечно, хотя ничего не делает (владелец 08.11.2026: «показывает раннинг весь день»)."""
+    async with async_session() as session:
+        result = await session.execute(
+            update(IngestJob)
+            .where(IngestJob.status.in_(("pending", "running")))
+            .values(
+                status="error",
+                error="Прервано перезапуском бота — загрузите файл заново.",
+                finished_at=datetime.now(timezone.utc),
+            )
         )
         await session.commit()
         return result.rowcount or 0

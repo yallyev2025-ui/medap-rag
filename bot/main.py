@@ -36,6 +36,17 @@ async def _run_bot() -> None:
     from app.workflows.book_admin import mark_stale_tasks_failed
 
     await mark_stale_tasks_failed()
+    # Загрузки учебников, прерванные перезапуском, помечаются ошибкой с понятным текстом (раньше висели «running» вечно)
+    from app.workflows.book_admin import mark_stale_ingest_jobs_failed
+
+    stale = await mark_stale_ingest_jobs_failed()
+    if stale:
+        logger.warning("Помечено прерванных перезапуском загрузок: %d", stale)
+    # Режим загрузки (щадящий / полная мощность), поставленный кнопкой в админке, переживает перезапуск
+    from app import ingest_mode
+
+    if await ingest_mode.load_from_db():
+        logger.warning("Режим загрузки: ПОЛНАЯ МОЩНОСТЬ (включён кнопкой в админке)")
 
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     dp = Dispatcher()
