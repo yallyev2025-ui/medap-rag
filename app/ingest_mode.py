@@ -22,7 +22,9 @@ from db.session import async_session
 logger = logging.getLogger(__name__)
 
 FLAG_KEY = "ingest_full_power"
-OCR_WORKERS_FULL_CAP = 16  # каждый поток распознавания держит отрендеренную страницу скана в памяти
+OCR_WORKERS_FULL_CAP = 8  # каждый поток распознавания держит отрендеренную страницу скана (~25 МБ) и процесс tesseract; выше 8 память не выдерживает (потолок решения 07.11)
+PER_WORKER_MB = 600  # запас памяти на один поток распознавания
+RESERVE_MB = 1000  # память, которую не трогаем (модели, бот, база)
 
 _state = {"full": False}
 
@@ -45,11 +47,46 @@ def ingest_pause() -> float:
     return 0.0 if _state["full"] else settings.INGEST_PAUSE_S
 
 
+def available_memory_mb() -> int | None:
+    """Свободная память контейнера, МБ: по лимиту cgroup (v2, затем v1), иначе MemAvailable. None — узнать не удалось."""
+    mb = 1024 * 1024
+    try:
+        limit = open("/sys/fs/cgroup/memory.max").read().strip()
+        if limit != "max":
+            return (int(limit) - int(open("/sys/fs/cgroup/memory.current").read())) // mb
+    except Exception:  # noqa: BLE001 — нет cgroup v2
+        pass
+    try:
+        limit_v1 = int(open("/sys/fs/cgroup/memory/memory.limit_in_bytes").read())
+        if limit_v1 < (1 << 60):
+            return (limit_v1 - int(open("/sys/fs/cgroup/memory/memory.usage_in_bytes").read())) // mb
+    except Exception:  # noqa: BLE001 — нет cgroup v1
+        pass
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def safe_workers(requested: int, available_mb: int | None) -> int:
+    """Потоков распознавания не больше, чем позволяет свободная память (по PER_WORKER_MB на поток после резерва RESERVE_MB); не меньше одного.
+    Нехватка памяти убивала процесс, и загрузка оставалась «running» с нулевой нагрузкой (владелец 08.11.2026)."""
+    if available_mb is None:
+        return max(1, requested)
+    return max(1, min(requested, (available_mb - RESERVE_MB) // PER_WORKER_MB))
+
+
 def ocr_workers() -> int:
-    """Потоков распознавания сканов: в полной мощности — все ядра (с потолком по памяти), иначе по бюджету процессора."""
-    if _state["full"]:
-        return max(settings.OCR_WORKERS, min(OCR_WORKERS_FULL_CAP, cores()))
-    return settings.OCR_WORKERS
+    """Потоков распознавания сканов: в полной мощности — до 8 (все ядра, но не больше), иначе по бюджету процессора; в обоих режимах
+    не больше, чем выдержит свободная память (проверяется перед каждой пачкой страниц)."""
+    requested = max(settings.OCR_WORKERS, min(OCR_WORKERS_FULL_CAP, cores())) if _state["full"] else settings.OCR_WORKERS
+    workers = safe_workers(requested, available_memory_mb())
+    if workers < requested:
+        logger.warning("Распознавание: потоков %d вместо %d — мало свободной памяти (%s МБ)", workers, requested, available_memory_mb())
+    return workers
 
 
 async def load_from_db() -> bool:

@@ -135,9 +135,11 @@ def _ocr_pdf_pages(pdf_path: str, page_numbers: list[int]) -> dict[int, str]:
     """
     results: dict[int, str] = {}
     for run in _contiguous_runs(page_numbers):
-        for start in range(0, len(run), OCR_BATCH_SIZE):
+        start = 0
+        while start < len(run):
             workers = ingest_mode.ocr_workers()  # читается перед каждым батчем страниц: «полная мощность» подхватывается на лету
-            batch = run[start : start + OCR_BATCH_SIZE]
+            # пачка страниц не больше, чем потоков×3: все её страницы рендерятся в память сразу (~25 МБ каждая при 300 DPI)
+            batch = run[start : start + min(OCR_BATCH_SIZE, max(6, workers * 3))]
             images = convert_from_path(
                 pdf_path,
                 dpi=OCR_DPI,
@@ -149,6 +151,8 @@ def _ocr_pdf_pages(pdf_path: str, page_numbers: list[int]) -> dict[int, str]:
                 recognized = pool.map(lambda img: pytesseract.image_to_string(img, lang=OCR_LANG), images)
                 for page_number, text in zip(batch, recognized):
                     results[page_number] = text
+            del images  # картинки пачки освобождаются сразу, не дожидаясь следующего витка
+            start += len(batch)
     return results
 
 

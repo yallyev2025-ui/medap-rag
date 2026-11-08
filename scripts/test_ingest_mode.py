@@ -37,10 +37,30 @@ for cores in (1, 4, 11, 64):
     os.cpu_count = lambda c=cores: c  # type: ignore[assignment]
     check(ingest_mode.ingest_threads() == cores, f"полная мощность, {cores} ядер: эмбеддер на всех {cores}")
     check(ingest_mode.ingest_pause() == 0.0, f"полная мощность, {cores} ядер: пауз нет")
+    ingest_mode.available_memory_mb = lambda: None  # type: ignore[assignment]  # память не ограничивает — проверяем только число ядер и потолок
     w = ingest_mode.ocr_workers()
-    check(w >= settings.OCR_WORKERS and w <= max(settings.OCR_WORKERS, ingest_mode.OCR_WORKERS_FULL_CAP), f"полная мощность, {cores} ядер: распознавание {w} потоков (не меньше щадящего, потолок по памяти)")
+    check(w >= 1 and w <= max(settings.OCR_WORKERS, ingest_mode.OCR_WORKERS_FULL_CAP), f"полная мощность, {cores} ядер: распознавание {w} потоков (потолок {ingest_mode.OCR_WORKERS_FULL_CAP})")
 os.cpu_count = lambda: 11  # type: ignore[assignment]
-check(ingest_mode.ocr_workers() == 11, "11 ядер → 11 потоков распознавания")
+check(ingest_mode.ocr_workers() == 8, "11 ядер → 8 потоков распознавания (потолок по памяти)")
+os.cpu_count = real  # type: ignore[assignment]
+ingest_mode._state["full"] = False
+
+# --- память: потоков распознавания не больше, чем выдержит свободная память ---
+check(ingest_mode.safe_workers(8, None) == 8, "память неизвестна → как запрошено")
+check(ingest_mode.safe_workers(6, 8000) == 6, "много памяти (8 ГБ свободно) → 6 потоков как есть")
+check(ingest_mode.safe_workers(6, 3000) == 3, "3 ГБ свободно → 3 потока ((3000−1000)/600)")
+check(ingest_mode.safe_workers(8, 1200) == 1 and ingest_mode.safe_workers(8, 100) == 1, "почти нет памяти → один поток, не ноль")
+check(ingest_mode.OCR_WORKERS_FULL_CAP == 8, "потолок «полной мощности» — 8 потоков (не 16)")
+mem = ingest_mode.available_memory_mb()
+check(mem is None or mem > 0, f"свободная память читается ({mem} МБ)")
+ingest_mode._state["full"] = True
+os.cpu_count = lambda: 64  # type: ignore[assignment]
+orig = ingest_mode.available_memory_mb
+ingest_mode.available_memory_mb = lambda: 2200  # type: ignore[assignment]
+check(ingest_mode.ocr_workers() == 2, "полная мощность на 64 ядрах, но памяти мало → 2 потока")
+ingest_mode.available_memory_mb = lambda: 20000  # type: ignore[assignment]
+check(ingest_mode.ocr_workers() == 8, "полная мощность на 64 ядрах, памяти много → не больше 8")
+ingest_mode.available_memory_mb = orig  # type: ignore[assignment]
 os.cpu_count = real  # type: ignore[assignment]
 ingest_mode._state["full"] = False
 
