@@ -29,7 +29,8 @@ def sign_body(secret: str, timestamp: int, body: str) -> str:
 
 
 class SiteClient:
-    def __init__(self, base_url: str | None = None, secret: str | None = None, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, base_url: str | None = None, secret: str | None = None, transport: httpx.AsyncBaseTransport | None = None, path: str = "/api/slides-bot"):
+        self._path = path
         self._base = (base_url if base_url is not None else settings.SLIDES_SITE_URL).rstrip("/")
         self._secret = secret if secret is not None else settings.SLIDES_SITE_SECRET
         self._transport = transport
@@ -47,7 +48,7 @@ class SiteClient:
         headers = {"content-type": "application/json", "x-slides-timestamp": str(ts), "x-slides-signature": sign_body(self._secret, ts, body)}
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, transport=self._transport) as http:
-                resp = await http.post(f"{self._base}/api/slides-bot", content=body.encode("utf-8"), headers=headers)
+                resp = await http.post(f"{self._base}{self._path}", content=body.encode("utf-8"), headers=headers)
         except httpx.HTTPError:
             logger.warning("Сайт не ответил на действие %s", action, exc_info=True)
             return {"ok": False, "error": "Сайт сейчас не отвечает. Попробуйте через минуту.", "network": True}
@@ -62,3 +63,7 @@ class SiteClient:
 
 
 site = SiteClient()
+
+
+# Вторая дверь сайта: документы и конспекты из видео для основного бота MedAP (тот же подписанный запрос, тот же секрет)
+docs_site = SiteClient(path="/api/docs-bot")

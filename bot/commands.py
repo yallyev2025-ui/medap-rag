@@ -13,6 +13,8 @@ USER_COMMANDS = [
     BotCommand(command="pubmed", description="Искать в PubMed"),
     BotCommand(command="exam", description="Режим «Экзамен»: тренировка по своему списку вопросов"),
     BotCommand(command="call", description="Голосовой разговор (подписчикам)"),
+    BotCommand(command="doc", description="Конспект или документ (PDF, Word) по теме"),
+    BotCommand(command="video", description="Конспект из видео YouTube (Premium)"),
 ]
 
 ADMIN_COMMANDS = USER_COMMANDS + [

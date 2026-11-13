@@ -25,6 +25,7 @@ from app.workflows.web_search import search_and_answer
 from bot.formatting import split_for_telegram, to_telegram_html
 from bot.fragments import citation_buttons
 from bot.waiting_phrases import FIRST_PHRASE, rotate_status
+from bot.last_answer import remember_last_answer
 from bot.handlers.menu import CLINREK_PREMIUM_TEXT, has_clinrek_access, send_main_menu
 from bot.handlers.panel import explain_problem, prepare_scope
 from constants import SCOPE_BOTH, SCOPE_DOCUMENTS, SOURCE_CLINREK, SOURCE_TEXTBOOK
@@ -122,6 +123,8 @@ class SearchStates(StatesGroup):
 
 async def _send_answer(message: Message, answer: str, reply_markup=None) -> None:
     """`reply_markup` (кнопки «📖 источник») крепится к ПОСЛЕДНЕЙ части ответа."""
+    # Для «сделай документ из этого ответа» (bot/handlers/docs.py): запоминаем сам текст ответа, до разметки
+    remember_last_answer(message.chat.id, answer)
     parts = split_for_telegram(to_telegram_html(answer))
     for index, part in enumerate(parts):
         is_last = index == len(parts) - 1

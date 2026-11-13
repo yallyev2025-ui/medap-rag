@@ -36,6 +36,7 @@ SCRIPT_MODULES = [
     "scripts.test_exam_bot",
     "scripts.test_call_link",
     "scripts.test_youtube",
+    "scripts.test_docs_bot",
     "scripts.test_call_handler",
     "scripts.test_clinrek_monitor",
     "scripts.test_vision_transcribe", "scripts.test_books_search_fallback",
