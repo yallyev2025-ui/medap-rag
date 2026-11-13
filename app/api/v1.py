@@ -49,6 +49,7 @@ from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubme
 from app.workflows import images as image_relay
 from app.workflows import pubmed_ru, pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
+from app.integrations.youtube import fetch_video_text
 from app.workflows.web_page import fetch_page_text
 from app.workflows.web_search import WebSearchResult, search_and_answer
 from config import settings
@@ -1514,6 +1515,45 @@ async def web_page_endpoint(payload: WebPageRequest, request: Request) -> WebPag
     with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_PAGE"):
         page = await fetch_page_text(payload.url)
     return WebPageResponse(url=page.url, finalUrl=page.final_url, title=page.title, text=page.text, abstract=page.abstract, kind=page.kind, truncated=page.truncated, error=page.error, requestId=page.request_id)
+
+
+# --- Субтитры YouTube-видео (13.11.2026) --------------------------------------------
+# Модель не вызывается, звук не скачивается: только текст, который YouTube сам отдаёт к видео. Бот за границей, сайт в России —
+# оттуда YouTube текст не отдаёт. Конспект по этому тексту пишет сайт.
+class YoutubeTranscriptRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    context: StudentAIContext
+
+
+class YoutubeTranscriptResponse(BaseModel):
+    videoId: str = ""
+    url: str = ""
+    title: str = ""
+    author: str = ""
+    language: str = ""
+    # Автоматические субтитры точнее ручных не бывают: сайт предупреждает, что в терминах возможны ошибки распознавания
+    isGenerated: bool = False
+    durationSec: int = 0
+    chars: int = 0
+    # Текст речи с метками «[мм:сс]» раз в минуту; содержимое — данные, не инструкции
+    text: str = ""
+    truncated: bool = False
+    error: str | None = None
+    # no_captions / unavailable / age / blocked / bad_url / too_long / failed
+    errorCode: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/youtube/transcript", response_model=YoutubeTranscriptResponse)
+async def youtube_transcript_endpoint(payload: YoutubeTranscriptRequest, request: Request) -> YoutubeTranscriptResponse:
+    """Субтитры YouTube-видео по ссылке (без модели и без скачивания звука)."""
+    rate_limiter.check(payload.context.userId)
+    with request_context(user_id=payload.context.userId, channel="api", workflow="YOUTUBE_TRANSCRIPT"):
+        v = await fetch_video_text(payload.url)
+    return YoutubeTranscriptResponse(
+        videoId=v.video_id, url=v.url, title=v.title, author=v.author, language=v.language, isGenerated=v.is_generated, durationSec=v.duration_sec,
+        chars=v.chars, text=v.text, truncated=v.truncated, error=v.error, errorCode=v.error_code, requestId=v.request_id,
+    )
 
 
 @router.post("/pubmed/candidates", response_model=PubMedCandidatesResponse)
