@@ -66,6 +66,10 @@ NOT_FOUND_ASK_NO_PUBMED = (
     "В учебниках и научных статьях по этому вопросу ничего не нашлось. Как ответить?\n"
     "Учти: общие знания ИИ и интернет — не официальные источники MedAP, перепроверяйте."
 )
+NOT_FOUND_FINAL_TEXT = (
+    "В материалах кафедры, учебниках и научных статьях ответа на этот вопрос не нашлось. "
+    "Я отвечаю только по ним и ничего не домысливаю. Попробуй спросить иначе или конкретнее."
+)
 # Для клинреков fallback (общие знания/интернет/PubMed) запрещён полностью —
 # никаких вариантов не предлагается, в отличие от учебников выше.
 CLINREK_NOT_FOUND_TEXT = "Этой информации нет в представленных клинических рекомендациях."
@@ -380,8 +384,8 @@ async def answer_question(message: Message, db_user: User, usage_ctx: dict, ques
                 # Учебники не ответили — научные статьи PubMed сразу, без кнопки (решение 37); общие знания и интернет — по кнопке
                 if await _run_pubmed_search(message, db_user.id, question, quiet=True):
                     return
-                await _remember_pending(db_user.id, question)
-                await message.answer(NOT_FOUND_ASK_NO_PUBMED, reply_markup=CONSENT_KEYBOARD_NO_PUBMED)
+                # Решение владельца 15.11.2026: медицинский ИИ работает только по материалам — без «общих знаний» и интернета
+                await message.answer(NOT_FOUND_FINAL_TEXT)
             usage_ctx["count"] = False
             return
 
