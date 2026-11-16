@@ -714,7 +714,7 @@ async def _ask(
     # Запоминаем только проверенный, не оборванный ответ с реальными цитатами.
     if (
         cache_key is not None
-        and generated.verified is not False
+        and generated.verified is True
         and not generated.flagged
         and not generated.truncated
         and final_text != NO_CONTEXT_ANSWER

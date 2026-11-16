@@ -776,7 +776,7 @@ async def playground_run(
     # /v1/evidence/{id}, не дублируем DB-запрос и presign.
     evidence_by_id = {}
     for c in result.citations:
-        detail = await fetch_evidence(int(c["evidenceId"]))
+        detail = await fetch_evidence(int(c["evidenceId"]), allow_private=True)
         if detail is not None:
             evidence_by_id[c["evidenceId"]] = detail
 

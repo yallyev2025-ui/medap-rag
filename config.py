@@ -186,7 +186,7 @@ class Settings(BaseSettings):
     # сертификат); "disable" — без SSL. Драйвер asyncpg не понимает параметр
     # "sslmode" в самом DATABASE_URL (это особенность psycopg2/libpq, не asyncpg),
     # поэтому SSL настраивается этой отдельной переменной, а не в URL.
-    DATABASE_SSL_MODE: str = "require"
+    DATABASE_SSL_MODE: str = "verify-full"
 
     # --- S3-хранилище оригиналов источников (§8.2.4, §33 ТЗ) ----------------------
     # Пусто = оригиналы не сохраняются — мягкая деградация: чанки и эмбеддинги всё

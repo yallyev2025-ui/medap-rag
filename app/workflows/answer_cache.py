@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -22,10 +23,32 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 
 from config import settings
-from db.models import AnswerCache
+from db.models import AnswerCache, PromptVersion
 from db.session import async_session
+from app.llm.registry import model_registry
+from app.llm.task_map import effective_task_model_map
 
 logger = logging.getLogger(__name__)
+
+
+async def policy_version() -> str:
+    """Отдельный раздел кеша при любой смене модели или политики проверки."""
+    mapping = await effective_task_model_map()
+    async with async_session() as session:
+        rows = (await session.execute(select(PromptVersion.prompt_key, PromptVersion.id).where(
+            PromptVersion.status == "production",
+        ).order_by(PromptVersion.prompt_key, PromptVersion.id))).all()
+    state = {
+        "prompt": settings.PROMPT_VERSION,
+        "retrieval": settings.RETRIEVAL_VERSION,
+        "models": {key: profile.model_id for key, profile in model_registry().items()},
+        "tasks": {key.value: value for key, value in mapping.items()},
+        "published_prompts": [(key, version) for key, version in rows],
+        "verify": settings.VERIFY_GROUNDING,
+        "soft_fail": settings.VERIFY_SOFT_FAIL,
+        "schema": 2,
+    }
+    return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
 
 # Пожелания к форме ответа: на них ответ зависит от формулировки, а не только от темы.
 STYLE_PATTERN = re.compile(
@@ -68,6 +91,11 @@ def pick_match(
     for entry, similarity in candidates:
         if similarity < min_similarity:
             continue
+        # Удалённый или выключенный источник не должен остаться в ответе
+        # только потому, что остальные фрагменты совпали.
+        cited = [c.get("evidenceId") for c in json.loads(entry.citations)]
+        if not cited or any(not str(cid).isdigit() or int(cid) not in current_ids for cid in cited):
+            continue
         if overlap(json.loads(entry.chunk_ids), current_ids) >= min_overlap:
             return entry
     return None
@@ -88,11 +116,14 @@ async def lookup(
         return None
     try:
         vector = await _embed(question)
+        policy = await policy_version()
         oldest = datetime.now(timezone.utc) - timedelta(days=settings.CACHE_MAX_AGE_DAYS)
         distance = AnswerCache.q_embedding.cosine_distance(vector)
         stmt = (
             select(AnswerCache, distance)
             .where(
+                AnswerCache.policy_version == policy,
+                AnswerCache.verified.is_(True),
                 AnswerCache.tier == tier,
                 AnswerCache.source_type == source_type,
                 AnswerCache.subject == subject if subject is not None else AnswerCache.subject.is_(None),
@@ -132,11 +163,15 @@ async def store(
 ) -> None:
     if not settings.CACHE_ENABLED:
         return
+    if verified is not True:
+        return
     try:
         vector = await _embed(question)
+        policy = await policy_version()
         async with async_session() as session:
             session.add(
                 AnswerCache(
+                    policy_version=policy,
                     tier=tier, source_type=source_type, subject=subject, mode=mode, kind=kind, fmt=fmt,
                     question=question, q_embedding=vector,
                     chunk_ids=json.dumps(sorted(set(chunk_ids))), answer=answer,

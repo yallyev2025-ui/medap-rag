@@ -10,7 +10,7 @@
 
 import hmac
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 from fastapi import Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -46,14 +46,26 @@ class RateLimiter:
     горизонтальном масштабировании лимит переедет в общее хранилище.
     """
 
-    def __init__(self, per_minute: int) -> None:
+    def __init__(self, per_minute: int, max_keys: int = 10000) -> None:
         self.per_minute = per_minute
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self.max_keys = max_keys
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
 
     def check(self, key: str) -> None:
         if self.per_minute <= 0:
             return
         now = time.monotonic()
+        # Ключи упорядочены по последнему обращению: истёкшие записи
+        # удаляются и тогда, когда их владелец больше не приходит.
+        while self._hits:
+            oldest = next(iter(self._hits))
+            if self._hits[oldest][-1] >= now - 60:
+                break
+            self._hits.popitem(last=False)
+        if key not in self._hits:
+            if len(self._hits) >= self.max_keys:
+                raise HTTPException(status_code=429, detail="Слишком много запросов, попробуйте через минуту")
+            self._hits[key] = deque()
         window = self._hits[key]
         while window and now - window[0] > 60:
             window.popleft()
@@ -63,6 +75,7 @@ class RateLimiter:
                 detail="Слишком много запросов, попробуйте через минуту",
             )
         window.append(now)
+        self._hits.move_to_end(key)
 
 
 rate_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)

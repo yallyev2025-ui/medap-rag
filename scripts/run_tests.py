@@ -17,9 +17,16 @@ PYTEST_FILES = [
     "scripts/test_book_admin.py",
     "scripts/test_verification.py",
     "scripts/test_reranker_switch.py",
+    "scripts/test_security_boundaries.py",
 ]
 
 SCRIPT_MODULES = [
+    "scripts.test_web_page",
+    "scripts.test_pubmed_sources",
+    "scripts.test_presentation_images",
+    "scripts.test_cpu_budget",
+    "scripts.test_ingest_mode",
+    "scripts.test_rerank_priority",
     "scripts.test_cost",
     "scripts.test_usage_summary",
     "scripts.test_pending_question",

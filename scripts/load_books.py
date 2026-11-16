@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
@@ -197,6 +197,7 @@ async def load_book(
     exam_id: str | None = None,
     deep: bool | None = None,
     allow_duplicate: bool = False,
+    expires_in_seconds: int | None = None,
     progress=None,
 ) -> tuple[int, int]:
     checksum = await asyncio.to_thread(s3.file_checksum, file_path)
@@ -248,6 +249,7 @@ async def load_book(
             checksum=checksum,
             processing_version=1,
             active_version=1,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds) if expires_in_seconds else None,
         )
         session.add(book)
         await session.flush()

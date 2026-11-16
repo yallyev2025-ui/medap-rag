@@ -408,11 +408,11 @@ async def explain(payload: ChatRequest, request: Request) -> ChatResponse:
 
 
 @router.get("/evidence/{evidence_id}", response_model=EvidenceDetail)
-async def get_evidence(evidence_id: int, request: Request) -> EvidenceDetail:
+async def get_evidence(evidence_id: int, request: Request, userId: str | None = None) -> EvidenceDetail:
     """Source Viewer backend (§13 ТЗ, раздел 7 дополнения): по evidenceId из
     citation — точная страница/раздел/координаты, чтобы сайт открыл источник и
     подсветил именно этот фрагмент."""
-    detail = await fetch_evidence(evidence_id)
+    detail = await fetch_evidence(evidence_id, owner_id=userId)
     if detail is None:
         raise HTTPException(status_code=404, detail="evidence not found")
 
@@ -1019,6 +1019,7 @@ class DocumentUploadRequest(BaseModel):
     filename: str = Field(..., min_length=1)
     fileBase64: str = Field(..., min_length=1)
     title: str | None = None
+    ephemeral: bool = False
     context: StudentAIContext
 
 
@@ -1082,6 +1083,7 @@ async def documents_upload(payload: DocumentUploadRequest, request: Request) -> 
                 exam_id=payload.context.examId,
                 title=payload.title,
                 subject=payload.context.subjectId,
+                ephemeral=payload.ephemeral,
             )
     finally:
         os.remove(tmp_path)
@@ -1208,6 +1210,15 @@ async def documents_delete(document_id: int, userId: str, request: Request) -> D
     with request_context(user_id=userId, channel="api", workflow="DOCUMENT_QA"):
         deleted = await delete_user_document(userId, document_id)
     return DocumentDeleteResponse(deleted=deleted)
+
+
+@router.delete("/users/{user_id}/data")
+async def erase_user_data_endpoint(user_id: str) -> dict:
+    """Вызывается сайтом после проверки сессии и подтверждения удаления аккаунта."""
+    from app.privacy import erase_user_data
+
+    count = await erase_user_data(user_id)
+    return {"deleted": True, "documents": count}
 
 
 # --- Web Research (§19, §34 ТЗ, этап 4A.6) -------------------------------------

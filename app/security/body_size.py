@@ -43,6 +43,19 @@ from starlette.responses import JSONResponse, Response
 DEFAULT_V1_MAX_BYTES = 2 * 1024 * 1024
 
 
+def v1_body_limits() -> dict[str, int]:
+    from config import settings
+
+    mb = 1024 * 1024
+    return {
+        "/v1/documents": int(settings.USER_DOCUMENT_MAX_MB * 1.4 * mb),
+        "/v1/evaluate/oral": int(settings.ORAL_MAX_AUDIO_MB * 1.4 * mb),
+        "/v1/voice/transcribe": int(settings.ORAL_MAX_AUDIO_MB * 1.4 * mb),
+        "/v1/vision/analyze": int(settings.VISION_MAX_IMAGE_MB * 1.4 * mb),
+        "/v1/vision/transcribe": int(settings.VISION_MAX_IMAGE_MB * 1.4 * mb),
+    }
+
+
 class MaxBodySizeMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, limits: dict[str, int], default_prefix: str = "/v1", default_max_bytes: int = DEFAULT_V1_MAX_BYTES):
         super().__init__(app)

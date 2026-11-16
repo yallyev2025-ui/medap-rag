@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from app.storage import s3
 from db.models import Book, BookChunk
 from db.session import async_session
+from constants import SOURCE_USER_DOCUMENT
 
 
 @dataclass
@@ -36,10 +37,17 @@ class EvidenceDetail:
     owner_id: str | None = None
 
 
-async def fetch_evidence(evidence_id: int) -> EvidenceDetail | None:
+async def fetch_evidence(
+    evidence_id: int, *, owner_id: str | None = None, allow_private: bool = False,
+) -> EvidenceDetail | None:
     async with async_session() as session:
         chunk = await session.get(BookChunk, evidence_id)
         if chunk is None:
+            return None
+        # Проверяем ДО чтения оригинала и создания подписанной ссылки.
+        # Service-token удостоверяет сайт, а не владельца документа.
+        private = chunk.user_id is not None or getattr(chunk, "source_type", None) == SOURCE_USER_DOCUMENT
+        if private and not allow_private and (owner_id is None or chunk.user_id != owner_id):
             return None
         book = await session.get(Book, chunk.book_id)
 

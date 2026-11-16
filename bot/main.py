@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 async def _run_bot() -> None:
     admin.cleanup_addbook_tmp()
     await init_db()
+    from app.privacy import cleanup_loop
+
+    cleanup_task = asyncio.create_task(cleanup_loop())
     # MedAP, этап 1: задачи над книгами, прерванные перезапуском, больше не выполняются
     from app.workflows.book_admin import mark_stale_tasks_failed
 
@@ -76,7 +79,11 @@ async def _run_bot() -> None:
     me = await bot.get_me()
     logger.info("Бот запущен: @%s", me.username)
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
 
 
 async def _run_api() -> None:

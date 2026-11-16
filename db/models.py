@@ -50,6 +50,7 @@ class Book(Base):
     source_type: Mapped[str] = mapped_column(String(20), nullable=False, default=SOURCE_TEXTBOOK)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0)
     loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- Метаданные и provenance (§8–§9 ТЗ, этап 2) -----------------------------
     section: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -315,6 +316,7 @@ class AnswerCache(Base):
     __tablename__ = "answer_cache"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     # Ключ раздела кеша: ответы разных режимов, предметов, видов подачи не смешиваются.
     tier: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)

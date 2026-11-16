@@ -26,7 +26,7 @@ async def show_fragment(callback: CallbackQuery) -> None:
         return
 
     try:
-        detail = await fetch_evidence(evidence_id)
+        detail = await fetch_evidence(evidence_id, owner_id=str(callback.from_user.id))
     except Exception:
         logger.exception("Не удалось получить фрагмент %s", evidence_id)
         await callback.answer(FAILED_TEXT, show_alert=True)

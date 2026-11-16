@@ -121,6 +121,7 @@ async def ingest_user_document(
     exam_id: str | None = None,
     title: str | None = None,
     subject: str | None = None,
+    ephemeral: bool = False,
 ) -> UserDocumentIngestResult:
     extension = os.path.splitext(filename)[1].lower()
     if extension not in ALLOWED_UPLOAD_EXTENSIONS:
@@ -158,6 +159,7 @@ async def ingest_user_document(
             authority_level="user_material",
             user_id=user_id,
             exam_id=exam_id,
+            expires_in_seconds=3600 if ephemeral else None,
         )
     except ValueError:
         logger.warning("Не удалось извлечь текст из документа пользователя: %s", resolved_title)
@@ -330,10 +332,12 @@ async def delete_user_document(user_id: str, document_id: int) -> bool:
     if not await _owns_document(user_id, document_id):
         return False
     async with async_session() as session:
-        title = await delete_book(session, document_id)
+        from app.privacy import remove_private_book
+
+        await remove_private_book(session, document_id)
         await session.commit()
-    await audit("user_document_delete", actor=f"user:{user_id}", target=title or str(document_id))
-    return title is not None
+    await audit("user_document_delete", actor=f"user:{user_id}", target=str(document_id))
+    return True
 
 
 async def list_user_documents(user_id: str) -> list[UserDocument]:
