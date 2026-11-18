@@ -1,5 +1,16 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "default_agent": "plan",
+  "agent": {
+    "plan": { "model": "openrouter/z-ai/glm-5.3-flash" },
+    "build": { "model": "openrouter/deepseek/deepseek-v4.1-flash" },
+    "explore": { "model": "openrouter/z-ai/glm-5.3-flash" },
+    "reviewer": { "model": "openrouter/z-ai/glm-5.3-flash" },
+    "title": { "model": "openrouter/z-ai/glm-5.3-flash" },
+    "summary": { "model": "openrouter/z-ai/glm-5.3-flash" },
+    "compaction": { "model": "openrouter/z-ai/glm-5.3-flash" }
+  },
+  "compaction": { "auto": true },
   "instructions": [
     "CLAUDE.md"
   ],

@@ -9,3 +9,5 @@
 - Безопасность: без разрешения не трогать боевую БД, секреты, деплой; секреты не выводить.
 - Проверки: `python3 scripts/test_<затронутое>.py`, `py_compile`; Docker-образ собирается только на Timeweb.
 - Не ломать работающее: Telegram-бот MedAP, `slides_bot/`, API для сайта.
+- Модели агентов и `default_agent` — в `opencode.json` (как в сайте): Plan/Reviewer/Explore — GLM 5.3 Flash, Build — DeepSeek V4.1 Flash.
+- Дизайн презентаций — отдельная система, не путать с дизайном сайта: `docs/DESIGN-PRESENTATIONS.md`.
