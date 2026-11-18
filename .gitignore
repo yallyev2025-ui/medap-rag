@@ -227,3 +227,6 @@ eval/last_*.txt
 scripts/slides-bench/out*.json
 slides-engine/node_modules/
 !slides-engine/dist/
+
+# OpenCode / Playwright MCP: временные снимки
+.playwright-mcp/

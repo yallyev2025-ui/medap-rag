@@ -1,0 +1,83 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "CLAUDE.md"
+  ],
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "git push*": "ask",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git push * --force*": "deny",
+      "git push * -f": "deny",
+      "git reset --hard*": "deny",
+      "git clean*": "ask",
+      "git config*": "ask",
+      "git remote add*": "ask",
+      "git remote set-url*": "ask",
+      "git commit*--no-verify*": "deny",
+      "rm -rf*": "deny",
+      "rm -fr*": "deny",
+      "*prisma migrate reset*": "deny",
+      "*prisma migrate deploy*": "ask",
+      "*prisma db push*": "ask",
+      "*DROP TABLE*": "deny",
+      "*DROP DATABASE*": "deny",
+      "*TRUNCATE*": "deny",
+      "docker compose*down -v*": "ask",
+      "docker system prune*": "ask",
+      "docker volume rm*": "ask"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "*.env.production.example": "allow"
+    },
+    "edit": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "*.env.production.example": "allow"
+    }
+  },
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--executable-path",
+        "/home/codespace/.cache/ms-playwright/chromium-1194/chrome-linux/chrome"
+      ],
+      "enabled": true
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--headless",
+        "--isolated",
+        "--executablePath",
+        "/home/codespace/.cache/ms-playwright/chromium-1194/chrome-linux/chrome",
+        "--performanceCrux=false"
+      ],
+      "enabled": true
+    }
+  }
+}
