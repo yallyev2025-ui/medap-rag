@@ -25,18 +25,42 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from config import settings
 
 
+def _verified_context() -> ssl.SSLContext:
+    """Контекст с проверкой цепочки; CA берём из DATABASE_SSL_CA, если задан.
+
+    Timeweb managed PostgreSQL отдаёт самоподписанную цепочку, которой нет в
+    системном хранилище. Поэтому verify-full без CA провайдера гарантированно
+    падает с CERTIFICATE_VERIFY_FAILED, а не защищает соединение.
+    """
+    ca = settings.DATABASE_SSL_CA.strip()
+    if ca.startswith("-----BEGIN"):
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=ca)
+    elif ca:
+        context = ssl.create_default_context(cafile=ca)
+    else:
+        context = ssl.create_default_context()
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
+
+
 def _connect_args() -> dict:
     mode = settings.DATABASE_SSL_MODE.lower()
     if mode == "disable":
         return {}
-    if mode == "verify-full":
-        # Проверка сертификата сервера по системному хранилищу доверенных
-        # центров — включайте, если провайдер использует публично доверенный
-        # сертификат (а не самоподписанный/внутренний).
-        return {"ssl": True}
+    if mode in ("verify-full", "verify-ca"):
+        # Полная проверка сертификата. Для самоподписанной БД Timeweb нужен
+        # DATABASE_SSL_CA (путь к сертификату или PEM). "verify-ca" оставлен
+        # для совместимости: проверяем цепочку, но не имя хоста.
+        context = _verified_context()
+        if mode == "verify-ca":
+            context.check_hostname = False
+        return {"ssl": context}
     # "require" (по умолчанию): шифруем соединение, но не проверяем цепочку
-    # сертификата — безопасный дефолт для managed-БД без своего CA-бандла
-    # в образе. Эквивалент sslmode=require из мира psycopg2/libpq.
+    # сертификата — так работали все успешные выкладки на managed-БД Timeweb,
+    # пока не был добавлен CA провайдера. Эквивалент sslmode=require из мира
+    # psycopg2/libpq; трафик при этом остаётся зашифрованным.
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
