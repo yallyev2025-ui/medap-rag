@@ -1,0 +1,23 @@
+# SearXNG для MedAP: свой метапоиск без ключей и оплаты (ТЗ 20.11.2026).
+# Наружу не публикуется: к нему ходит только бот по внутренней сети Docker.
+use_default_settings: true
+
+general:
+  instance_name: "MedAP search"
+
+server:
+  # Секрет генерируется один раз и не публикуется; значение по умолчанию
+  # годится только для внутреннего контейнера без выхода наружу.
+  secret_key: "medap-internal-searxng-secret"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  # JSON нужен боту; HTML — для ручной проверки изнутри контейнера
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true

@@ -146,6 +146,10 @@ class Settings(BaseSettings):
     # ключ. Пусто у любого = честная "не настроено", без похода в сеть.
     YANDEX_SEARCH_API_KEY: str = ""
     YANDEX_FOLDER_ID: str = ""
+    # Свой метапоиск (SearXNG): без ключей и оплаты. Если адрес задан, поиск
+    # идёт через него; Yandex остаётся запасным путём для старых установок.
+    SEARXNG_URL: str = ""
+    SEARXNG_LANGUAGE: str = "ru"
     WEB_SEARCH_MAX_RESULTS: int = 5
     WEB_SEARCH_SNIPPET_MAX_CHARS: int = 2000
 

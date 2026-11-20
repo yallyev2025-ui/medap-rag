@@ -26,6 +26,7 @@ from app.llm import provider as llm
 from app.llm.task_map import Task
 from app.observability.context import current_request_id
 from config import settings
+from app.workflows.web_trust import parse_searxng_results, rank_results
 
 logger = logging.getLogger(__name__)
 
@@ -117,19 +118,44 @@ async def _yandex_search(query: str) -> list[dict[str, Any]]:
         return []
 
 
+async def _searxng_search(query: str) -> list[dict[str, Any]]:
+    """Свой метапоиск (SearXNG): без ключей и оплаты.
+
+    SearXNG отдаёт JSON, если в его настройках включён формат json. Сеть и
+    защита от роботов — его дело; нам достаются заголовок, адрес и сниппет.
+    """
+    base = settings.SEARXNG_URL.rstrip("/")
+    params = {
+        "q": query,
+        "format": "json",
+        "language": settings.SEARXNG_LANGUAGE,
+        "safesearch": "0",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(f"{base}/search", params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    return parse_searxng_results(data)
+
+
 async def search_and_answer(query: str) -> WebSearchResult:
-    if not settings.YANDEX_SEARCH_API_KEY or not settings.YANDEX_FOLDER_ID:
+    use_searx = bool(settings.SEARXNG_URL)
+    use_yandex = bool(settings.YANDEX_SEARCH_API_KEY and settings.YANDEX_FOLDER_ID)
+    if not use_searx and not use_yandex:
         return WebSearchResult(query=query, error=_NOT_CONFIGURED_MESSAGE, request_id=current_request_id())
 
     try:
-        results = await _yandex_search(query)
+        results = await (_searxng_search(query) if use_searx else _yandex_search(query))
     except httpx.HTTPError:
-        logger.exception("Web Search: сбой запроса к Yandex Search API")
+        logger.exception("Web Search: сбой запроса к поиску")
         return WebSearchResult(query=query, error="Поиск сейчас недоступен, попробуй позже.", request_id=current_request_id())
 
-    results = results[: settings.WEB_SEARCH_MAX_RESULTS]
+    # Отбор достоверных: клиники, «здоровье и красота», магазины и форумы
+    # отсекаются до того, как они попадут в ответ (ТЗ 20.11.2026)
+    results = rank_results(results, limit=settings.WEB_SEARCH_MAX_RESULTS)
     if not results:
-        return WebSearchResult(query=query, error=_NO_RESULTS_MESSAGE, request_id=current_request_id())
+        return WebSearchResult(query=query, error="По запросу не нашлось достоверных источников — уточните формулировку.", request_id=current_request_id())
 
     sources_block = "\n\n".join(
         f"[{i + 1}] {r.get('title', '')}\n"
