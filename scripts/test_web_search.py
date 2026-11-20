@@ -88,6 +88,43 @@ def test_search_prefers_searxng_when_configured():
     assert calls == ["анафилаксия"], "поиск идёт через SearXNG, а не через Yandex"
 
 
+
+
+def test_html_becomes_text_without_scripts():
+    from app.workflows.web_page import extract_text
+
+    html = b"""
+    <html><head><title>Anaphylaxis</title><style>.x{color:red}</style></head>
+    <body><script>alert(1)</script><h1>Anaphylaxis</h1><p>Adrenaline is first line.</p><nav>menu</nav></body></html>
+    """
+    text = extract_text(html)
+    assert "Adrenaline is first line." in text
+    assert "alert(1)" not in text
+    assert "menu" not in text
+
+
+def test_short_snippets_are_enriched_in_parallel():
+    from app.workflows.web_page import enrich_results
+
+    results = [
+        {"url": "https://www.who.int/a", "title": "WHO", "content": "мало"},
+        {"url": "https://pubmed.ncbi.nlm.nih.gov/1/", "title": "Статья", "content": "x" * 500},
+    ]
+    calls: list[str] = []
+
+    async def fake_fetch(url: str) -> str:
+        calls.append(url)
+        return "Полный текст страницы. " * 30
+
+    async def run():
+        return await enrich_results(results, fetch=fake_fetch, limit=3)
+
+    enriched = asyncio.run(run())
+    assert calls == ["https://www.who.int/a"], "полный текст берём только там, где сниппет короткий"
+    assert "Полный текст" in enriched[0]["content"]
+    assert enriched[1]["content"].startswith("x"), "длинный сниппет не трогаем"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

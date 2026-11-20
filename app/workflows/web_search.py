@@ -26,6 +26,7 @@ from app.llm import provider as llm
 from app.llm.task_map import Task
 from app.observability.context import current_request_id
 from config import settings
+from app.workflows.web_page import enrich_results
 from app.workflows.web_trust import parse_searxng_results, rank_results
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,10 @@ async def search_and_answer(query: str) -> WebSearchResult:
     results = rank_results(results, limit=settings.WEB_SEARCH_MAX_RESULTS)
     if not results:
         return WebSearchResult(query=query, error="По запросу не нашлось достоверных источников — уточните формулировку.", request_id=current_request_id())
+
+    # Сниппет мал для слайда: у трёх верхних страниц берём полный текст
+    # (HTTP, при защите — браузер). Параллельно и с потолком по времени.
+    results = await enrich_results(results, max_chars=settings.WEB_SEARCH_SNIPPET_MAX_CHARS)
 
     sources_block = "\n\n".join(
         f"[{i + 1}] {r.get('title', '')}\n"

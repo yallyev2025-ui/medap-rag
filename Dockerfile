@@ -35,6 +35,17 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install --retries 10 --timeout 60 --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
+# Браузер для сайтов с защитой от роботов (ТЗ 20.11.2026).
+# По умолчанию ВЫКЛЮЧЕН: образ и без него большой, а сборка Chromium долгая.
+# Включается сборкой с --build-arg WITH_BROWSER=1; без него приложение честно
+# работает на обычном HTTP (app/workflows/web_page.py).
+ARG WITH_BROWSER=0
+RUN if [ "$WITH_BROWSER" = "1" ]; then \
+        pip install --retries 10 --timeout 60 playwright && \
+        playwright install --with-deps chromium && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Прогрев весов на этапе сборки: эмбеддер (~2.2 ГБ) попадает в слой образа, и старт контейнера не зависит от доступности huggingface.co.
 # Большой реранкер (~2.3 ГБ) в образ НЕ кладётся (28.10.2026): его скачивают только для сжатия (ниже) и удаляют в том же шаге.
 # Если сборщик до HF не достучится — задать HF_ENDPOINT (например, зеркало) и пересобрать.
