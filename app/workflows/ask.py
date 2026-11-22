@@ -483,12 +483,16 @@ async def _ask(
                     search_query,
                     source_type=source_type,
                     subject=subject,
-                    top_k=top_k or tier_top_k(tier),
-                    candidates=tier_candidates(tier),
+                    # Один путь без режимов: 10 фрагментов из 35 кандидатов — прежние
+                    # числа «быстрого» режима (решение владельца 22.11.2026: 30 фрагментов
+                    # слишком много, 10 отвечало хорошо). Конспекты и Content Studio
+                    # работают на своих значениях и здесь не задеты.
+                    top_k=top_k or settings.MENTOR_CHAT_TOP_K,
+                    candidates=settings.MENTOR_CHAT_CANDIDATES,
                 )
                 all_chunks = chunks
                 details["research"] = research.as_dict()
-                details["pool"] = tier_candidates(tier)
+                details["pool"] = settings.MENTOR_CHAT_CANDIDATES
                 details["reranker"] = active_backend()
                 # Журнал исследования: что считали обязательным, что нашлось, сколько кругов.
                 # Ошибка записи ответ не портит (внутри store все исключения пойманы).
