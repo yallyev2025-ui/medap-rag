@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import re
 import time
 
 from aiogram import F, Router
@@ -59,6 +60,9 @@ CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу о�
 NEW_CHAT_TEXT = "🆕 Начал новую тему — предыдущий разговор забыт."
 # Решение владельца 22.11.2026 (Mentor 2.0): кнопка одна — «Общие знания». Внутри неё
 # сначала PubMed, затем интернет, и только если ни там, ни там ничего нет — знания модели.
+# Фраза «по КР РФ» / «клинические рекомендации» — ответ строго по клинрекомендациям.
+GUIDELINE_PHRASE = re.compile(r"(^|\s)(по\s+)?(кр\s*рф|клиническ\w*\s+рекомендац\w*|клинрек)", re.IGNORECASE)
+
 NOT_FOUND_ASK = (
     "В материалах кафедры и учебниках ответа на этот вопрос не нашлось.\n"
     "Могу поискать в PubMed и интернете, а если и там ничего — ответить общими знаниями модели. "
@@ -327,15 +331,20 @@ async def answer_question(message: Message, db_user: User, usage_ctx: dict, ques
         usage_ctx["count"] = False
         return
 
+    # «По КР РФ …» — просьба ответить по клиническим рекомендациям, даже если в панели
+    # выбран учебник (ТЗ 22.11.2026: одна фраза и кнопка на сайте). Доступ проверяется
+    # ниже тем же правилом, что для режима клинреков.
+    guideline_asked = bool(GUIDELINE_PHRASE.search(question))
+
     # Режим не выбран — просим выбрать и не тратим лимит на это сообщение.
-    if mode != SCOPE_DOCUMENTS and db_user.current_source_type is None:
+    if mode != SCOPE_DOCUMENTS and db_user.current_source_type is None and not guideline_asked:
         await message.answer(CHOOSE_MODE_TEXT)
         await send_main_menu(message)
         usage_ctx["count"] = False
         return
 
-    source_type = db_user.current_source_type or SOURCE_TEXTBOOK
-    subject = db_user.current_subject if mode != SCOPE_DOCUMENTS else None
+    source_type = SOURCE_CLINREK if guideline_asked else (db_user.current_source_type or SOURCE_TEXTBOOK)
+    subject = db_user.current_subject if (mode != SCOPE_DOCUMENTS and not guideline_asked) else None
 
     # Клинреки — только премиум/админ (режим мог быть выбран до отзыва премиума).
     if source_type == SOURCE_CLINREK and not has_clinrek_access(db_user):
