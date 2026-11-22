@@ -103,7 +103,38 @@ def _check_api_key(x_api_key: str = Header(default="")) -> None:
 
 @app.get("/health")
 async def health() -> dict:
+    """Живость процесса. Ничего не ждёт: ни базу, ни модели — только «сервер слушает»."""
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    """Готовность отвечать по материалам: база доступна и модели поиска загружены.
+
+    Платформа деплоя проверяет `/health` (жив ли процесс), а этот адрес нужен
+    людям и мониторингу: «starting» — сервер уже принимает запросы, но тяжёлые
+    компоненты ещё греются (ТЗ 22.11.2026: не выдавать занятость за поломку).
+    """
+    from fastapi.responses import JSONResponse
+
+    from app.readiness import ModelsState, models_state
+    from sqlalchemy import text as sql_text
+
+    db_ok = True
+    try:
+        async with async_session() as session:
+            await session.execute(sql_text("select 1"))
+    except Exception:
+        db_ok = False
+
+    models = models_state()
+    status = "ready" if db_ok and models is ModelsState.READY else "starting"
+    code = 200 if db_ok else 503
+
+    return JSONResponse(
+        status_code=code,
+        content={"status": status, "db": db_ok, "models": models.value},
+    )
 
 
 class SubjectItem(BaseModel):

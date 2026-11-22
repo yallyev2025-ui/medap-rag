@@ -97,14 +97,20 @@ async def _run_api() -> None:
 async def _warm_up_models() -> None:
     """Подгружает модели поиска заранее, чтобы первый студент после деплоя не ждал их загрузки. Фоном: бот и
     /health отвечают сразу. Сбой не опасен — модели загрузятся при первом вопросе, как раньше."""
+    from app.readiness import ModelsState, mark_models
+
     try:
         from rag.embedder import embed_query
         from rag.reranker import warm_up
 
         await asyncio.to_thread(embed_query, "прогрев")
         backend = await asyncio.to_thread(warm_up)
+        mark_models(ModelsState.READY)
         logger.info("Модели поиска загружены, реранкер: %s", backend)
     except Exception:
+        # Модели загрузятся при первом вопросе (ленивая загрузка), поэтому это не
+        # провал запуска — в /ready так и будет "failed", а сервер работает.
+        mark_models(ModelsState.FAILED)
         logger.exception("Прогрев моделей не удался — загрузятся при первом вопросе")
 
 
