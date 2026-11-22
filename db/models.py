@@ -337,6 +337,59 @@ class AnswerCache(Base):
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ResearchRun(Base):
+    """Ход исследования по одному вопросу (Mentor 2.0, этап 1).
+
+    Нужен не для ответа, а для разбора: что Ментор считал обязательным раскрыть, по каким
+    фразам искал, что нашлось, сколько было кругов. Без этой записи «ответ стал полнее» —
+    только мнение: сравнивать не с чем. Хранит план, покрытие и итог, но не текст ответа —
+    ответ живёт в `answer_log` и в переписке.
+    """
+
+    __tablename__ = "research_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="", server_default="")
+    goal: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # JSON: пункты плана с весами, запросы, покрытие, круги поиска. Формат — ResearchOutcome.as_dict().
+    plan: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    covered: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    aspects: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # done — исследование прошло; degraded — модель плана/проверки не ответила, искали кодом.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="done", server_default="done")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class ResearchCache(Base):
+    """Кеш планов исследования (Mentor 2.0, этап 1): тот же вопрос — без повторного вызова модели.
+
+    Хранится только разбор вопроса (пункты и поисковые фразы), без пользовательских данных,
+    поэтому общий для всех. История диалога в ключ не входит: уточняющий вопрос без истории
+    разбирается заново — иначе «а какие дозы?» получил бы чужой план.
+    """
+
+    __tablename__ = "research_cache"
+    __table_args__ = (UniqueConstraint("policy_version", "question_key", name="uq_research_cache_question"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    # Нормализованный вопрос: без регистра, лишних пробелов и знаков на конце.
+    question_key: Mapped[str] = mapped_column(Text, nullable=False)
+    plan: Mapped[str] = mapped_column(Text, nullable=False)  # JSON плана
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class AnswerLog(Base):
     """Каждый ответ workflow ask() — для Answer Inspector (§8 дополнения к ТЗ).
 

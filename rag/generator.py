@@ -494,6 +494,11 @@ GENERATION_TEMPERATURE = 0.2
 
 # «Быстрый» режим (дешёвая модель): конкретный образец оформления держит форму лучше абстрактных
 # правил. Образец без медицинского содержания — только скелет; факты берутся из контекста.
+CHECKLIST_INSTRUCTION = """ПЛАН ЭТОГО ОТВЕТА (проверено: материал по этим пунктам в контексте есть). Раскрой каждый пункт по существу, а не общим абзацем:
+{items}
+
+Если по какому-то пункту в контексте сведений нет — не выдумывай и не подменяй его общими словами, просто не раскрывай его."""
+
 FAST_FORMAT_SKELETON = """ОБРАЗЕЦ ОФОРМЛЕНИЯ (только форма; содержание берётся из контекста, пустые блоки не пиши):
 
 **Определение.** Одно короткое предложение.
@@ -723,6 +728,7 @@ async def generate_answer(
     dialog: bool = False,
     mode_override: str | None = None,
     output_format: str | None = None,
+    checklist: tuple[str, ...] | None = None,
 ) -> GeneratedAnswer:
     """Генерирует ответ с учётом режима.
 
@@ -731,6 +737,10 @@ async def generate_answer(
 
     `mode_override` — готовая инструкция режима (несколько вопросов, батч 27); заменяет
     выбор режима по задаче/тексту вопроса.
+
+    `checklist` (Mentor 2.0, этап 1) — обязательные пункты плана исследования: поиск уже
+    проверил, что материал по ним есть, и генерация получает их списком. Это не шаблон
+    болезни, а чек-лист конкретного вопроса; пустой чек-лист ничего не меняет.
 
     `dialog=True` (Telegram/админка) — режим «полно по крупным разделам + вопрос в конце»;
     False (сайт, /v1) — один максимально полный ответ без деления и без вопроса.
@@ -799,6 +809,8 @@ async def generate_answer(
             mode_instruction = MODE_INSTRUCTIONS[mode]
 
     system_prompt, mode_instruction = apply_output_format(system_prompt, mode_instruction, output_format)
+    if checklist:
+        mode_instruction = f"{mode_instruction}\n\n{CHECKLIST_INSTRUCTION.format(items=chr(10).join('- ' + item for item in checklist))}"
     if current_tier() == "fast" and not is_clinrek:
         system_prompt = f"{system_prompt}\n\n{FAST_FORMAT_SKELETON}"
 

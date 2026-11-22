@@ -41,7 +41,6 @@ from db.crud import (
     log_query,
     reset_chat,
     user_scope,
-    user_tier,
 )
 from db.models import User
 from db.session import async_session
@@ -58,9 +57,12 @@ HISTORY_TURNS = 3
 ERROR_TEXT = "⚠️ Произошла ошибка, попробуй ещё раз через минуту."
 CHOOSE_MODE_TEXT = "Сначала выберите режим — я ищу ответы строго по выбранной базе."
 NEW_CHAT_TEXT = "🆕 Начал новую тему — предыдущий разговор забыт."
+# Решение владельца 22.11.2026 (Mentor 2.0): кнопка одна — «Общие знания». Внутри неё
+# сначала PubMed, затем интернет, и только если ни там, ни там ничего нет — знания модели.
 NOT_FOUND_ASK = (
-    "В загруженных материалах по этому вопросу ничего нет. Как ответить?\n"
-    "Учти: общие знания ИИ, интернет и PubMed — не официальные источники MedAP, перепроверяйте."
+    "В материалах кафедры и учебниках ответа на этот вопрос не нашлось.\n"
+    "Могу поискать в PubMed и интернете, а если и там ничего — ответить общими знаниями модели. "
+    "Это не официальные источники MedAP: ответ нужно перепроверять."
 )
 NOT_FOUND_ASK_NO_PUBMED = (
     "В учебниках и научных статьях по этому вопросу ничего не нашлось. Как ответить?\n"
@@ -100,6 +102,15 @@ CONSENT_KEYBOARD_NO_PUBMED = InlineKeyboardMarkup(
         [
             InlineKeyboardButton(text="Нет", callback_data="genk:no"),
         ],
+    ]
+)
+
+# Одна кнопка (решение владельца 22.11.2026): PubMed, интернет и знания модели проходятся
+# по порядку внутри неё, студенту не нужно выбирать источник самому.
+GENERAL_KNOWLEDGE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="Общие знания", callback_data="genk:yes")],
+        [InlineKeyboardButton(text="Нет", callback_data="genk:no")],
     ]
 )
 
@@ -153,23 +164,32 @@ async def _clear_status(status: Message | None) -> None:
         pass
 
 
-async def _run_web_search(message: Message, user_id: int, query: str) -> None:
+async def _run_web_search(message: Message, user_id: int, query: str, *, quiet: bool = False) -> bool:
+    """True — ответ по интернету отправлен. `quiet=True` — внутри «Общих знаний»:
+    при неудаче статус убирается, и бот идёт к следующей ступени (знаниям модели)."""
     status = await message.answer("🌐 Ищу в интернете…")
     try:
         with request_context(user_id=f"telegram:{user_id}", channel="telegram", workflow="WEB_SEARCH"):
             result = await search_and_answer(query)
     except Exception:
         logger.exception("Ошибка при веб-поиске")
-        await _set_status(status, ERROR_TEXT)
-        return
+        if quiet:
+            await _clear_status(status)
+        else:
+            await _set_status(status, ERROR_TEXT)
+        return False
 
-    if result.error:
-        await _set_status(status, f"⚠️ {result.error}")
-        return
+    if result.error or not (result.answer or "").strip():
+        if quiet:
+            await _clear_status(status)
+        else:
+            await _set_status(status, f"⚠️ {result.error or 'ничего не найдено'}")
+        return False
 
     await _clear_status(status)
     # Ссылка каждого источника уже стоит под его описанием (собрано в app/workflows/web_search.py).
     await _send_answer(message, result.answer)
+    return True
 
 
 async def _run_pubmed_search(message: Message, user_id: int, query: str, *, quiet: bool = False) -> bool:
@@ -356,7 +376,8 @@ async def answer_question(message: Message, db_user: User, usage_ctx: dict, ques
                     symptom_mode=db_user.clinrek_symptom_mode,
                     scope=scope,
                     budget_ok=budget_ok,
-                    tier=user_tier(db_user),
+                    # Глубину Ментор выбирает сам (решение владельца 22.11.2026): переключателя
+                    # нет ни в панели, ни в чате, поэтому и `tier` не передаём.
                 )
         finally:
             rotator.cancel()
@@ -381,11 +402,10 @@ async def answer_question(message: Message, db_user: User, usage_ctx: dict, ques
             elif source_type == SOURCE_CLINREK:
                 await message.answer(CLINREK_NOT_FOUND_TEXT)
             else:
-                # Учебники не ответили — научные статьи PubMed сразу, без кнопки (решение 37); общие знания и интернет — по кнопке
-                if await _run_pubmed_search(message, db_user.id, question, quiet=True):
-                    return
-                # Решение владельца 15.11.2026: медицинский ИИ работает только по материалам — без «общих знаний» и интернета
-                await message.answer(NOT_FOUND_FINAL_TEXT)
+                # PubMed сам больше не запускается (решение владельца 22.11.2026): студент нажимает
+                # «Общие знания», и бот проходит PubMed → интернет → знания модели по порядку.
+                await _remember_pending(db_user.id, question)
+                await message.answer(NOT_FOUND_ASK, reply_markup=GENERAL_KNOWLEDGE_KEYBOARD)
             usage_ctx["count"] = False
             return
 
@@ -420,7 +440,22 @@ async def consent_general_yes(callback: CallbackQuery) -> None:
         await callback.message.answer("Запрос устарел — задайте вопрос заново.")
         return
 
-    status = await callback.message.answer("🧠 Готовлю ответ из общих знаний…")
+    # Порядок ступеней (решение владельца 22.11.2026): сначала источники, знания модели — последними.
+    if await _run_pubmed_search(callback.message, callback.from_user.id, question, quiet=True):
+        async with async_session() as session:
+            user = await get_or_create_user(session, callback.from_user)
+            await increment_usage(session, user.id)
+            await session.commit()
+        return
+
+    if await _run_web_search(callback.message, callback.from_user.id, question, quiet=True):
+        async with async_session() as session:
+            user = await get_or_create_user(session, callback.from_user)
+            await increment_usage(session, user.id)
+            await session.commit()
+        return
+
+    status = await callback.message.answer("🧠 Ни в PubMed, ни в интернете не нашлось — отвечаю общими знаниями…")
     try:
         with request_context(user_id=f"telegram:{callback.from_user.id}", channel="telegram"):
             answer = await generate_fallback(question)

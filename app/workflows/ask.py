@@ -23,6 +23,8 @@ from app.observability.context import current, current_request_id, set_workflow
 from app.llm.task_map import Task, tier_providers
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
+from app.research.runner import aspect_titles, missing_summary, research_material
+from app.research.store import RunRecord, log_research_run
 from app.verification.conflicts import detect_conflicts
 from app.workflows import answer_cache
 from app.workflows.expand import query_variants
@@ -452,6 +454,8 @@ async def _ask(
     book_chunks: list[ChunkResult] = []
     doc_chunks: list[ChunkResult] = []
     expanded = False
+    # Ход исследования (Mentor 2.0, этап 1): None — вопрос шёл прежним путём.
+    research = None
     with stages.measure("retrieval") as details:
         if doc_scope:
             chunks, doc_details = await retrieve_documents(
@@ -470,24 +474,56 @@ async def _ask(
             relevant = relevant_chunks(chunks, document_threshold()) + relevant_chunks(book_chunks)
             all_chunks = chunks + book_chunks
         else:
-            chunks = await retrieve(
-                search_query,
-                source_type=source_type,
-                subject=subject,
-                # Обычный клинический вопрос отвечается строго из одной рекомендации,
-                # разбор симптомов — наоборот, по многим.
-                focus_document=(source_type == SOURCE_CLINREK and not reasoning),
-                top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else tier_top_k(tier)),
-                spread=tier is not None and source_type != SOURCE_CLINREK,
-                # Клинреки и разбор симптомов — как раньше (там глубина важнее скорости)
-                candidates=settings.RETRIEVAL_CANDIDATES
-                if (source_type == SOURCE_CLINREK or reasoning)
-                else tier_candidates(tier),
-            )
-            details["pool"] = settings.RETRIEVAL_CANDIDATES if (source_type == SOURCE_CLINREK or reasoning) else tier_candidates(tier)
-            details["reranker"] = active_backend()
-            relevant = relevant_chunks(chunks)
-            all_chunks = chunks
+            # Mentor 2.0: у учебников вопрос сначала разбирается на обязательные пункты
+            # и ищется по частям, найденное проверяется на полноту (app/research/).
+            # Клинреки и разбор по симптомам идут прежним путём: там ответ строится
+            # по одному документу, а не по набору учебников.
+            if settings.RESEARCH_ENABLED and source_type == SOURCE_TEXTBOOK and not reasoning:
+                chunks, relevant, research = await research_material(
+                    search_query,
+                    source_type=source_type,
+                    subject=subject,
+                    top_k=top_k or tier_top_k(tier),
+                    candidates=tier_candidates(tier),
+                )
+                all_chunks = chunks
+                details["research"] = research.as_dict()
+                details["pool"] = tier_candidates(tier)
+                details["reranker"] = active_backend()
+                # Журнал исследования: что считали обязательным, что нашлось, сколько кругов.
+                # Ошибка записи ответ не портит (внутри store все исключения пойманы).
+                ctx = current()
+                await log_research_run(
+                    research,
+                    RunRecord(
+                        question=search_query,
+                        request_id=current_request_id(),
+                        user_id=ctx.user_id if ctx else None,
+                        channel=ctx.channel if ctx else "api",
+                        # `code` — модель плана не ответила и план собран запасным путём:
+                        # ответ всё равно даётся, но в журнале это видно.
+                        status="degraded" if research.plan.origin == "code" and research.plan.deep else "done",
+                    ),
+                )
+            else:
+                chunks = await retrieve(
+                    search_query,
+                    source_type=source_type,
+                    subject=subject,
+                    # Обычный клинический вопрос отвечается строго из одной рекомендации,
+                    # разбор симптомов — наоборот, по многим.
+                    focus_document=(source_type == SOURCE_CLINREK and not reasoning),
+                    top_k=top_k or (settings.DIFFERENTIAL_TOP_K if reasoning else tier_top_k(tier)),
+                    spread=tier is not None and source_type != SOURCE_CLINREK,
+                    # Клинреки и разбор симптомов — как раньше (там глубина важнее скорости)
+                    candidates=settings.RETRIEVAL_CANDIDATES
+                    if (source_type == SOURCE_CLINREK or reasoning)
+                    else tier_candidates(tier),
+                )
+                details["pool"] = settings.RETRIEVAL_CANDIDATES if (source_type == SOURCE_CLINREK or reasoning) else tier_candidates(tier)
+                details["reranker"] = active_backend()
+                relevant = relevant_chunks(chunks)
+                all_chunks = chunks
             # Составной вопрос мог не набрать порога одной длинной фразой — пробуем по частям, прежде чем отказывать.
             # Только диалоговые каналы (Telegram): сайт (/v1) отвечает как раньше, без повторного захода
             if dialog and not relevant and source_type == SOURCE_TEXTBOOK and continuation_search is None:
@@ -598,6 +634,7 @@ async def _ask(
             generated = await generate_answer(
                 gen_question, chunks, source_type, history, task=decision.task, dialog=dialog,
                 output_format=fmt,
+                checklist=aspect_titles(research) if research is not None and relevant else None,
             )
         details["chars"] = len(generated.text if generated else "")
         details["verified"] = generated.verified if generated else None
@@ -702,6 +739,12 @@ async def _ask(
         conflicts=conflicts,
     )
     final_text = generated.text
+    # Пункт плана, по которому материал не нашёлся, называется прямо: студент видит,
+    # чего в учебниках нет, а не принимает неполный ответ за полный. Пометка своя,
+    # не от модели, поэтому проверку заземления не трогает.
+    missing = missing_summary(research) if research is not None else ""
+    if missing and final_text != NO_CONTEXT_ANSWER:
+        final_text = f"{final_text}\n\n{missing}"
     if dialog and generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
         final_text = finalize_dialog_answer(final_text, citations, generated.truncated)
     elif generated.verified is not False and final_text != NO_CONTEXT_ANSWER:

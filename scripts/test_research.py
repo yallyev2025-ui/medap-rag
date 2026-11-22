@@ -25,7 +25,10 @@ from app.research.planner import (
     fallback_plan,
     guess_kind,
     looks_complex,
+    normalize_question,
     parse_plan,
+    plan_from_dict,
+    plan_to_dict,
 )
 from app.research.text import has_partial_match, stems
 
@@ -199,6 +202,29 @@ def test_gap_queries_respect_limit() -> None:
     plan = plan_with([Aspect(f"пункт {i}", weight=2) for i in range(6)], goal="Тема")
     coverage = assess_coverage(plan.aspects, [Chunk("ничего по теме")])
     assert len(gap_queries(plan, coverage, limit=2)) == 2
+
+
+# --- Кеш планов: ключ и сериализация -------------------------------------------
+
+def test_normalize_question_ignores_case_spaces_and_tail() -> None:
+    assert normalize_question("  Таламус:  все ЯДРА! ") == "таламус: все ядра"
+    assert normalize_question("Классификация ХОБЛ?") == normalize_question("классификация хобл")
+
+
+def test_plan_survives_round_trip() -> None:
+    plan = plan_with([Aspect("функции ядер", weight=2), Aspect("кровоснабжение", weight=1)])
+    restored = plan_from_dict(plan_to_dict(plan))
+    assert restored is not None
+    assert restored.origin == "cache"
+    assert [a.title for a in restored.aspects] == ["функции ядер", "кровоснабжение"]
+    assert [a.weight for a in restored.aspects] == [2, 1]
+    assert restored.queries == plan.queries
+
+
+def test_broken_cache_entry_is_not_used() -> None:
+    assert plan_from_dict({}) is None
+    assert plan_from_dict({"queries": []}) is None
+    assert plan_from_dict({"queries": ["ядра таламуса"]}) is not None
 
 
 if __name__ == "__main__":

@@ -47,6 +47,8 @@ _COMPLEX = re.compile(
 )
 
 _SPLIT = re.compile(r"[,;:()\n]|\s[—–-]\s")
+_SPACES = re.compile(r"\s+")
+_TAIL = re.compile(r"[\s.!?…:;,-]+$")
 
 # Порог «вопрос из нескольких частей»: три и больше смысловых слов в части и
 # хотя бы две части. Односложный вопрос («что такое ацидоз») сюда не попадает.
@@ -265,3 +267,49 @@ async def plan_research(question: str, turns: list[tuple[str, str]] | None = Non
 
     parsed = parse_plan(result.data or {}, question)
     return parsed or fallback_plan(question)
+
+def normalize_question(question: str) -> str:
+    """Ключ кеша планов: регистр, лишние пробелы и знаки на конце не создают новый план."""
+    text = _SPACES.sub(" ", (question or "").strip().lower())
+    return _TAIL.sub("", text)[:500]
+
+
+def plan_to_dict(plan: ResearchPlan) -> dict:
+    """План в JSON — для кеша и журнала исследования."""
+    return {
+        "kind": plan.kind,
+        "goal": plan.goal,
+        "aspects": [
+            {"title": a.title, "weight": a.weight, "from_requirement": a.from_requirement}
+            for a in plan.aspects
+        ],
+        "queries": list(plan.queries),
+        "deep": plan.deep,
+        "origin": plan.origin,
+    }
+
+
+def plan_from_dict(data: dict) -> ResearchPlan | None:
+    """План из кеша. Битая или чужая запись — `None`: план соберётся заново, а не сломает ответ."""
+    if not isinstance(data, dict):
+        return None
+    queries = tuple(q for q in data.get("queries") or [] if isinstance(q, str) and q.strip())
+    if not queries:
+        return None
+    aspects = tuple(
+        Aspect(
+            title=str(item.get("title") or "").strip(),
+            weight=int(item.get("weight") or 1),
+            from_requirement=bool(item.get("from_requirement")),
+        )
+        for item in data.get("aspects") or []
+        if isinstance(item, dict) and str(item.get("title") or "").strip()
+    )
+    return ResearchPlan(
+        kind=str(data.get("kind") or "simple"),
+        goal=str(data.get("goal") or "").strip() or queries[0],
+        aspects=aspects[:8],
+        queries=queries[:8],
+        deep=bool(data.get("deep", True)),
+        origin="cache",
+    )

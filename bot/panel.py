@@ -75,14 +75,6 @@ def scope_from_button(text: str) -> str | None:
     return None
 
 
-def tier_from_button(text: str) -> str | None:
-    plain = text[len(_ACTIVE_MARK):] if text.startswith(_ACTIVE_MARK) else text
-    for tier, label in TIER_LABELS.items():
-        if label == plain:
-            return tier
-    return None
-
-
 def subject_from_button(text: str, subjects: list[str]) -> str | None:
     label = text[len(SUBJECT_PREFIX):] if text.startswith(SUBJECT_PREFIX) else text
     return next((s for s in subjects if subject_label(s) == label), None)
@@ -176,17 +168,6 @@ def scope_keyboard(current: str) -> ReplyKeyboardMarkup:
     rows.append([KeyboardButton(text=BTN_BACK)])
     return ReplyKeyboardMarkup(
         keyboard=rows, resize_keyboard=True, is_persistent=True, input_field_placeholder="Откуда отвечать?"
-    )
-
-
-def tier_keyboard(current: str) -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text=(_ACTIVE_MARK if tier == current else "") + label)]
-        for tier, label in TIER_LABELS.items()
-    ]
-    rows.append([KeyboardButton(text=BTN_BACK)])
-    return ReplyKeyboardMarkup(
-        keyboard=rows, resize_keyboard=True, is_persistent=True, input_field_placeholder="Режим ответа"
     )
 
 

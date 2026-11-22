@@ -14,7 +14,8 @@
 from dataclasses import dataclass
 
 from app.research.coverage import Coverage, assess_coverage, confirm_gaps, gap_queries, rounded
-from app.research.planner import ResearchPlan, plan_research
+from app.research.store import plan_with_cache
+from app.research.planner import ResearchPlan
 from config import settings
 from rag.generator import relevant_chunks
 from rag.retriever import ChunkResult, retrieve, retrieve_multi
@@ -34,6 +35,7 @@ class ResearchOutcome:
         return {
             "kind": self.plan.kind,
             "origin": self.plan.origin,
+            "goal": self.plan.goal,
             "deep": self.plan.deep,
             "queries": list(self.queries),
             "aspects": [{"title": a.title, "weight": a.weight} for a in self.plan.aspects],
@@ -78,7 +80,7 @@ async def research_material(
     Никогда не бросает исключений из-за плана: сбой планировщика или проверки
     означает «ищи как раньше», а не отказ студенту.
     """
-    plan = await plan_research(question, turns)
+    plan = await plan_with_cache(question, turns)
     steps: list[str] = []
 
     if plan.deep and plan.aspects:
