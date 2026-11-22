@@ -3,7 +3,7 @@
 python -m scripts.test_clinreky
 """
 
-from app.integrations.clinreky import parse_catalog, parse_page
+from app.integrations.clinreky import compare_edition, parse_catalog, parse_page
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset>
@@ -69,6 +69,13 @@ def test_empty_page_is_failed_with_reasons() -> None:
     page = parse_page("<html><body></body></html>")
     assert page.status == "failed"
     assert "разделы не найдены" in page.missing and "название не найдено" in page.missing
+
+
+def test_edition_compared_with_rubricator() -> None:
+    assert compare_edition("3", ["J44_2", "J44_3"]) == "current"
+    assert compare_edition("2", ["J44_3"]) == "outdated"
+    assert compare_edition("", ["J44_3"]) == "unknown"
+    assert compare_edition("3", []) == "unknown"
 
 
 if __name__ == "__main__":

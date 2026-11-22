@@ -201,3 +201,30 @@ async def fetch_page(url: str, timeout: float = 30.0) -> ClinrekyPage | None:
     except Exception as error:
         logger.warning("clinreky: страница не открылась %s: %s", url, error)
         return None
+
+
+# --- Редакция: наша или устаревшая (этап 3, пункт «проверка редакции») ---------------
+
+def _version_of(ref: str) -> int | None:
+    """Версия из ссылки вида `КР603_3` или `603_3`; None — номера нет."""
+    tail = (ref or "").rsplit("_", 1)[-1].strip()
+    digits = re.search(r"(\d+)", tail)
+
+    return int(digits.group(1)) if digits else None
+
+
+def compare_edition(ours: str, official_refs: list[str]) -> str:
+    """Сравнить нашу редакцию КР с рубрикатором: `current` | `outdated` | `unknown`.
+
+    `official_refs` — ссылки рубрикатора вида `{код}_{версия}`. Сравниваем только
+    номер редакции: тексты всё равно не смешиваем, а студенту показываем ссылку на
+    официальный документ (решение владельца: «частичная проверка» не пишем).
+    """
+    mine = _version_of(ours) if re.fullmatch(r"\d+", str(ours or "").strip()) else _version_of(ours)
+    if mine is None:
+        return "unknown"
+    versions = [v for v in (_version_of(ref) for ref in official_refs or []) if v is not None]
+    if not versions:
+        return "unknown"
+
+    return "current" if mine >= max(versions) else "outdated"
