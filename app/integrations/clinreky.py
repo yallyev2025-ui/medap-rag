@@ -96,11 +96,29 @@ def _json_ld(soup: BeautifulSoup) -> dict[str, Any]:
     return {}
 
 
-def _edition(page_text: str) -> str:
-    """Год редакции, если он написан на странице («2024», «редакция 2023»)."""
-    match = re.search(r"(?:редакц\w*|год\w*)\D{0,20}(20\d{2})", page_text, re.IGNORECASE)
+def _edition(page_text: str, official_url: str = "") -> str:
+    """Редакция: номер из ссылки на официальный документ, иначе год со страницы.
 
-    return match.group(1) if match else ""
+    Пример: `cr.minzdrav.gov.ru/view-cr/603_3` — третья редакция КР603.
+    """
+    match = re.search(r"/view-cr/\d+_(\d+)", official_url)
+    if match:
+        return match.group(1)
+    year = re.search(r"(?:редакц\w*|год\w*)\D{0,20}(20\d{2})", page_text, re.IGNORECASE)
+
+    return year.group(1) if year else ""
+
+
+def _kr_id(title: str, ld: dict[str, Any]) -> str:
+    """Идентификатор КР: из JSON-LD, из заголовка («… (КР603)») или из официальной ссылки."""
+    value = str(ld.get("identifier") or "").strip()
+    if value:
+        return value
+    match = re.search(r"КР\s*(\d+)", title)
+    if match:
+        return f"КР{match.group(1)}"
+
+    return ""
 
 
 def _official(text: str) -> str:
@@ -115,10 +133,10 @@ def parse_page(html: str, url: str = "") -> ClinrekyPage:
     page = ClinrekyPage(url=url)
     ld = _json_ld(soup)
     page.title = str(ld.get("name") or (_text(soup.title) if soup.title else "")).strip()
-    page.kr_id = str(ld.get("identifier") or ld.get("@id") or "").strip()
+    page.kr_id = _kr_id(page.title, ld)
     body_text = _text(soup.body or soup)
-    page.edition = _edition(body_text)
     page.official_url = _official(str(soup))
+    page.edition = _edition(body_text, page.official_url)
 
     for heading in soup.find_all(["h2", "h3"]):
         title = _text(heading)
