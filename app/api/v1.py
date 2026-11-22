@@ -1505,6 +1505,45 @@ class WebPageRequest(BaseModel):
     context: StudentAIContext
 
 
+class ClinrekyPageResponse(BaseModel):
+    """Разобранная клиническая рекомендация с clinreky.ru (Mentor 2.0, этап 3)."""
+
+    url: str
+    title: str
+    krId: str
+    edition: str
+    status: str
+    sections: list[dict]
+    recommendations: list[dict]
+    tables: list[dict]
+    officialUrl: str
+    missing: list[str]
+
+
+@router.get("/clinreky/page", response_model=ClinrekyPageResponse)
+async def clinreky_page(url: str, userId: str | None = None) -> ClinrekyPageResponse:
+    """Полный разбор КР по адресу clinreky.ru (публичный общий кеш).
+
+    Отдельный адрес, а не «умный» поиск: сайт сам решает, когда нужна рекомендация
+    (кнопка «КР РФ» или фраза «по КР РФ»), и получает разделы, рекомендации и ссылку
+    на официальный документ. Чужой домен не принимаем — только clinreky.ru.
+    Страница публичная, поэтому кеш общий: `userId` нужен только для журнала
+    запросов и не превращает документ в личный.
+    """
+    from app.documents.store import read_clinreky
+
+    if not url.startswith("https://clinreky.ru/"):
+        raise HTTPException(status_code=400, detail="Поддерживается только https://clinreky.ru/…")
+    with request_context(user_id=userId or "system", channel="api", workflow="CLINREKY_PAGE"):
+        stored = await read_clinreky(url, owner_id=None)
+    if stored is None:
+        raise HTTPException(status_code=502, detail="Страница рекомендации не открылась")
+
+    data = stored.as_dict()
+
+    return ClinrekyPageResponse(**{k: data[k] for k in ("url", "title", "krId", "edition", "status", "sections", "recommendations", "tables", "officialUrl", "missing")})
+
+
 class WebPageResponse(BaseModel):
     url: str
     finalUrl: str = ""

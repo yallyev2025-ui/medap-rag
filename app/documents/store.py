@@ -42,6 +42,7 @@ class StoredDocument:
     id: int
     url: str
     title: str
+    kr_id: str
     edition: str
     status: str
     sections: tuple[dict[str, Any], ...]
@@ -55,6 +56,7 @@ class StoredDocument:
             "id": self.id,
             "url": self.url,
             "title": self.title,
+            "krId": self.kr_id,
             "edition": self.edition,
             "status": self.status,
             "sections": list(self.sections),
@@ -70,6 +72,7 @@ def _from_row(document: Document, sections: list[DocumentSection], tables: list[
         id=document.id,
         url=document.url,
         title=document.title,
+        kr_id=document.external_id or "",
         edition=document.edition,
         status=document.status,
         sections=tuple({"title": s.title, "text": s.text, "order": s.order} for s in sections),
@@ -137,11 +140,14 @@ async def _save(page: ClinrekyPage, hash_value: str, owner: str | None) -> Store
                 row = DocumentSection(document_id=document.id, order=index, title=section["title"], text=section["text"])
                 session.add(row)
                 sections.append(row)
+            tables: list[DocumentTable] = []
             for index, table in enumerate(page.tables):
-                session.add(DocumentTable(document_id=document.id, order=index, rows=json.dumps(table["rows"], ensure_ascii=False)))
+                row = DocumentTable(document_id=document.id, order=index, rows=json.dumps(table["rows"], ensure_ascii=False))
+                session.add(row)
+                tables.append(row)
             await session.commit()
 
-            return _from_row(document, sections, [], page)
+            return _from_row(document, sections, tables, page)
     except Exception:
         logger.warning("Документы: не удалось сохранить разбор", exc_info=False)
         return None

@@ -537,6 +537,18 @@ async def _ask(
                 if more_relevant:
                     chunks, relevant, all_chunks = more, more_relevant, more
                     expanded = True
+            # Mentor 2.0, этап 3: к загруженным КР добавляем разобранную страницу
+            # clinreky.ru (разделы и оригинальные рекомендации). Это не замена
+            # поиска, а его дополнение: без сети/кеша ответ идёт прежним путём.
+            if source_type == SOURCE_CLINREK and not doc_scope:
+                from app.documents.clinreky_answer import add_material
+
+                enriched, material = await add_material(search_query, chunks, relevant)
+                if material is not None:
+                    chunks = enriched
+                    all_chunks = enriched
+                    relevant = relevant + [chunk for chunk in material.chunks if chunk not in relevant]
+                    details["clinreky"] = material.as_dict()
         details["candidates"] = len(all_chunks)
         details["relevant"] = len(relevant)
         # Реранкер мог быть недоступен — это важно видеть в диагностике (§36).
