@@ -337,6 +337,62 @@ class AnswerCache(Base):
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Document(Base):
+    """Разобранный документ (Mentor 2.0, этап 3): КР РФ, учебник по ссылке, файл студента.
+
+    Один и тот же публичный документ не разбирается дважды: ключ — адрес + хеш
+    содержимого. Приватные (owner_id) в общий кеш не попадают и другому человеку
+    не видны. Полный текст лежит в хранилище (`full_text_path`), а не в памяти.
+    """
+
+    __tablename__ = "documents"
+    __table_args__ = (UniqueConstraint("url", "content_hash", "owner_id", name="uq_documents_url_hash_owner"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    edition: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    external_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="html", server_default="html")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="parsed", server_default="parsed")
+    # NULL — публичный документ (общий кеш); иначе — личный, виден только владельцу
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    full_text_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    # Рекомендации (текст + УУР/УДД) — в JSON: их читают ответы Ментора и проверка
+    recommendations: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    official_url: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class DocumentSection(Base):
+    """Раздел документа: заголовок, порядок, границы текста, страницы."""
+
+    __tablename__ = "document_sections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("document_sections.id", ondelete="CASCADE"), nullable=True)
+    order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class DocumentTable(Base):
+    """Таблица документа: строки как есть, со ссылкой на раздел."""
+
+    __tablename__ = "document_tables"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    section_id: Mapped[int | None] = mapped_column(ForeignKey("document_sections.id", ondelete="CASCADE"), nullable=True)
+    order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    rows: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+
+
 class ResearchRun(Base):
     """Ход исследования по одному вопросу (Mentor 2.0, этап 1).
 
