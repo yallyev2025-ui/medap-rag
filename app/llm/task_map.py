@@ -64,6 +64,11 @@ class Task(str, Enum):
     # Служебные дешёвые задачи: роутинг интента и переписывание запроса.
     INTENT_ROUTER = "INTENT_ROUTER"
     QUERY_REWRITE = "QUERY_REWRITE"
+    # Research Runtime (Mentor 2.0, этап 1): план ответа (что обязательно раскрыть, какими
+    # словами искать) и проверка полноты найденного. Обе задачи не пишут медицинский текст —
+    # только раскладывают и сверяют, поэтому идут на дешёвой модели, как переписывание запроса.
+    PLAN = "PLAN"
+    COVERAGE = "COVERAGE"
     # MedAP, этап 1: краткое описание рисунка учебника (по картинке и подписи) — один раз на рисунок, с кэшем.
     FIGURE_DESCRIBE = "FIGURE_DESCRIBE"
 
@@ -99,6 +104,8 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.CLAIM_EVIDENCE_CHECK: OPENAI,
     Task.INTENT_ROUTER: DEEPSEEK,
     Task.QUERY_REWRITE: DEEPSEEK,
+    Task.PLAN: DEEPSEEK,
+    Task.COVERAGE: DEEPSEEK,
     Task.FIGURE_DESCRIBE: OPENAI,
 }
 # Решение владельца 30.10.2026: Luna — главная модель всей содержательной работы. DeepSeek остаётся только
@@ -236,6 +243,7 @@ _ANSWER_TASKS = (
 _HELPER_TASKS = (
     Task.CLAIM_EVIDENCE_CHECK, Task.INTENT_ROUTER, Task.QUERY_REWRITE,
     Task.WEB_SEARCH, Task.PUBMED_SEARCH, Task.PUBMED_QUERY, Task.WEB_RESEARCH,
+    Task.PLAN, Task.COVERAGE,
 )
 
 
