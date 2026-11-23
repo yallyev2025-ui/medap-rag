@@ -92,8 +92,8 @@ async def _load_cached(url: str, hash_value: str, owner: str | None) -> StoredDo
                     Document.url == url,
                     Document.content_hash == hash_value,
                     Document.owner_id.is_(None) if owner is None else Document.owner_id == owner,
-                )
-            ).order_by(Document.id)).scalars().first()
+                ).order_by(Document.id)
+            )).scalars().first()
             if row is None:
                 return None
             sections = (await session.execute(select(DocumentSection).where(DocumentSection.document_id == row.id).order_by(DocumentSection.order))).scalars().all()
