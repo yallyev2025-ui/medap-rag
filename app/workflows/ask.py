@@ -45,6 +45,7 @@ from app.workflows.scope import Scope, retrieve_documents
 from config import settings
 from constants import (
     ANSWER_TIERS,
+    CLINREK_CATEGORIES,
     SCOPE_BOTH,
     SCOPE_DOCUMENTS,
     SOURCE_CLINREK,
@@ -319,6 +320,16 @@ async def _ask(
     """
     stages = StageLog()
     turns = turns or []
+
+    # Клинические рекомендации фильтруются по категории пациента, а не по
+    # предмету учебника. Старый клиент сайта присылал сюда код предмета
+    # («pathphys») — для КР такого subject не существует, и поиск честно не
+    # находил ничего. Неизвестную категорию игнорируем, а не превращаем в
+    # пустую выдачу.
+    if source_type == SOURCE_CLINREK and subject is not None:
+        categories = {value for _code, _label, value in CLINREK_CATEGORIES if value}
+        if subject not in categories:
+            subject = None
 
     # Диалог (Telegram/админка): «да» продолжает прошлый ответ, в конце ответа — вопрос-
     # приглашение. Сайт (/v1, channel api) получает один максимально полный ответ.
