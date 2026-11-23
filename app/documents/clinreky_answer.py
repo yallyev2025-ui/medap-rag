@@ -31,7 +31,7 @@ from app.documents.clinreky_pure import (
     pick_candidate,
     select_fragments,
 )
-from app.integrations.clinreky import BASE, ClinrekyPage, Recommendation, fetch_catalog_items
+from app.integrations.clinreky import BASE, ClinrekyPage, Recommendation, fetch_catalog_items, fts_search
 from constants import ACTIVE_SOURCE_STATUSES, SOURCE_CLINREK
 from db.models import Book
 from db.session import async_session
@@ -152,7 +152,36 @@ async def _candidate_from_catalog(question: str) -> GuidelineCandidate | None:
     if not candidates:
         return None
 
-    return pick_candidate(question, candidates)
+    chosen = pick_candidate(question, candidates)
+    if chosen is not None:
+        return chosen
+
+    # Название не совпало — ищем по текстам рекомендаций. Это тот же
+    # полнотекстовый индекс сайта: скачиваются meta.json и шарды слов, а не
+    # страницы всех 778 КР. Модель за выбор не платит.
+    by_id = {str(item.get("id") or ""): item for item in items}
+    for hit in await fts_search(question, limit=5):
+        item = by_id.get(str(hit.get("id") or ""))
+        if item is None and hit.get("url"):
+            item = {"id": hit.get("id"), "title": hit.get("title"), "url": hit["url"], "age": ""}
+        if item is None or not item.get("url"):
+            continue
+
+        candidate = GuidelineCandidate(
+            book_id=0,
+            title=str(item.get("title") or hit.get("title") or ""),
+            external_ref=str(item.get("id") or ""),
+            subject=_age_subject(str(item.get("age") or "")),
+            author="Минздрав России",
+            url=str(item["url"]),
+        )
+        # Текст нашёлся, но название должно давать хоть одну зацепку.
+        # Иначе на вопрос «одышка» можно ответить рекомендацией по COVID
+        # только потому, что там часто встречается это слово.
+        if pick_candidate(question, [candidate]) is not None:
+            return candidate
+
+    return None
 
 
 async def material_for(

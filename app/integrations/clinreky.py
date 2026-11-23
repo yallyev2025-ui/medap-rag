@@ -13,6 +13,7 @@
 страницы. Загрузка (`fetch_*`) — отдельно и только по запросу.
 """
 
+import bisect
 import json
 import logging
 import re
@@ -37,6 +38,16 @@ CATALOG_URL = f"{BASE}/assets/data/catalog.json"
 CATALOG_TTL_SECONDS = 6 * 60 * 60
 
 _catalog_cache: tuple[float, list[dict[str, Any]]] | None = None
+
+# Полнотекстовый индекс сайта: по нему ищем рекомендацию, если название не
+# совпало с вопросом («одышка», «медиаторы воспаления»). Это не обход страниц:
+# скачиваются только meta.json и шарды слов запроса.
+FTS_BASE = f"{BASE}/assets/data/fts/"
+_FTS_STOP = frozenset(
+    "и в во на при для с со по от до из к ко у о об а не или как что это".split()
+)
+_fts_meta_cache: tuple[float, dict[str, Any]] | None = None
+_fts_shards: dict[str, tuple[float, dict[str, str]]] = {}
 
 # Раздел «рекомендации» на странице: каждый пункт — li с data-rec-id
 REC_ITEM = "li.krv2-rec"
@@ -290,6 +301,172 @@ async def fetch_catalog_items(timeout: float = 25.0, *, force: bool = False) -> 
         _catalog_cache = (now, items)
 
     return items
+
+
+def fts_terms(question: str) -> list[str]:
+    """Слова запроса так же, как их считает поиск сайта: нижний регистр, ё→е."""
+    return [
+        term
+        for term in re.findall(r"[0-9a-zа-я]{2,}", (question or "").lower().replace("ё", "е"))
+        if term not in _FTS_STOP
+    ]
+
+
+def _fts_shard_name(key: str) -> str:
+    return "".join(f"{ord(char):04x}" for char in key[:2])
+
+
+def _fts_decode(raw: str) -> list[int]:
+    """Постинги — дельты в base36 через запятую."""
+    previous = 0
+    result: list[int] = []
+    for part in (raw or "").split(","):
+        if not part:
+            continue
+        previous += int(part, 36)
+        result.append(previous)
+
+    return result
+
+
+def _fts_intersect(left: list[int], right: list[int]) -> list[int]:
+    result: list[int] = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            result.append(left[i])
+            i += 1
+            j += 1
+        elif left[i] < right[j]:
+            i += 1
+        else:
+            j += 1
+
+    return result
+
+
+async def _fts_meta(timeout: float = 20.0) -> dict[str, Any]:
+    global _fts_meta_cache
+
+    now = time.monotonic()
+    if _fts_meta_cache is not None and now - _fts_meta_cache[0] < CATALOG_TTL_SECONDS:
+        return _fts_meta_cache[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(f"{FTS_BASE}meta.json")
+            response.raise_for_status()
+            meta = response.json()
+    except Exception as error:
+        logger.warning("clinreky: FTS meta не открылась: %s", error)
+        return _fts_meta_cache[1] if _fts_meta_cache is not None else {}
+
+    if isinstance(meta, dict):
+        _fts_meta_cache = (now, meta)
+
+    return meta if isinstance(meta, dict) else {}
+
+
+async def _fts_shard(key: str, timeout: float = 20.0) -> dict[str, str]:
+    name = _fts_shard_name(key)
+    now = time.monotonic()
+    cached = _fts_shards.get(name)
+    if cached is not None and now - cached[0] < CATALOG_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": USER_AGENT}) as client:
+            response = await client.get(f"{FTS_BASE}k/{name}.json")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as error:
+        logger.warning("clinreky: FTS шард %s не открылся: %s", name, error)
+        return cached[1] if cached is not None else {}
+
+    if isinstance(data, dict):
+        _fts_shards[name] = (now, data)
+
+    return data if isinstance(data, dict) else {}
+
+
+async def _fts_postings(term: str, meta: dict[str, Any]) -> list[int]:
+    key_len = int(meta.get("key_len") or 6)
+    key = term[:key_len]
+    shard = await _fts_shard(key)
+    if term and len(term) >= key_len:
+        return _fts_decode(shard.get(key, ""))
+    # Короткий термин: берём все ключи шарда, начинающиеся с него.
+    ids: set[int] = set()
+    for entry, raw in shard.items():
+        if entry.startswith(key):
+            ids.update(_fts_decode(raw))
+
+    return sorted(ids)
+
+
+async def fts_search(question: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Найти рекомендации по тексту, а не только по названию.
+
+    Возвращает `{id, title, mkb, url}` — id совпадает с id в каталоге.
+    Сначала пробуем строгое совпадение всех слов, затем — объединение:
+    у широкого вопроса «одышка при нагрузке» может не быть всех слов в одной КР.
+    """
+    terms = fts_terms(question)
+    if not terms:
+        return []
+    meta = await _fts_meta()
+    krs = meta.get("krs") or []
+    offsets = meta.get("offsets") or []
+    if not krs or not offsets:
+        return []
+
+    lists = [await _fts_postings(term, meta) for term in terms]
+    ids = lists[0] if lists else []
+    for other in lists[1:]:
+        ids = _fts_intersect(ids, other)
+        if not ids:
+            break
+    if not ids:
+        union: set[int] = set()
+        for one in lists:
+            union.update(one)
+        ids = sorted(union)
+    if not ids:
+        return []
+
+    grouped: dict[int, list[int]] = {}
+    for gid in ids:
+        kr = max(0, bisect.bisect_right(offsets, gid) - 1)
+        grouped.setdefault(kr, []).append(gid - offsets[kr])
+
+    lowered = [term for term in terms]
+    ranked: list[tuple[int, int]] = []
+    for kr, positions in grouped.items():
+        if kr >= len(krs):
+            continue
+        title = str((krs[kr] or ["", ""])[1] or "").lower().replace("ё", "е")
+        bonus = 1000 if all(term in title for term in lowered) else 0
+        ranked.append((bonus + len(positions), kr))
+    ranked.sort(reverse=True)
+
+    result: list[dict[str, Any]] = []
+    for _score, kr in ranked[:limit]:
+        row = krs[kr] or ["", "", ""]
+        mkb = str(row[0] or "")
+        title = str(row[1] or "").strip()
+        external_id = str(row[2] or "")
+        if not title:
+            continue
+        result.append(
+            {
+                "id": external_id,
+                "title": title,
+                "mkb": mkb,
+                "url": f"{BASE}/nosology/{mkb}/" if mkb else "",
+            }
+        )
+
+    return result
 
 
 async def fetch_page(url: str, timeout: float = 30.0) -> ClinrekyPage | None:

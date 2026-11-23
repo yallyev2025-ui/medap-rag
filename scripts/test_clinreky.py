@@ -3,7 +3,15 @@
 python -m scripts.test_clinreky
 """
 
-from app.integrations.clinreky import compare_edition, parse_catalog, parse_catalog_json, parse_page
+from app.integrations.clinreky import (
+    _fts_decode,
+    _fts_intersect,
+    compare_edition,
+    fts_terms,
+    parse_catalog,
+    parse_catalog_json,
+    parse_page,
+)
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset>
@@ -56,6 +64,12 @@ def test_catalog_json_keeps_only_published_pages() -> None:
     assert items[0]["url"] == "https://clinreky.ru/nosology/J18-ped/"
     assert items[0]["age"] == "child"
     assert items[0]["mkb"] == ("J12", "J18")
+
+
+def test_fts_terms_and_postings() -> None:
+    assert fts_terms("Одышка при нагрузке") == ["одышка", "нагрузке"]
+    assert _fts_decode("1,1,2") == [1, 2, 4]
+    assert _fts_intersect([1, 3, 5], [3, 4, 5]) == [3, 5]
 
 
 def test_page_meta_sections_tables_official_link() -> None:
