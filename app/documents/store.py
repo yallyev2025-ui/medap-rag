@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -153,19 +154,75 @@ async def _save(page: ClinrekyPage, hash_value: str, owner: str | None) -> Store
         return None
 
 
-async def read_clinreky(url: str, *, owner_id: str | None = None, fetcher=fetch_page) -> StoredDocument | None:
-    """Разобрать документ с кешем: второй запрос того же документа не ходит в сеть.
+async def _load_latest(url: str, owner: str | None, max_age_seconds: int) -> StoredDocument | None:
+    """Свежий сохранённый разбор по адресу — без сети.
 
-    Хеш содержимого узнаётся только после загрузки, поэтому сначала загружаем
-    страницу, затем ищем кеш по (адрес, хеш). Для повторных запросов это один
-    HTTP-запрос — он дешевле, чем полный разбор и запись.
+    Это и есть ответ на «разобрали один раз и отвечаем всем»: в пределах TTL
+    страница берётся из общей таблицы, HTTP-запроса нет. Просроченный разбор
+    не возвращаем — его перечитают один раз и обновят.
     """
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        async with async_session() as session:
+            row = (await session.execute(
+                select(Document).where(
+                    Document.url == url,
+                    Document.owner_id.is_(None) if owner is None else Document.owner_id == owner,
+                    Document.status == "parsed",
+                    Document.fetched_at >= cutoff,
+                ).order_by(Document.fetched_at.desc())
+            )).scalars().first()
+            if row is None:
+                return None
+            sections = (await session.execute(select(DocumentSection).where(DocumentSection.document_id == row.id).order_by(DocumentSection.order))).scalars().all()
+            tables = (await session.execute(select(DocumentTable).where(DocumentTable.document_id == row.id).order_by(DocumentTable.order))).scalars().all()
+
+            return _from_row(row, list(sections), list(tables), None)
+    except Exception:
+        logger.warning("Документы: свежий кеш недоступен, попробуем прочитать страницу")
+        return None
+
+
+async def _touch(document_id: int) -> None:
+    """Отметить, что кеш проверен сейчас: следующие TTL-запросы не ходят в сеть."""
+    try:
+        async with async_session() as session:
+            row = await session.get(Document, document_id)
+            if row is not None:
+                row.fetched_at = datetime.now(timezone.utc)
+                await session.commit()
+    except Exception:
+        logger.warning("Документы: не удалось обновить отметку кеша", exc_info=False)
+
+
+async def read_clinreky(
+    url: str,
+    *,
+    owner_id: str | None = None,
+    fetcher=fetch_page,
+    max_age_seconds: int | None = None,
+    force: bool = False,
+) -> StoredDocument | None:
+    """Разобрать документ с кешем: повторный запрос не ходит в сеть.
+
+    `max_age_seconds` — быстрый путь для публичных КР: если разбор сохранён
+    не раньше этого срока, отдаём его сразу из базы. Прежний путь (скачать,
+    посчитать хеш, сравнить) остаётся для истёкшего TTL и ручного обновления.
+    """
+    if max_age_seconds is not None and not force:
+        fresh = await _load_latest(url, owner_id, max_age_seconds)
+        if fresh is not None:
+            return fresh
+
     page = await fetcher(url)
     if page is None:
         return None
     hash_value = content_hash(page.as_dict().__str__())
     cached = await _load_cached(url, hash_value, owner_id)
     if cached is not None:
+        # Текст не изменился: продлеваем доверие к кешу, чтобы следующие
+        # запросы снова отвечали без сети.
+        await _touch(cached.id)
         return cached
 
     key = doc_key(url, hash_value, owner_id)

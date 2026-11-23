@@ -3,7 +3,7 @@
 python -m scripts.test_clinreky
 """
 
-from app.integrations.clinreky import compare_edition, parse_catalog, parse_page
+from app.integrations.clinreky import compare_edition, parse_catalog, parse_catalog_json, parse_page
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset>
@@ -43,6 +43,21 @@ def test_catalog_deduplicates_and_keeps_only_nosology() -> None:
     assert urls == ["https://clinreky.ru/nosology/J44/", "https://clinreky.ru/nosology/I10/"]
 
 
+def test_catalog_json_keeps_only_published_pages() -> None:
+    items = parse_catalog_json(
+        """{"items": [
+            {"id": "714_2", "title": "Пневмония (внебольничная)", "url": "/nosology/J18-ped/",
+             "age": "child", "mkb_all": ["J12", "J18"], "published": true},
+            {"id": "1_1", "title": "Черновик", "url": "/nosology/X00/", "published": false}
+        ]}"""
+    )
+    assert len(items) == 1
+    assert items[0]["title"] == "Пневмония (внебольничная)"
+    assert items[0]["url"] == "https://clinreky.ru/nosology/J18-ped/"
+    assert items[0]["age"] == "child"
+    assert items[0]["mkb"] == ("J12", "J18")
+
+
 def test_page_meta_sections_tables_official_link() -> None:
     page = parse_page(PAGE, "https://clinreky.ru/nosology/J44/")
     assert page.status == "parsed"
@@ -53,6 +68,27 @@ def test_page_meta_sections_tables_official_link() -> None:
     assert "ОФВ1" in page.sections[0]["text"]
     assert page.tables[0]["rows"][1] == ["ОФВ1/ФЖЕЛ", "< 0,70"]
     assert "cr.minzdrav.gov.ru" in page.official_url
+
+
+def test_main_sections_and_recommendation_section_are_parsed() -> None:
+    page = parse_page(
+        """<html><head><title>Пневмония</title>
+        <script type="application/ld+json">{"@type":"MedicalWebPage","name":"Внебольничная пневмония"}</script>
+        </head><body>
+        <details class="krv2-section"><summary>🔬 2. Диагностика 25 рек. ▾</summary>
+          <p>Диагностические исследования направлены на верификацию диагноза.</p>
+        </details>
+        <details class="krv2-section"><summary>⚕️ 3. Лечение 47 рек. ▾</summary>
+          <p>Лечение начинается с антибактериальной терапии.</p>
+        </details>
+        <ul class="krv2-rec-list"><li class="krv2-rec" data-rec-stages="ai:Диагностика,ai:Пневмония"
+          data-rec-essence="dg:Жалобы и анамнез">
+          <div class="krv2-rec-original">Всем пациентам с подозрением на ВП рекомендуется собрать анамнез.</div>
+        </li></ul>
+        </body></html>"""
+    )
+    assert [s["title"] for s in page.sections] == ["2. Диагностика", "3. Лечение"]
+    assert page.recommendations[0].section == "Диагностика · Жалобы и анамнез"
 
 
 def test_recommendations_take_original_text_not_ai_summary() -> None:

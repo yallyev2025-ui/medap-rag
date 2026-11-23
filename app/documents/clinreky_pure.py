@@ -23,6 +23,8 @@ class GuidelineCandidate:
     external_ref: str
     subject: str
     author: str
+    """Адрес страницы на clinreky.ru. Заполнен для каталога без загруженной книги."""
+    url: str | None = None
 
 
 def evidence_id(document_id: int, index: int) -> int:
@@ -127,6 +129,10 @@ def page_fragments(
         if len(text) < 20:
             continue
         level = getattr(recommendation, "level", None)
+        topic = str(getattr(recommendation, "section", "") or "").strip()
+        section = topic or f"Рекомендация {number}"
+        if level:
+            section = f"{section} ({level})"
         result.append(
             {
                 "id": evidence_id(document_id, index),
@@ -134,7 +140,7 @@ def page_fragments(
                 "subject": subject,
                 "author": author,
                 "title": page.title,
-                "section": f"Рекомендация {number}" + (f" ({level})" if level else ""),
+                "section": section,
                 "book_id": book_id,
                 "authority_level": "clinical_guideline",
                 "verification_status": "VERIFIED",
@@ -145,22 +151,45 @@ def page_fragments(
     return result
 
 
-def select_fragments(fragments: Iterable[dict[str, Any]], question: str, limit: int) -> list[dict[str, Any]]:
-    """Самые близкие к вопросу фрагменты; разделы получают небольшой приоритет."""
+def select_fragments(
+    fragments: Iterable[dict[str, Any]],
+    question: str,
+    limit: int,
+    max_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    """Самые близкие к вопросу фрагменты; разделы получают небольшой приоритет.
+
+    Приложения со шкалами и алгоритмами не должны вытеснять основной раздел
+    «Диагностика» или «Лечение» только потому, что в них много знакомых слов:
+    за совпадение с названием раздела даём отдельный бонус, а приложение
+    слегка понижаем.
+    """
     scored = []
     for fragment in fragments:
         section = str(fragment.get("section") or "")
-        section_bonus = 1 if section and not section.startswith("Рекомендация") else 0
+        if section.startswith("Рекомендация"):
+            section_bonus = 0
+        else:
+            section_bonus = 1
+            if section and _overlap(question, section) > 0:
+                section_bonus += 2
+            if section.lower().startswith(("приложение", "шкала")):
+                section_bonus -= 1
         scored.append((_overlap(question, f"{section} {fragment.get('content') or ''}") + section_bonus, fragment))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     picked: list[dict[str, Any]] = []
     seen: set[str] = set()
+    total = 0
     for _score, fragment in scored:
         key = str(fragment.get("content") or "")[:200].lower()
         if key in seen:
             continue
         seen.add(key)
+        size = len(str(fragment.get("content") or ""))
+        if max_chars is not None and picked and total + size > max_chars:
+            break
         picked.append(fragment)
+        total += size
         if len(picked) >= limit:
             break
 
