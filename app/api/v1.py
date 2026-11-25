@@ -45,7 +45,7 @@ from app.workflows.sources import book_outline, fragments_from_chunks, get_figur
 from app.workflows.vision import TestSolveResult, solve_from_image, transcribe_image
 from app.workflows.presentations import MAX_OUTPUT_TOKENS as PRESENTATION_MAX_TOKENS
 from app.workflows.presentations import RelayError, complete as presentation_complete
-from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, search_pubmed
+from app.workflows.pubmed import PubMedResult, _SourcesUnavailable, analyze_article, search_pubmed
 from app.workflows import images as image_relay
 from app.workflows import pubmed_ru, pubmed_sources
 from app.workflows.web_research import WebResearchResult, research_url
@@ -1278,6 +1278,8 @@ class WebSearchSource(BaseModel):
 
 class WebSearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
+    # Медицинская тема: искать только на медицинских сайтах (решение 26.11.2026)
+    medical: bool = False
     context: StudentAIContext
 
 
@@ -1312,7 +1314,7 @@ async def web_search_endpoint(payload: WebSearchRequest, request: Request) -> We
     или YANDEX_FOLDER_ID -> честная ошибка."""
     rate_limiter.check(payload.context.userId)
     with request_context(user_id=payload.context.userId, channel="api", workflow="WEB_SEARCH"):
-        result = await search_and_answer(payload.query)
+        result = await search_and_answer(payload.query, medical=payload.medical)
     return _web_search_response(result)
 
 
@@ -1325,6 +1327,8 @@ class PubMedArticleModel(BaseModel):
     # Тип исследования из данных PubMed и описание результата (на русском).
     design: str | None = None
     finding: str = ""
+    # «точное совпадение» | «близко к теме» | «соседняя тема» — семантическая близость к вопросу
+    relevance: str = ""
 
 
 class PubMedSearchRequest(BaseModel):
@@ -1356,11 +1360,15 @@ def _pubmed_response(result: PubMedResult) -> PubMedSearchResponse:
             PubMedArticleModel(
                 pmid=card["pmid"], title=card["title"], journal=card["journal"], year=card["year"],
                 url=card["url"], design=card["design"], finding=card["finding"],
+                relevance=card.get("relevance", ""),
             )
             for card in result.studies
         ]
         or [
-            PubMedArticleModel(pmid=a.pmid, title=a.title, journal=a.journal, year=a.year, url=a.url, design=a.design)
+            PubMedArticleModel(
+                pmid=a.pmid, title=a.title, journal=a.journal, year=a.year, url=a.url,
+                design=a.design, relevance=a.relevance_label,
+            )
             for a in result.articles
         ],
         error=result.error,
@@ -1380,6 +1388,38 @@ async def pubmed_search_endpoint(payload: PubMedSearchRequest, request: Request)
     with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_SEARCH"):
         result = await search_pubmed(payload.query, payload.question)
     return _pubmed_response(result)
+
+
+class PubMedArticleRequest(BaseModel):
+    pmid: str = Field(..., min_length=1, max_length=12)
+    question: str | None = None
+    context: StudentAIContext
+
+
+class PubMedArticleResponse(BaseModel):
+    pmid: str
+    title: str = ""
+    url: str = ""
+    # fulltext — разобрано по открытому полному тексту PMC; abstract — только аннотация
+    level: str = "none"
+    answer: str = ""
+    error: str | None = None
+    requestId: str | None = None
+
+
+@router.post("/pubmed/article", response_model=PubMedArticleResponse)
+async def pubmed_article_endpoint(payload: PubMedArticleRequest, request: Request) -> PubMedArticleResponse:
+    """Разбор одной статьи по кнопке «Разобрать полностью»: полный текст PMC, иначе аннотация."""
+    rate_limiter.check(payload.context.userId)
+    pmid = payload.pmid.strip()
+    if not pmid.isdigit():
+        return PubMedArticleResponse(pmid=pmid, error="Номер статьи PubMed должен состоять из цифр.")
+    with request_context(user_id=payload.context.userId, channel="api", workflow="PUBMED_ARTICLE"):
+        result = await analyze_article(pmid, payload.question)
+    return PubMedArticleResponse(
+        pmid=result.pmid, title=result.title, url=result.url, level=result.level,
+        answer=result.answer, error=result.error, requestId=result.request_id,
+    )
 
 
 # --- Статьи PubMed для презентаций: список на выбор и текст выбранных (без модели слайдов) -------

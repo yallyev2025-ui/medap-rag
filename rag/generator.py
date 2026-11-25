@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Literal
 
+from app.documents.clinreky_pure import asks_whole_guideline
 from app.llm import provider as llm
 from app.llm.prompts import get_prompt
 from app.llm.task_map import Task, current_tier
@@ -189,8 +190,24 @@ CLINREK_DIALOG_SUFFIX = (
 )
 CLINREK_ONESHOT_SUFFIX = "\n\nРежим ответа: ОДНИМ ОТВЕТОМ, без деления на части и без вопросов в конце."
 
+# «По всем пунктам» (решение владельца 26.11.2026): не ответ на один вопрос,
+# а разбор болезни по структуре рекомендации. Разделы идут в порядке
+# документа, у каждого — заголовок и ссылка на раздел в конце ответа.
+CLINREK_WHOLE_INSTRUCTION = (
+    "Дай полный разбор болезни по всем пунктам клинической рекомендации, в порядке "
+    "документа: определение, эпидемиология и факторы риска, классификация, клиническая "
+    "картина, диагностика (обязательные и дополнительные методы, критерии), лечение "
+    "(немедикаментозное и медикаментозное: группы, дозы, схемы, сроки), наблюдение, "
+    "реабилитация, профилактика, приложения и шкалы. Каждый пункт — содержательно, с "
+    "конкретикой из рекомендации; неприменимый пункт пропусти и не выдумывай. В конце "
+    "перечисли разделы, которые раскрыты, и отдельно — разделы, которых в этой "
+    "рекомендации нет. Не спрашивай, что рассказать дальше: это полный разбор."
+)
+
 
 def clinrek_mode_instruction(question: str, dialog: bool) -> str:
+    if asks_whole_guideline(question):
+        return CLINREK_WHOLE_INSTRUCTION
     if is_brief_request(question):
         return CLINREK_MODE_INSTRUCTION + "\n\n" + MODE_BRIEF
     return CLINREK_MODE_INSTRUCTION + (CLINREK_DIALOG_SUFFIX if dialog else CLINREK_ONESHOT_SUFFIX)

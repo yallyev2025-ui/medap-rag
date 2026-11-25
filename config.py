@@ -167,15 +167,18 @@ class Settings(BaseSettings):
     # идёт через него; Yandex остаётся запасным путём для старых установок.
     SEARXNG_URL: str = ""
     SEARXNG_LANGUAGE: str = "ru"
-    WEB_SEARCH_MAX_RESULTS: int = 5
-    WEB_SEARCH_SNIPPET_MAX_CHARS: int = 2000
+    # Веб-поиск для Ментора и презентаций (решение 26.11.2026): 10 результатов,
+    # сниппет 3000 знаков — иначе модель видит только заголовки и пишет «нет данных».
+    WEB_SEARCH_MAX_RESULTS: int = 10
+    WEB_SEARCH_SNIPPET_MAX_CHARS: int = 3000
 
     # --- PubMed (сверх исходного ТЗ, добавлено по запросу) — NCBI E-utilities,
     # бесплатный публичный API, ключ не обязателен (лимит 3 запроса/сек без ключа).
-    PUBMED_MAX_RESULTS: int = 5
-    # Сколько кандидатов достаём из PubMed, прежде чем отобрать PUBMED_MAX_RESULTS лучших
-    # по уровню доказательности (мета-анализы/РКИ/обзоры выше) и свежести.
-    PUBMED_CANDIDATES: int = 15
+    # Мини-обзор по PubMed (решение 26.11.2026): 8–10 статей, а не пять
+    PUBMED_MAX_RESULTS: int = 10
+    # Сколько кандидатов достаём из PubMed, прежде чем отобрать PUBMED_MAX_RESULTS лучших.
+    # Больше кандидатов — реранкеру есть из чего выбрать по теме, а не только по типу.
+    PUBMED_CANDIDATES: int = 30
     # Рекомендуется NCBI (не обязательно) — добавляется в запросы, если задано.
     PUBMED_CONTACT_EMAIL: str = ""
     # Необязательный бесплатный ключ NCBI (аккаунт на ncbi.nlm.nih.gov → Settings → API Key):

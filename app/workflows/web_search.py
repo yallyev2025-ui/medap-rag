@@ -14,9 +14,12 @@ Yandex Search API сам фетчит страницы — SSRF-защита (ap
 Cloud принимает российский биллинг.
 """
 
+import asyncio
 import base64
 import logging
+import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,7 +47,7 @@ WEB_SEARCH_SYSTEM_PROMPT = """Тебе даны результаты поиск�
   "caveats": "противоречия между источниками, сомнительная надёжность или пустая строка"
 }
 
-Правила: в «sources» — каждый источник из списка с его номером n; числа и факты — только из фрагмента; если источники противоречат друг другу — скажи об этом в caveats и отдай предпочтение признанным авторитетным (ВОЗ, официальные клинические рекомендации, крупные научные издания) над случайными сайтами. НЕ пиши ссылки и адреса сайтов — их добавит система. Это веб-источники, а не проверенные учебники MedAP."""
+Правила: в «sources» — каждый источник из списка с его номером n; числа и факты — только из фрагмента; если источники противоречат друг другу — скажи об этом в caveats и отдай предпочтение признанным авторитетным (ВОЗ, официальные клинические рекомендации, крупные научные издания) над случайными сайтами. НЕ пиши ссылки и адреса сайтов — их добавит система. Это веб-источники, а не проверенные учебники MedAP. Не отвечай «в материалах нет» и «не описано»: отвечай по найденному, а если чего-то не хватает — прямо назови, какой источник или уточнение нужны."""
 
 WEB_SEARCH_USER_TEMPLATE = """Вопрос: {question}
 
@@ -140,23 +143,103 @@ async def _searxng_search(query: str) -> list[dict[str, Any]]:
     return parse_searxng_results(data)
 
 
-async def search_and_answer(query: str) -> WebSearchResult:
+# --- Переписывание запроса: поисковик лучше понимает короткую строку ---
+# Кнопка «Интернет» получает целый вопрос («лечение ХОБЛ, что нового...»);
+# поисковый API на такой строке отдаёт случайные статьи. Переписываем в
+# 3–7 ключевых слов, но только когда первая выдача не дала доверенных
+# источников — лишний вызов модели на каждый запрос не нужен.
+
+_REWRITE_PROMPT = """Преврати вопрос студента-медика в короткий поисковый запрос для интернета: 3–7 ключевых слов, без вводных слов и знаков вопроса. Сохрани болезнь, вмешательство и уточнения. Ответь JSON: {"query": "<запрос>"}."""
+
+_rewrite_cache: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_REWRITE_TTL = 24 * 3600
+
+
+async def rewrite_query(query: str) -> str:
+    key = " ".join(query.lower().split())
+    cached = _rewrite_cache.get(key)
+    if cached and cached[0] > time.monotonic():
+        return cached[1]
+    try:
+        result = await llm.complete(
+            Task.PUBMED_QUERY,
+            [
+                {"role": "system", "content": _REWRITE_PROMPT},
+                {"role": "user", "content": f"Вопрос: {query}"},
+            ],
+            temperature=0.0,
+            max_output_tokens=120,
+            json_schema={"required": ["query"]},
+        )
+        text = " ".join(str((result.data or {}).get("query", "")).split())
+    except llm.LLMError:
+        return query
+    if not text or len(text) > 200:
+        return query
+    _rewrite_cache[key] = (time.monotonic() + _REWRITE_TTL, text)
+    while len(_rewrite_cache) > 300:
+        _rewrite_cache.popitem(last=False)
+    return text
+
+
+async def _rerank(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Релевантность вперёд: поисковик ставит первым популярное, а не точное."""
+    if len(results) < 2:
+        return results
+    passages = [f"{r.get('title', '')}\n{str(r.get('content') or '')[:900]}" for r in results]
+    try:
+        from rag.reranker import rerank_scores
+
+        scores = await asyncio.to_thread(rerank_scores, query, passages)
+    except Exception:  # noqa: BLE001 — реранкер не должен ронять веб-поиск
+        logger.warning("Web Search: реранкер недоступен — оставляю порядок поисковика", exc_info=True)
+        return results
+    order = sorted(range(len(results)), key=lambda i: -float(scores[i]))
+    return [results[i] for i in order]
+
+
+async def _find(query: str, medical: bool) -> list[dict[str, Any]]:
+    use_searx = bool(settings.SEARXNG_URL)
+    return await (_searxng_search(query) if use_searx else _yandex_search(query))
+
+
+async def search_and_answer(query: str, medical: bool = False) -> WebSearchResult:
     use_searx = bool(settings.SEARXNG_URL)
     use_yandex = bool(settings.YANDEX_SEARCH_API_KEY and settings.YANDEX_FOLDER_ID)
     if not use_searx and not use_yandex:
         return WebSearchResult(query=query, error=_NOT_CONFIGURED_MESSAGE, request_id=current_request_id())
 
     try:
-        results = await (_searxng_search(query) if use_searx else _yandex_search(query))
+        raw = await _find(query, medical)
     except httpx.HTTPError:
         logger.exception("Web Search: сбой запроса к поиску")
         return WebSearchResult(query=query, error="Поиск сейчас недоступен, попробуй позже.", request_id=current_request_id())
 
     # Отбор достоверных: клиники, «здоровье и красота», магазины и форумы
-    # отсекаются до того, как они попадут в ответ (ТЗ 20.11.2026)
-    results = rank_results(results, limit=settings.WEB_SEARCH_MAX_RESULTS)
+    # отсекаются до того, как они попадут в ответ (ТЗ 20.11.2026). Для
+    # медицинской темы — только медицинские сайты.
+    results = rank_results(raw, limit=settings.WEB_SEARCH_MAX_RESULTS * 2, medical=medical)
+
+    # Ничего доверенного — переписываем запрос и пробуем ещё раз. Это не
+    # «ничего не нашлось»: сначала надо попробовать нормальную поисковую строку.
     if not results:
-        return WebSearchResult(query=query, error="По запросу не нашлось достоверных источников — уточните формулировку.", request_id=current_request_id())
+        rewritten = await rewrite_query(query)
+        if rewritten != query:
+            try:
+                raw = await _find(rewritten, medical)
+                results = rank_results(raw, limit=settings.WEB_SEARCH_MAX_RESULTS * 2, medical=medical)
+            except httpx.HTTPError:
+                logger.exception("Web Search: сбой повторного запроса")
+        if not results and medical:
+            # Всё ещё пусто: ослабляем «строго медицинские» до обычного отбора,
+            # но мусор (клиники, форумы, магазины) остаётся отсечённым.
+            results = rank_results(raw, limit=settings.WEB_SEARCH_MAX_RESULTS * 2, medical=False)
+
+    if not results:
+        return WebSearchResult(query=query, error="Поиск не вернул ни одной достоверной страницы — уточните формулировку.", request_id=current_request_id())
+
+    results = await _rerank(query, results)
+    results = results[: settings.WEB_SEARCH_MAX_RESULTS]
 
     # Сниппет мал для слайда: у трёх верхних страниц берём полный текст
     # (HTTP, при защите — браузер). Параллельно и с потолком по времени.

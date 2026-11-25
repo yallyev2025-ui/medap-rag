@@ -106,11 +106,25 @@ def trust_score(url: str, title: str = "") -> int:
     return score
 
 
-def rank_results(results: list[dict], *, limit: int) -> list[dict]:
+def is_medical_source(url: str) -> bool:
+    """Медицинский источник: доверенный домен или официальный/academic TLD.
+
+    Решение владельца 26.11.2026: «если это медицинская тема — строго на
+    медицинских сайтах». Клиники, форумы и «здоровье и красота» сюда не
+    попадают даже при высоком общем балле.
+    """
+    host = domain_of(url)
+    if not host:
+        return False
+    return _is_trusted(host) or host.endswith(GOOD_TLDS)
+
+
+def rank_results(results: list[dict], *, limit: int, medical: bool = False) -> list[dict]:
     """Оставить только достоверные ссылки, лучшие — первыми.
 
-    Ничего не «додумываем»: если после отбора пусто, пусто и вернётся —
-    вызывающий решает, писать по общим знаниям или честно сказать.
+    Для медицинской темы дополнительно отсекаем всё, что не медицинский
+    источник. Ничего не «додумываем»: если после отбора пусто, пусто и
+    вернётся — вызывающий решает, писать по общим знаниям или честно сказать.
     """
     scored: list[tuple[int, int, dict]] = []
     seen: set[str] = set()
@@ -121,6 +135,8 @@ def rank_results(results: list[dict], *, limit: int) -> list[dict]:
         if not host or url in seen:
             continue
         seen.add(url)
+        if medical and not is_medical_source(url):
+            continue
         score = trust_score(url, title)
         if score < 1:
             continue

@@ -27,9 +27,11 @@ from sqlalchemy import select
 
 from app.documents.clinreky_pure import (
     GuidelineCandidate,
+    asks_whole_guideline,
     page_fragments,
     pick_candidate,
-    select_fragments,
+    select_all_fragments,
+    select_whole_section,
 )
 from app.integrations.clinreky import BASE, ClinrekyPage, Recommendation, fetch_catalog_items, fts_search
 from constants import ACTIVE_SOURCE_STATUSES, SOURCE_CLINREK
@@ -42,8 +44,14 @@ if TYPE_CHECKING:  # pragma: no cover - только для аннотаций
 logger = logging.getLogger(__name__)
 
 # Сколько фрагментов разобранной страницы добавлять к ответу.
-WITH_BOOK_CHUNKS = 4
-WITHOUT_BOOK_CHUNKS = 24
+# Было 4 — из-за этого ответ по КР получался обрывком: в него попадали
+# четыре самых похожих куска, а не сам раздел. Теперь нужный раздел идёт
+# целиком (до 60 фрагментов / 64 тыс. знаков), а «по всем пунктам» — вся
+# рекомендация (до 80 тыс. знаков).
+WITH_BOOK_CHUNKS = 60
+WITHOUT_BOOK_CHUNKS = 60
+WHOLE_GUIDELINE_CHARS = 80_000
+SECTION_CHARS = 64_000
 
 # Сколько дней доверять сохранённому разбору, не перечитывая страницу.
 # Публичные КР меняются редакциями, а не каждый день; после TTL — один запрос
@@ -239,22 +247,27 @@ async def material_for(
         missing=list(stored.missing),
     )
 
-    limit = WITH_BOOK_CHUNKS if relevant else WITHOUT_BOOK_CHUNKS
-    fragments = select_fragments(
-        page_fragments(
-            page,
-            document_id=stored.id,
-            book_id=candidate.book_id,
-            subject=candidate.subject,
-            author=candidate.author or "Минздрав России",
-        ),
-        question,
-        limit,
-        # Не тащим в промпт всю рекомендацию: 30 тыс. знаков хватает на
-        # несколько разделов и десятки пунктов, а счёт за модель не растёт
-        # вместе с объёмом документа.
-        max_chars=30_000,
+    all_fragments = page_fragments(
+        page,
+        document_id=stored.id,
+        book_id=candidate.book_id,
+        subject=candidate.subject,
+        author=candidate.author or "Минздрав России",
     )
+    if asks_whole_guideline(question):
+        # «По всем пунктам»: определение → эпидемиология → классификация →
+        # диагностика → лечение → наблюдение → реабилитация → профилактика →
+        # приложения. Отдаём все разделы, а не четыре похожих куска.
+        fragments = select_all_fragments(all_fragments, max_chars=WHOLE_GUIDELINE_CHARS, limit=120)
+    else:
+        # Точный вопрос: нужный раздел целиком (до 64 тыс. знаков), затем
+        # соседние разделы, если раздел оказался коротким.
+        fragments = select_whole_section(
+            all_fragments,
+            question,
+            max_chars=SECTION_CHARS,
+            limit=WITH_BOOK_CHUNKS if relevant else WITHOUT_BOOK_CHUNKS,
+        )
     if not fragments:
         return None
 

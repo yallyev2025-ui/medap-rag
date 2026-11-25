@@ -13,7 +13,31 @@ from typing import Any, Iterable, Sequence
 # Один документ = 100 000 синтетических id. Разделов и рекомендаций в КР
 # заведомо меньше (у J44 — 113), так что коллизий между документами нет.
 DOCUMENT_STRIDE = 100_000
-MAX_CONTENT = 4000
+# Раздел рекомендации больше не режем на 4 тыс. знаков: владелец 26.11.2026
+# попросил отдавать нужный раздел целиком, а не первую треть.
+MAX_CONTENT = 14_000
+
+# «По всем пунктам»: определение, эпидемиология, классификация, диагностика,
+# лечение, наблюдение, реабилитация, профилактика, приложения. Это не вопрос
+# об одном разделе — это разбор болезни целиком.
+_WHOLE = (
+    "по всем пунктам",
+    "по всем разделам",
+    "полный разбор",
+    "разбери всё",
+    "разбери все",
+    "всё о болезни",
+    "все о болезни",
+    "полностью по рекомендации",
+    "весь документ",
+    "все разделы",
+)
+
+
+def asks_whole_guideline(question: str) -> bool:
+    """Просит ли человек разбор болезни по всем пунктам рекомендации."""
+    text = " ".join(question.lower().split())
+    return any(marker in text for marker in _WHOLE)
 
 
 @dataclass(frozen=True)
@@ -149,6 +173,81 @@ def page_fragments(
         index += 1
 
     return result
+
+
+def select_whole_section(
+    fragments: list[dict[str, Any]],
+    question: str,
+    *,
+    max_chars: int = 64_000,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Нужный раздел целиком, а не четыре самых похожих куска.
+
+    Сначала находим раздел, чьё название лучше всего отвечает вопросу
+    («лечение», «диагностика»), и берём ВСЕ его фрагменты: текст раздела и
+    рекомендации с этой пометкой. Если места осталось — добавляем соседние
+    разделы по близости. Пусто — обычный отбор.
+    """
+    # Базовые разделы — не отдельные рекомендации: рекомендации с пометкой
+    # «Лечение (A)» должны попасть в раздел «Лечение», а не жить сами по себе.
+    bases: list[tuple[int, str]] = []
+    seen_titles: set[str] = set()
+    for fragment in fragments:
+        title = str(fragment.get("section") or "")
+        if not title or title.startswith("Рекомендация") or title.lower().startswith(("приложение", "шкала")):
+            continue
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        bases.append((_overlap(question, title) + 1, title))
+    bases.sort(key=lambda pair: pair[0], reverse=True)
+
+    picked: list[dict[str, Any]] = []
+    total = 0
+    taken: set[int] = set()
+
+    for _score, title in bases[:1]:
+        group = [
+            (i, f)
+            for i, f in enumerate(fragments)
+            if i not in taken and (str(f.get("section") or "") == title or str(f.get("section") or "").startswith(title))
+        ]
+        group_size = sum(len(str(f.get("content") or "")) for _, f in group)
+        if group and (not picked or total + group_size <= max_chars):
+            for i, fragment in group:
+                taken.add(i)
+                picked.append(fragment)
+                total += len(str(fragment.get("content") or ""))
+
+    if not picked:
+        return select_fragments(fragments, question, limit, max_chars)
+
+    # Добираем оставшееся близкими фрагментами, если раздел оказался короче лимита
+    if total < max_chars // 2:
+        rest = [f for i, f in enumerate(fragments) if i not in taken]
+        picked.extend(select_fragments(rest, question, limit - len(picked), max_chars - total))
+    return picked[:limit]
+
+
+def select_all_fragments(
+    fragments: list[dict[str, Any]],
+    *,
+    max_chars: int = 80_000,
+    limit: int = 120,
+) -> list[dict[str, Any]]:
+    """Все разделы и рекомендации по порядку — для разбора болезни «по всем пунктам»."""
+    picked: list[dict[str, Any]] = []
+    total = 0
+    for fragment in fragments:
+        size = len(str(fragment.get("content") or ""))
+        if picked and total + size > max_chars:
+            break
+        picked.append(fragment)
+        total += size
+        if len(picked) >= limit:
+            break
+    return picked
 
 
 def select_fragments(
