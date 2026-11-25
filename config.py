@@ -178,7 +178,7 @@ class Settings(BaseSettings):
     PUBMED_MAX_RESULTS: int = 10
     # Сколько кандидатов достаём из PubMed, прежде чем отобрать PUBMED_MAX_RESULTS лучших.
     # Больше кандидатов — реранкеру есть из чего выбрать по теме, а не только по типу.
-    PUBMED_CANDIDATES: int = 30
+    PUBMED_CANDIDATES: int = 60
     # Рекомендуется NCBI (не обязательно) — добавляется в запросы, если задано.
     PUBMED_CONTACT_EMAIL: str = ""
     # Необязательный бесплатный ключ NCBI (аккаунт на ncbi.nlm.nih.gov → Settings → API Key):
