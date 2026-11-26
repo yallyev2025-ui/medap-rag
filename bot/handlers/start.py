@@ -4,7 +4,7 @@ import logging
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import BotCommandScopeChat, Message
+from aiogram.types import BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.commands import ADMIN_COMMANDS
 from bot.handlers.menu import send_main_menu
@@ -46,6 +46,32 @@ HELP_TEXT = """Я отвечаю строго по загруженным мат
 
 UNLIMITED_TEXT = "У тебя безлимитный доступ ✅"
 
+LOGIN_TEXT = (
+    "Нажмите кнопку ниже — сайт откроется уже с вашим входом. "
+    "Ссылка действует 2 часа. Если Telegram ещё не привязан к аккаунту на сайте, "
+    "сначала войдите по почте и привяжите его в Профиле."
+)
+
+
+async def _send_site_login(message: Message) -> None:
+    """Вход на сайт из Telegram: подписанная ссылка, как у «Звонка»."""
+    from app.voice.call_link import enter_url, sign_call_token
+
+    if not settings.SLIDES_SITE_URL or not settings.SERVICE_TOKEN or message.from_user is None:
+        await message.answer(
+            "Вход через Telegram пока не настроен на сервере. Напишите владельцу."
+        )
+        return
+
+    token = sign_call_token(settings.SERVICE_TOKEN, message.from_user.id, None)
+    url = enter_url(settings.SLIDES_SITE_URL, token, "learn")
+    await message.answer(
+        LOGIN_TEXT,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Войти на сайт MedAP", url=url)]]
+        ),
+    )
+
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
@@ -56,6 +82,12 @@ async def cmd_start(message: Message) -> None:
             )
         except Exception:
             logger.warning("Не удалось задать меню команд для админа %s", message.from_user.id, exc_info=True)
+
+    text = (message.text or "").strip()
+    payload = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    if payload == "login":
+        await _send_site_login(message)
+        return
 
     await send_main_menu(message)
 
