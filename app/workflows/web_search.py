@@ -199,8 +199,22 @@ async def _rerank(query: str, results: list[dict[str, Any]]) -> list[dict[str, A
 
 
 async def _find(query: str, medical: bool) -> list[dict[str, Any]]:
-    use_searx = bool(settings.SEARXNG_URL)
-    return await (_searxng_search(query) if use_searx else _yandex_search(query))
+    """SearXNG — основной путь; Yandex — запасной, если он настроен.
+
+    Раньше при заданном `SEARXNG_URL` падение SearXNG сразу возвращало
+    «Поиск сейчас недоступен», даже когда есть рабочие ключи Яндекса.
+    Теперь пробуем второй провайдер, а ошибку отдаём только если не вышло
+    ни у кого.
+    """
+    if settings.SEARXNG_URL:
+        try:
+            return await _searxng_search(query)
+        except httpx.HTTPError:
+            if not (settings.YANDEX_SEARCH_API_KEY and settings.YANDEX_FOLDER_ID):
+                raise
+            logger.warning("Web Search: SearXNG не ответил — пробую Yandex", exc_info=True)
+
+    return await _yandex_search(query)
 
 
 async def search_and_answer(query: str, medical: bool = False) -> WebSearchResult:
