@@ -781,7 +781,7 @@ class ConspectResponse(BaseModel):
     topic: str
     mode: str
     # Markdown-диалект конспекта: «## N. Пункт», «**Термин** — …», «> Внимание: …»,
-    # «> В клинике: …», таблицы, итоговый «## Нет в источниках». Без эмодзи и скобок с источниками.
+    # «> В клинике: …», таблицы. Без эмодзи, скобок с источниками и блока «Нет в источниках».
     markdown: str
     citations: list[Citation]
     sections: list[ConspectSection]

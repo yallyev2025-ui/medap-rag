@@ -10,9 +10,10 @@
   порция укладывается в лимит вывода, обрыв ловится и дописывается отдельной порцией;
 - промпты КРАТКИЙ/ПОДРОБНЫЙ — дословно от владельца, плюс диалект вывода и надстройка
   по предмету (rag/conspect_prompts.py), все тексты правятся в админке без деплоя;
-- детерминированные страховки без лишних вызовов LLM: каждый пункт раскрыт или назван в
-  «Нет в источниках», числа с единицами сверяются с фрагментами, источники раздела
-  сопоставляются с реальными чанками по меткам [F#] (выдумать источник нельзя).
+- детерминированные страховки без лишних вызовов LLM: каждый пункт раскрыт или назван
+  только в служебном missing (в тексте конспекта о пропуске ни слова), числа с единицами
+  сверяются с фрагментами, источники раздела сопоставляются с реальными чанками по
+  меткам [F#] (выдумать источник нельзя).
 """
 
 import asyncio
@@ -58,7 +59,6 @@ _MAX_WARNING_NUMBERS = 5
 
 NO_MATERIAL_MESSAGE = "По этой теме в загруженных материалах MedAP ничего не найдено — конспект писать не из чего."
 PROVIDER_ERROR_MESSAGE = "Генерация сейчас недоступна, попробуй позже."
-NO_DATA_LINE = "Нет данных в источниках."
 MISSING_NOT_FOUND = "в загруженных учебниках материала не найдено"
 MISSING_NOT_COVERED = "модель не раскрыла пункт по предоставленным фрагментам"
 MISSING_TRUNCATED = "не поместился в лимит вывода — сгенерируйте этот пункт отдельно"
@@ -128,7 +128,7 @@ def _interleave(groups: list[list[ChunkResult]], limit: int) -> list[ChunkResult
 
 
 def _split_missing(text: str) -> tuple[str, dict[int, str]]:
-    """Отделяет итоговый блок «## Нет в источниках» от разделов; возвращает (разделы, пункт → пометка)."""
+    """Отделяет legacy-блок «## Нет в источниках», если модель его всё же написала; возвращает (разделы, пункт → пометка)."""
     match = _MISSING_HEADING.search(text)
     if not match:
         return text, {}
@@ -172,11 +172,17 @@ def _parse_sections(text: str, batch: list[ConspectPoint], chunks: list[ChunkRes
 
 def _is_empty(body: str) -> bool:
     cleaned = re.sub(r"[\W_]+", "", body.lower())
-    return not cleaned or cleaned == re.sub(r"[\W_]+", "", NO_DATA_LINE.lower())
+    return not cleaned
+
+
+_LEGACY_NO_DATA = re.compile(
+    r"^\s*(?:Нет данных в источниках|Нет данных|Не указано|Не описано|Не раскрыто)\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _clean(text: str) -> str:
-    return strip_decor(strip_source_brackets(text)).strip()
+    return _LEGACY_NO_DATA.sub("", strip_decor(strip_source_brackets(text))).strip()
 
 
 async def _compose_messages(
@@ -381,7 +387,11 @@ def _assemble(
     outcome: ConspectResult, pts: list[ConspectPoint], by_number: dict[int, ConspectPoint],
     sections: dict[int, _Section], notes: dict[int, str],
 ) -> None:
-    """Склеивает итоговый Markdown по порядку пунктов, собирает цитаты и итоговый блок «Нет в источниках»."""
+    """Склеивает итоговый Markdown по порядку пунктов и собирает цитаты.
+
+    Пункт без материала в текст не попадает: ни заголовка, ни строки о пропуске.
+    Он остаётся только в служебном `missing` для редактора.
+    """
     order: list[ChunkResult] = []
     for point in pts:
         section = sections.get(point.number)
@@ -402,13 +412,11 @@ def _assemble(
         if section is None:
             note = notes.get(point.number, MISSING_NOT_COVERED)
             missing.append({"number": point.number, "title": point.title, "note": note})
-            parts.append(f"{heading}\n\n{NO_DATA_LINE}")
             continue
         body = _clean(section.body)
         if _is_empty(body):
             note = notes.get(point.number, MISSING_NOT_FOUND)
             missing.append({"number": point.number, "title": point.title, "note": note})
-            parts.append(f"{heading}\n\n{NO_DATA_LINE}")
             continue
         parts.append(f"{heading}\n\n{body}")
         outcome.sections.append({
@@ -419,8 +427,5 @@ def _assemble(
         if point.number in notes and notes[point.number] not in (MISSING_NOT_COVERED,):
             missing.append({"number": point.number, "title": point.title, "note": notes[point.number]})
 
-    if missing:
-        lines = "\n".join(f"- Пункт {m['number']} — {m['note']}" for m in missing)
-        parts.append(f"## Нет в источниках\n\n{lines}")
     outcome.missing = missing
     outcome.markdown = "\n\n".join(parts).strip()

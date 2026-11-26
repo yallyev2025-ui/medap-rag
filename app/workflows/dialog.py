@@ -159,6 +159,16 @@ def strip_source_brackets(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
+# Старый хвост «В материалах не нашлось: …» дописывался кодом к готовому ответу.
+# Новые ответы его не содержат, но в кеше он остался — вычищаем при выдаче.
+_MISSING_TAIL = re.compile(r"(?:\n\s*)+В\s+материалах\s+не\s+нашлось\s*:.*$", re.IGNORECASE | re.DOTALL)
+
+
+def strip_missing_summary(text: str) -> str:
+    """Убрать старый хвост со списком ненайденных пунктов, если он есть."""
+    return _MISSING_TAIL.sub("", text).strip()
+
+
 def finalize_dialog_answer(text: str, citations: list[dict], truncated: bool) -> str:
     """Хвост ответа в диалоге: текст → «📚 источники» → «➡️ вопрос-приглашение».
     Обрезанный по лимиту ответ получает «Продолжу с этого места» вместо видимого обрыва."""

@@ -15,6 +15,7 @@ except ImportError:
     sys_modules.setdefault("rag.embedder", types.SimpleNamespace(embed_query=None, embed_passages=None, limited_threads=None))
 
 from app.research.coverage import Gap, assess_coverage, gap_queries
+from app.workflows.dialog import strip_missing_summary
 from app.research.planner import (
     KIND_COMPARE,
     KIND_CONSPECT,
@@ -225,6 +226,16 @@ def test_broken_cache_entry_is_not_used() -> None:
     assert plan_from_dict({}) is None
     assert plan_from_dict({"queries": []}) is None
     assert plan_from_dict({"queries": ["ядра таламуса"]}) is not None
+
+
+def test_old_missing_tail_is_removed() -> None:
+    text = "Ответ по теме.\n\nВ материалах не нашлось: причины: неврологические; патогенез: механизм."
+    assert strip_missing_summary(text) == "Ответ по теме."
+
+
+def test_answer_without_tail_is_untouched() -> None:
+    text = "Ответ по теме.\n\nВторой абзац с нормальным текстом."
+    assert strip_missing_summary(text) == text
 
 
 if __name__ == "__main__":

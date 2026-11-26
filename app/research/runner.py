@@ -160,18 +160,6 @@ async def research_material(
     return chunks, relevant, outcome
 
 
-def missing_summary(outcome: ResearchOutcome) -> str:
-    """Чего не хватило в материале — одной строкой для пометки под ответом.
-
-    Пустая строка, если пробелов нет: лишние оговорки не нужны.
-    """
-    gaps = tuple(g for g in outcome.coverage.gaps if g.aspect.weight >= 2)
-    if not gaps:
-        return ""
-    titles = [g.aspect.title for g in gaps]
-    return "В материалах не нашлось: " + "; ".join(titles[:4])
-
-
 def aspect_titles(outcome: ResearchOutcome) -> tuple[str, ...]:
     """Обязательные пункты — их передаём в генерацию как чек-лист."""
     return tuple(a.title for a in outcome.plan.aspects)

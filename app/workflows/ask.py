@@ -23,7 +23,7 @@ from app.observability.context import current, current_request_id, set_workflow
 from app.llm.task_map import Task, tier_providers
 from app.observability.stages import StageLog
 from app.orchestration.router import RoutingDecision, Workflow, route
-from app.research.runner import aspect_titles, missing_summary, research_material
+from app.research.runner import aspect_titles, research_material
 from app.research.store import RunRecord, log_research_run
 from app.verification.conflicts import detect_conflicts
 from app.workflows import answer_cache
@@ -36,6 +36,7 @@ from app.workflows.dialog import (
     continuation_from_turns,
     finalize_dialog_answer,
     needs_rewrite,
+    strip_missing_summary,
     strip_source_brackets,
 )
 from app.workflows.multi import answer_questions, split_questions
@@ -615,7 +616,7 @@ async def _ask(
         if hit is not None:
             return await _log_and_return(
                 AskResult(
-                    answer=hit.answer,
+                    answer=strip_missing_summary(hit.answer),
                     workflow=decision.workflow.value,
                     intent=intent,
                     has_relevant=True,
@@ -766,12 +767,6 @@ async def _ask(
         conflicts=conflicts,
     )
     final_text = generated.text
-    # Пункт плана, по которому материал не нашёлся, называется прямо: студент видит,
-    # чего в учебниках нет, а не принимает неполный ответ за полный. Пометка своя,
-    # не от модели, поэтому проверку заземления не трогает.
-    missing = missing_summary(research) if research is not None else ""
-    if missing and final_text != NO_CONTEXT_ANSWER:
-        final_text = f"{final_text}\n\n{missing}"
     if dialog and generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
         final_text = finalize_dialog_answer(final_text, citations, generated.truncated)
     elif generated.verified is not False and final_text != NO_CONTEXT_ANSWER:
