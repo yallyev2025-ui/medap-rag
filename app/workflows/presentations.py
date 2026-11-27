@@ -39,11 +39,26 @@ STEPS = frozenset(
         "role_structure", "role_passport", "role_extractor", "role_writer", "role_checker", "role_fixer", "role_completeness",
         # MedAP, этап 5: голосовой «Звонок» (мини-приложение на сайте): короткие реплики быстрой моделью
         "call_lead", "call_answer", "call_check", "call_fix", "call_full", "call_exam",
+        # Content Studio: раскладка вставленного текста и привязка фото к теме.
+        # Сайт уже шлёт эти шаги (paste-llm.ts, media-ai.ts), без них бот отвечал
+        # «Неизвестный шаг» и Luna не вызывалась вовсе.
+        "paste", "media-look",
+        # Карточки Ментора: сайт отдаёт готовый материал, Luna делает из него
+        # вопросы и ответы строго по тексту.
+        "mentor-cards",
+        # Content Studio: генерации по конспекту. Сайт шлёт эти шаги через
+        # того же посредника, чтобы все учебные материалы писала Luna.
+        "lesson-plan", "lesson-write", "test-questions", "recall-items",
+        "scheme", "clinical-case", "content-edit",
+        # Поиск по конспектам: синонимы перед честным «в материалах нет».
+        "search-rewrite",
     }
 )
 
-# Снимки человека (шаг «look») и найденные/нарисованные картинки на строгом отборе (шаг «photojudge»): картинки уходят модели только на этом шаге; потолки защищают счёт и память.
-IMAGE_STEPS = frozenset({"look", "photojudge"})
+# Снимки человека (шаг «look»), найденные/нарисованные картинки на строгом отборе (шаг «photojudge») и
+# привязка фото к теме в медиатеке («media-look»): картинки уходят модели только на этих шагах;
+# потолки защищают счёт и память.
+IMAGE_STEPS = frozenset({"look", "photojudge", "media-look"})
 MAX_IMAGES = 12
 MAX_IMAGE_B64_CHARS = 600_000  # ~450 КБ файла
 IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})

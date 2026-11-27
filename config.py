@@ -111,10 +111,12 @@ class Settings(BaseSettings):
     # OPENAI_MODEL_FALLBACKS и запомнит рабочую.
     OPENAI_MODEL: str = "gpt-6-luna"
     # Запасные модели через запятую, пробуются по порядку при 404 / model_not_found.
-    OPENAI_MODEL_FALLBACKS: str = "gpt-5.4-mini,gpt-4.1-mini"
+    # Пусто: все учебные задачи должны идти одной моделью — GPT-6 Luna. Молчаливый
+    # переход на старую модель запрещён (решение владельца 27.11.2026).
+    OPENAI_MODEL_FALLBACKS: str = ""
     # УСТАРЕЛО: выбор модели теперь делает TaskModelMap (app/llm/task_map.py).
     # Поле оставлено, чтобы не падал старый .env; значение больше не используется.
-    CLINREK_OPENAI_MODEL: str = "gpt-4.1"
+    CLINREK_OPENAI_MODEL: str = "gpt-6-luna"
     # Базовый URL OpenAI-совместимого API. Пусто = облако OpenAI. Задаётся, если
     # трафик идёт через шлюз или совместимого провайдера.
     OPENAI_BASE_URL: str = ""

@@ -16,7 +16,7 @@ from enum import Enum
 
 from sqlalchemy import select
 
-from app.llm.registry import DEEPSEEK, OPENAI, model_registry
+from app.llm.registry import OPENAI, model_registry
 from config import settings
 from db.models import TaskModelOverride
 from db.session import async_session
@@ -80,14 +80,14 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     # TASK_MODEL_MAP_OVERRIDES={"GROUNDED_QA": "deepseek"} или админка.
     Task.GROUNDED_QA: OPENAI,
     Task.EXPLAIN: OPENAI,
-    Task.CLASS_QUICK: DEEPSEEK,
+    Task.CLASS_QUICK: OPENAI,
     Task.TEST_SOLVE_TEXT: OPENAI,
     Task.DOCUMENT_QA: OPENAI,
     Task.TARGETED_REPAIR: OPENAI,
     Task.WEB_RESEARCH: OPENAI,
     Task.WEB_SEARCH: OPENAI,
     Task.PUBMED_SEARCH: OPENAI,
-    Task.PUBMED_QUERY: DEEPSEEK,
+    Task.PUBMED_QUERY: OPENAI,
     Task.QUICK_OUTLINE: OPENAI,
     Task.CONTENT_RECALL: OPENAI,
     Task.CONTENT_TEST: OPENAI,
@@ -102,17 +102,15 @@ DEFAULT_TASK_MODEL_MAP: dict[Task, str] = {
     Task.ORAL_EVALUATE: OPENAI,
     Task.ERROR_DIAGNOSIS: OPENAI,
     Task.CLAIM_EVIDENCE_CHECK: OPENAI,
-    Task.INTENT_ROUTER: DEEPSEEK,
-    Task.QUERY_REWRITE: DEEPSEEK,
-    Task.PLAN: DEEPSEEK,
-    Task.COVERAGE: DEEPSEEK,
+    Task.INTENT_ROUTER: OPENAI,
+    Task.QUERY_REWRITE: OPENAI,
+    Task.PLAN: OPENAI,
+    Task.COVERAGE: OPENAI,
     Task.FIGURE_DESCRIBE: OPENAI,
 }
-# Решение владельца 30.10.2026: Luna — главная модель всей содержательной работы. DeepSeek остаётся только
-# там, где модель не пишет и не проверяет медицинское содержание: быстрая классификация вопроса
-# (CLASS_QUICK), перевод запроса для PubMed (PUBMED_QUERY), маршрутизация (INTENT_ROUTER) и переписывание
-# запроса (QUERY_REWRITE); дальше — как второй проверяющий спорных мест (этап 2 плана MedAP).
-# Вернуть любую задачу можно без выкатки: TASK_MODEL_MAP_OVERRIDES или админка «Модели».
+# Решение владельца 27.11.2026: ВСЕ задачи идут через GPT-6 Luna. DeepSeek из маппинга убран,
+# чтобы ответы студентам, конспекты, тесты, карточки, проверка и служебные шаги не расходились
+# по разным моделям. Вернуть задачу можно без выкатки: TASK_MODEL_MAP_OVERRIDES или админка «Модели».
 
 
 def _overrides() -> dict[Task, str]:
